@@ -97,13 +97,18 @@ TOOLS_SPEC = [
          "required": ["app"]}, "progress_unit": "steps"},
     {"name": "tv_remote", "description": "Press TV remote buttons, in order: home, back, select, up, down, left, right, "
                                          "play, pause, resume, rewind, fast_forward, replay, info, search, backspace, "
-                                         "volume_up, volume_down, mute, channel_up, channel_down. 'repeat' presses "
+                                         "volume_up, volume_down, mute (a toggle; use tv_mute to mute or unmute), "
+                                         "channel_up, channel_down. 'repeat' presses "
                                          "the buttons that many times (e.g. volume_up 5 times); 'text' types into a "
                                          "search box. You cannot see the TV screen, so only navigate as the user directs.",
      "input_schema": {"type": "object", "properties": {
          "name": TV, "keys": {"type": "array", "items": {"type": "string"}},
          "repeat": {"type": "integer", "minimum": 1, "maximum": 20},
          "text": {"type": "string"}}}, "progress_unit": "presses"},
+    {"name": "tv_mute", "description": "Mute or unmute a TV. Always ends in the state asked for.",
+     "input_schema": {"type": "object", "properties": {
+         "name": TV, "muted": {"type": "boolean", "description": "true to mute (default), false to unmute"}}},
+     "progress_unit": "presses"},
     {"name": "tv_apps", "description": "List the apps installed on a TV.",
      "input_schema": {"type": "object", "properties": {"name": TV}}},
     {"name": "tv_inputs", "description": "List a TV's inputs (HDMI ports, antenna...) with the names the TV "
@@ -636,6 +641,26 @@ async def tv_remote(ctx: TaskContext) -> dict:
     return {"device": tv.name, "pressed": [w for _, w in keys] * repeat, "typed": text or None}
 
 
+async def tv_mute(ctx: TaskContext) -> dict:
+    """Roku has one mute toggle and doesn't report whether it's muted. But any
+    volume change unmutes, so up + down gives a known state (unmuted, same
+    volume), and a mute press after that is certain to mute."""
+    tv = await find_tv(ctx.args.get("name"))
+    muted = ctx.args.get("muted")
+    muted = True if muted is None else bool(muted)
+    if not tv.is_on:
+        raise ToolError(f"{tv.name} is off.")
+    presses = ["VolumeUp", "VolumeDown"] + (["VolumeMute"] if muted else [])
+    try:
+        for i, key in enumerate(presses, 1):
+            await app.state.roku.keypress(tv, key)
+            await ctx.progress(i, len(presses), "presses", key)
+            await asyncio.sleep(0.15)
+    except RokuError as exc:
+        raise ToolError(str(exc))
+    return {"device": tv.name, "muted": muted}
+
+
 async def tv_apps(ctx: TaskContext) -> dict:
     tv = await find_tv(ctx.args.get("name"))
     try:
@@ -659,7 +684,7 @@ TOOLS: dict[str, Callable[[TaskContext], Awaitable[dict]]] = {
     "status": status, "lock": lock, "unlock": unlock, "light": light, "thermostat": thermostat, "login": login,
     "alias": alias, "aliases": aliases, "forget_alias": forget_alias,
     "tv_status": tv_status, "tv_power": tv_power, "tv_input": tv_input, "tv_app": tv_app,
-    "tv_remote": tv_remote, "tv_apps": tv_apps, "tv_inputs": tv_inputs, "tv_discover": tv_discover,
+    "tv_remote": tv_remote, "tv_mute": tv_mute, "tv_apps": tv_apps, "tv_inputs": tv_inputs, "tv_discover": tv_discover,
 }
 
 

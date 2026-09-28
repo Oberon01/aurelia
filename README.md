@@ -19,7 +19,7 @@ space-themed name. Tools are addressed as `<function>.<tool>`.
 | `probe` | Diagnostics, testing Aurelia herself | `probe.echo` | Built (reference) |
 | `nebula` | The web (the cloud) | `nebula.search`, `nebula.download`, `nebula.open` | Planned, policy drafted |
 | `constellation` | Devices and shared computer access | `constellation.search_files`, `constellation.open` | Planned, policy drafted |
-| `orbit` | Smart home: SmartRent (locks, lights, thermostat, sensors) and Roku TVs | `orbit.status`, `orbit.lock`, `orbit.unlock`, `orbit.light`, `orbit.thermostat`, `orbit.login`, `orbit.alias`, `orbit.tv_power`, `orbit.tv_input`, `orbit.tv_inputs`, `orbit.tv_app`, `orbit.tv_remote` | Built |
+| `orbit` | Smart home: SmartRent (locks, lights, thermostat, sensors) and Roku TVs | `orbit.status`, `orbit.lock`, `orbit.unlock`, `orbit.light`, `orbit.thermostat`, `orbit.login`, `orbit.alias`, `orbit.tv_power`, `orbit.tv_input`, `orbit.tv_inputs`, `orbit.tv_app`, `orbit.tv_remote`, `orbit.tv_mute` | Built |
 | `kepler` | Scholar: research, summaries, knowledge base | | Planned |
 | `nova` | Developer: code in a sandbox | | Planned |
 | `beacon` | Communication: messages, calls, calendar | | Planned |
@@ -147,6 +147,7 @@ Things to say (fast path, no model call):
 | `open youtube on the tv` | Launches an app; turns the TV on first if needed |
 | `pause the tv`, `resume the tv` | Checks what's playing first, so pause never un-pauses |
 | `volume up`, `turn the volume down 5` | Volume (3 steps unless you say) |
+| `mute`, `unmute the tv` | Always ends muted or unmuted as asked, even though Roku's button is a toggle |
 
 Anything else ("is the door locked?", "what's the temperature inside?") goes
 through the model, which uses `orbit.status`. Limits and the physical-world

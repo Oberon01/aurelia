@@ -87,6 +87,16 @@ fastpath:
       tool: orbit.tv_remote
       args: { name: "{tv}", keys: "resume" }
       reply: "Playing."
+    - name: tv-mute
+      match: '^mute(?:\s+(?:the\s+|my\s+)?(?P<tv>(?:[\w ]+\s)?(?:tv|television|roku)))?$'
+      tool: orbit.tv_mute
+      args: { name: "{tv}", muted: "true" }
+      reply: "Muted."
+    - name: tv-unmute
+      match: '^unmute(?:\s+(?:the\s+|my\s+)?(?P<tv>(?:[\w ]+\s)?(?:tv|television|roku)))?$'
+      tool: orbit.tv_mute
+      args: { name: "{tv}", muted: "false" }
+      reply: "Unmuted."
     - name: tv-volume
       match: '^(?:turn\s+)?(?:the\s+|my\s+)?(?:(?P<tv>(?:[\w ]+\s)?(?:tv|television|roku))\s+)?volume\s+(?P<dir>up|down)(?:\s+(?:by\s+)?(?P<n>\d{1,2}))?$'
       tool: orbit.tv_remote

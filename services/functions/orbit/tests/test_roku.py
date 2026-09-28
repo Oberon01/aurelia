@@ -247,3 +247,15 @@ def test_tv_nickname_and_status_without_smartrent(tv):
 
 def test_discover_tool_lists_what_it_found(tv):
     assert run(main.tv_discover, {})["found"][0]["name"] == "Living Room TV"
+
+
+def test_mute_and_unmute_end_in_the_state_asked_for(tv):
+    tv.power = "PowerOn"
+    assert run(main.tv_mute, {})["muted"] is True
+    assert tv.pressed == ["VolumeUp", "VolumeDown", "VolumeMute"]      # up/down unmutes first, volume unchanged
+    tv.pressed.clear()
+    assert run(main.tv_mute, {"muted": False})["muted"] is False
+    assert tv.pressed == ["VolumeUp", "VolumeDown"]
+    tv.power = "DisplayOff"
+    with pytest.raises(ToolError, match="is off"):
+        run(main.tv_mute, {})
