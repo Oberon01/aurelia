@@ -1,0 +1,9 @@
+# Probe — diagnostics. Policy is the source of truth for each tool's tier;
+# a function cannot choose its own tier.
+function: probe
+enabled: true
+
+tools:
+  echo: { tier: reference }
+
+rate_limit_per_minute: 120

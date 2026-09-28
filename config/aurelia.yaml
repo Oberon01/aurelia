@@ -1,0 +1,18 @@
+# Aurelia runtime config — hot-reloaded. Edit and save; no restart needed.
+
+display:
+  # Tasks estimated longer than this stream results live; shorter ones batch.
+  live_mode_threshold_seconds: 30
+
+retention:
+  hot_days: 7
+  warm_days: 90   # still an open decision
+
+llm:
+  # Filled in during Phase 1 (provider interface).
+  default_provider: claude
+  routes: {}
+
+registry:
+  # A function (and its tools) is dropped if it misses heartbeats this long.
+  function_ttl_seconds: 30

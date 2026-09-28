@@ -1,0 +1,110 @@
+name: aurelia
+
+# Zero-downtime rules for every service in this file:
+#  - no container_name (the deploy script runs two copies side by side)
+#  - no host port mappings except the proxy
+#  - a healthcheck, so Traefik only routes to healthy containers
+#  - all state in Postgres / Redis, never in the container
+
+services:
+  proxy:
+    image: traefik:v3.6   # 3.6.1+ negotiates the Docker API version (required for Docker 29+)
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --ping=true
+    ports:
+      - "8080:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      retries: 3
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # One-shot: applies pending SQL migrations, then exits.
+  migrate:
+    build: ./services/orchestrator
+    command: ["python", "-m", "app.migrate"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  orchestrator:
+    build: ./services/orchestrator
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    volumes:
+      - ./config:/config:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/ready', timeout=3).status == 200 else 1)"]
+      interval: 5s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    stop_grace_period: 30s
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.orchestrator.rule=PathPrefix(`/`)
+      - traefik.http.routers.orchestrator.entrypoints=web
+      - traefik.http.services.orchestrator.loadbalancer.server.port=8000
+    restart: unless-stopped
+
+  # Functions: one service per space-themed group of tools.
+  # Each registers itself + its tools, heartbeats, reports progress, honours cancel.
+  probe:
+    build: ./services/functions/probe
+    env_file: .env
+    environment:
+      FUNCTION_URL: http://probe:9000
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9000/health', timeout=3).status == 200 else 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:

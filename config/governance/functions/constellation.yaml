@@ -1,0 +1,45 @@
+# Constellation — your devices and shared computer access. Draft policy;
+# takes effect when the node agent is built.
+function: constellation
+enabled: true
+
+tools:
+  search_files:    { tier: reference }
+  list_processes:  { tier: reference }
+  browser_history: { tier: reference }
+  read_file:       { tier: read }
+  open:            { tier: act }     # open a file, app or URL on a node
+  launch:          { tier: act }
+  move_file:       { tier: change }
+  delete_file:     { tier: change }
+  kill_process:    { tier: change }
+  install:         { tier: change }
+  read_secrets:    { tier: never }
+
+rate_limit_per_minute: 120
+
+# Enforced by the node agent and the orchestrator.
+rules:
+  communication:
+    heartbeat_seconds: 10
+    offline_after_seconds: 45          # node shown offline, actions to it queued or refused
+    index_sync_minutes: 15             # file / history index refresh
+    process_snapshot_seconds: 60
+    transport: tailscale_mtls          # per-node certificate, revocable from the mailbox
+  sharing:
+    default_profile: owner             # only this user's profile is indexed on each node
+    include: ["~/Documents", "~/Desktop", "~/Downloads", "~/Pictures", "~/Videos"]
+    exclude_patterns:                  # never indexed, never sent — enforced on the node
+      - "**/.ssh/**"
+      - "**/.env*"
+      - "**/*.pem"
+      - "**/*.key"
+      - "**/AppData/**/Login Data*"    # browser saved passwords
+      - "**/AppData/**/Cookies*"
+      - "**/*.kdbx"                    # password manager vaults
+    browser_history: { enabled: true, retain_days: 90 }
+  enrollment:
+    requires_approval: true            # new nodes wait in the mailbox
+  targeting:
+    default_target: requesting_node
+    quiet_hours: []                    # e.g. { node: bedroom-tv, from: "22:00", to: "07:00" }
