@@ -215,8 +215,7 @@ Rules live in `config/governance/` and are hot-reloaded:
 | `change` | Refused with `409 needs_confirmation` until re-sent with `"confirmed": true` |
 | `never` | Always refused |
 
-The orchestrator enforces tiers, enabled/disabled functions, per-function rate
-limits and users before any tool runs; every refusal is logged in
+The orchestrator enforces tiers, enabled/disabled functions, per-function rate limits and users before any tool runs; every refusal is logged in
 `governance_denials`. Each function also fetches its own policy from
 `/governance/functions/<name>` and enforces its specific rules itself. A policy
 file that fails to parse is ignored and the last good version stays in force.
