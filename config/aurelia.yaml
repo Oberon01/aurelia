@@ -56,6 +56,42 @@ fastpath:
       tool: orbit.unlock
       args: { name: "{door}" }
       reply: "Unlocked."
+    # TVs (Roku). These sit above the light patterns so "turn on the tv" isn't read as a light.
+    - name: tv-power
+      match: '^turn\s+(?P<state>on|off)\s+(?:the\s+|my\s+)?(?P<tv>(?:[\w ]+\s)?(?:tv|television|roku))$'
+      tool: orbit.tv_power
+      args: { name: "{tv}", "on": "{state}" }
+      reply: "Turned {state} the {tv}."
+    - name: tv-power-after
+      match: '^turn\s+(?:the\s+|my\s+)?(?P<tv>(?:[\w ]+\s)?(?:tv|television|roku))\s+(?P<state>on|off)$'
+      tool: orbit.tv_power
+      args: { name: "{tv}", "on": "{state}" }
+      reply: "Turned {state} the {tv}."
+    - name: tv-input
+      match: '^(?:switch|change|set)\s+(?:the\s+|my\s+)?(?P<tv>(?:[\w ]+\s)?(?:tv|television|roku))\s+to\s+(?:the\s+|my\s+)?(?P<input>.+)$'
+      tool: orbit.tv_input
+      args: { name: "{tv}", input: "{input}" }
+      reply: "Switched the {tv} to {input}."
+    - name: tv-app
+      match: '^(?:open|launch|start|put)\s+(?:up\s+|on\s+)?(?P<app>.+?)\s+on\s+(?:the\s+|my\s+)?(?P<tv>(?:[\w ]+\s)?(?:tv|television|roku))$'
+      tool: orbit.tv_app
+      args: { name: "{tv}", app: "{app}" }
+      reply: "Opened {app} on the {tv}."
+    - name: tv-pause
+      match: '^pause\s+(?:the\s+|my\s+)?(?P<tv>(?:[\w ]+\s)?(?:tv|television|roku))$'
+      tool: orbit.tv_remote
+      args: { name: "{tv}", keys: "pause" }
+      reply: "Paused."
+    - name: tv-resume
+      match: '^(?:resume|unpause|play)\s+(?:the\s+|my\s+)?(?P<tv>(?:[\w ]+\s)?(?:tv|television|roku))$'
+      tool: orbit.tv_remote
+      args: { name: "{tv}", keys: "resume" }
+      reply: "Playing."
+    - name: tv-volume
+      match: '^(?:turn\s+)?(?:the\s+|my\s+)?(?:(?P<tv>(?:[\w ]+\s)?(?:tv|television|roku))\s+)?volume\s+(?P<dir>up|down)(?:\s+(?:by\s+)?(?P<n>\d{1,2}))?$'
+      tool: orbit.tv_remote
+      args: { name: "{tv}", keys: "volume_{dir}", repeat: "{n|3}" }
+      reply: "Volume {dir}."
     - name: light-on-off
       match: '^turn\s+(?P<state>on|off)\s+(?:the\s+)?(?P<light>.+?)(?:\s+lights?)?$'
       tool: orbit.light

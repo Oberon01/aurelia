@@ -11,6 +11,7 @@ KINDS = {
     "MultilevelSwitch": "light",       # dimmable
     "LeakSensor": "leak_sensor",
     "MotionSensor": "motion_sensor",
+    "RokuTv": "tv",                    # not SmartRent: see roku.py
 }
 
 
@@ -47,6 +48,9 @@ def describe(device: Any) -> dict[str, Any]:
                  operating_state=device.get_operating_state())
     elif kind in ("leak_sensor", "motion_sensor"):
         d["active"] = device.get_active()
+    elif kind == "tv":
+        d.update(on=device.is_on, power=device.power, app=device.app,
+                 model=device.info.get("friendly-model-name") or device.info.get("model-name"))
     return d
 
 
@@ -61,6 +65,7 @@ KIND_WORDS = {
     "lock": {"lock", "locks", "door", "doors", "deadbolt"},
     "light": {"light", "lights", "lamp", "lamps", "switch", "switches", "bulb", "bulbs", "dimmer"},
     "thermostat": {"thermostat", "temperature", "temp", "heat", "ac", "a/c", "air", "hvac"},
+    "tv": {"tv", "tvs", "television", "roku", "screen"},
 }
 ABBREVIATIONS = {"rm": "room", "lr": "living room", "br": "bedroom", "bdrm": "bedroom", "kit": "kitchen"}
 

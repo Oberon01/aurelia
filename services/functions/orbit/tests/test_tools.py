@@ -39,9 +39,11 @@ class FakeCtx:
 def home(monkeypatch):
     import fakeredis.aioredis
     from app.aliases import AliasStore
+    from app.roku import Roku
     devices = my_home()
     main.app.state.home = FakeHome(devices)
     main.app.state.aliases = AliasStore(fakeredis.aioredis.FakeRedis())
+    main.app.state.roku = Roku(fakeredis.aioredis.FakeRedis())      # no TVs
     monkeypatch.setattr(main.settings, "confirm_after_seconds", 0)
     monkeypatch.setattr(main, "POLICY", {"policy": {"rules": {"thermostat": {"min_f": 60, "max_f": 85},
                                                                "heads_up_seconds": 0}}})

@@ -19,7 +19,7 @@ space-themed name. Tools are addressed as `<function>.<tool>`.
 | `probe` | Diagnostics, testing Aurelia herself | `probe.echo` | Built (reference) |
 | `nebula` | The web (the cloud) | `nebula.search`, `nebula.download`, `nebula.open` | Planned, policy drafted |
 | `constellation` | Devices and shared computer access | `constellation.search_files`, `constellation.open` | Planned, policy drafted |
-| `orbit` | Smart home (SmartRent): locks, lights, thermostat, sensors | `orbit.status`, `orbit.lock`, `orbit.unlock`, `orbit.light`, `orbit.thermostat`, `orbit.login` | Built |
+| `orbit` | Smart home: SmartRent (locks, lights, thermostat, sensors) and Roku TVs | `orbit.status`, `orbit.lock`, `orbit.unlock`, `orbit.light`, `orbit.thermostat`, `orbit.login`, `orbit.alias`, `orbit.tv_power`, `orbit.tv_input`, `orbit.tv_app`, `orbit.tv_remote` | Built |
 | `kepler` | Scholar: research, summaries, knowledge base | | Planned |
 | `nova` | Developer: code in a sandbox | | Planned |
 | `beacon` | Communication: messages, calls, calendar | | Planned |
@@ -141,10 +141,35 @@ Things to say (fast path, no model call):
 | `turn on the living room light`, `turn off the lights` | Lights; asks "which light?" if it's ambiguous |
 | `set the bedroom lamp to 40%` | Dimmable lights (a plain switch treats >0 as on) |
 | `set the thermostat to 71` | Target for the current mode; refuses outside 60–85°F |
+| `remember that the big screen is Living Room TV` | Saves your name for a device (any kind) |
+| `turn on the tv`, `turn the living room tv off` | TV power, confirmed afterwards |
+| `switch the tv to hdmi 2`, `switch the tv to the pc` | Input; turns the TV on first if needed |
+| `open youtube on the tv` | Launches an app; turns the TV on first if needed |
+| `pause the tv`, `resume the tv` | Checks what's playing first, so pause never un-pauses |
+| `volume up`, `turn the volume down 5` | Volume (3 steps unless you say) |
 
 Anything else ("is the door locked?", "what's the temperature inside?") goes
 through the model, which uses `orbit.status`. Limits and the physical-world
 heads-up delay live in `config/governance/functions/orbit.yaml`.
+
+### TVs (Roku)
+
+Orbit finds Roku TVs on the home network by itself at startup and every 30
+minutes, and knows each TV by its serial number, not its IP. If the router
+gives the TV a new address, the next command notices and follows it. On the TV:
+
+1. Settings > System > Advanced system settings > Control by mobile apps >
+   Network access: **Enabled** (the default, Limited, refuses commands).
+2. Settings > System > Power > **Fast TV Start: on**. Without it the TV drops
+   off the network when it's off, so it can't be turned back on remotely.
+
+Optional, in `orbit.yaml` under `rules.tv`: `subnets` (your network, e.g.
+`192.168.1.0/24`, makes a search take ~1s instead of ~10s) and `inputs`
+(your names for inputs, e.g. `{ pc: hdmi2 }`). Aurelia can't see the TV's
+screen, so she can press buttons and type into search boxes when you direct
+her, but can't pick "that one" from what's showing. Playing a specific
+YouTube video works by its id (`orbit.tv_app` with `content_id`), which is how
+choosing from search results will work once Nebula can search YouTube.
 
 ## Update without downtime
 

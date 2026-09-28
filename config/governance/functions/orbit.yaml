@@ -1,5 +1,6 @@
-# Orbit — the smart home (SmartRent). Physical-world actions: unlocking always
-# needs your confirmation; locking and lights run on request.
+# Orbit — the smart home: SmartRent (locks, lights, thermostat, sensors) and
+# Roku TVs. Physical-world actions: unlocking always needs your confirmation;
+# locking, lights and the TV run on request.
 function: orbit
 enabled: true
 
@@ -13,6 +14,13 @@ tools:
   alias:        { tier: act }      # "remember that the living room light is Switch 2"
   aliases:      { tier: reference }
   forget_alias: { tier: act }
+  tv_status:    { tier: reference }
+  tv_apps:      { tier: reference }
+  tv_discover:  { tier: read }     # looks around the home network for TVs
+  tv_power:     { tier: act }
+  tv_input:     { tier: act }
+  tv_app:       { tier: act }
+  tv_remote:    { tier: act }
 
 rate_limit_per_minute: 30
 
@@ -29,3 +37,13 @@ rules:
   # living room light is Switch 2" (tool orbit.alias). Names listed here also
   # work, but saved ones take precedence.
   aliases: {}
+
+  # Roku TVs are found on the home network automatically and followed by serial
+  # number if their IP changes; no static IP needed.
+  tv:
+    # Where to look. Empty = the ranges most home routers use. Listing yours
+    # (e.g. "192.168.1.0/24"; run `ip route` on the server) makes a search ~1s instead of ~10s.
+    subnets: ["192.168.1.0/24"]
+    # Your names for inputs: "switch the TV to the pc".
+    inputs: {}          # e.g. { pc: hdmi2, xbox: hdmi1 }
+    rediscover_minutes: 30
