@@ -37,8 +37,11 @@ class FakeCtx:
 
 @pytest.fixture
 def home(monkeypatch):
+    import fakeredis.aioredis
+    from app.aliases import AliasStore
     devices = my_home()
     main.app.state.home = FakeHome(devices)
+    main.app.state.aliases = AliasStore(fakeredis.aioredis.FakeRedis())
     monkeypatch.setattr(main.settings, "confirm_after_seconds", 0)
     monkeypatch.setattr(main, "POLICY", {"policy": {"rules": {"thermostat": {"min_f": 60, "max_f": 85},
                                                                "heads_up_seconds": 0}}})
@@ -141,3 +144,30 @@ def test_heads_up_countdown_can_be_cancelled(home, monkeypatch):
 def test_describe_never_fails_on_missing_values():
     d = describe(DoorLock(1, None, online=None))
     assert d["kind"] == "lock" and d["name"] is None
+
+
+# ---- aliases ---------------------------------------------------------------------------
+
+def test_alias_saved_used_listed_and_forgotten(home):
+    async def go():
+        ctx = lambda args: FakeCtx(args)
+        with pytest.raises(ToolError, match="Did you mean"):
+            await main.light(ctx({"name": "reading nook", "on": True}))
+        out = await main.alias(ctx({"alias": "the reading nook light", "device": "bedroom lamp"}))
+        assert out["device"] == "Bedroom Lamp"
+        assert (await main.light(ctx({"name": "my reading nook", "on": True})))["name"] == "Bedroom Lamp"
+        assert (await main.aliases(ctx({})))["aliases"] == [{"alias": "the reading nook light", "device": "Bedroom Lamp"}]
+        await main.forget_alias(ctx({"alias": "reading nook light"}))
+        with pytest.raises(ToolError):
+            await main.light(ctx({"name": "reading nook", "on": True}))
+    asyncio.run(go())
+
+
+def test_alias_must_point_at_a_real_device(home):
+    with pytest.raises(ToolError, match="no device called 'garage'"):
+        call(main.alias, {"alias": "garage", "device": "garage"})
+
+
+def test_mismatch_suggests_the_likely_device(home):
+    with pytest.raises(ToolError, match="Did you mean Front Door"):
+        call(main.lock, {"name": "entry"})                 # only one lock: suggest it

@@ -10,6 +10,9 @@ tools:
   light:      { tier: act }
   thermostat: { tier: act }
   login:      { tier: act }        # you supply the 2FA code
+  alias:        { tier: act }      # "remember that the living room light is Switch 2"
+  aliases:      { tier: reference }
+  forget_alias: { tier: act }
 
 rate_limit_per_minute: 30
 
@@ -22,9 +25,7 @@ rules:
   # any lock/light/thermostat action. 0 until the display exists to show it.
   heads_up_seconds: 0
 
-  # What you say → the device's name in SmartRent. Matching already ignores
-  # "the"/"my" and words like "light" or "door", and tolerates small spelling
-  # differences; aliases are for names that are nothing alike.
+  # Device nicknames are saved by Orbit itself: tell Aurelia "remember that the
+  # living room light is Switch 2" (tool orbit.alias). Names listed here also
+  # work, but saved ones take precedence.
   aliases: {}
-    # "living room": "Switch 2"
-    # "front door": "Entry Lock"

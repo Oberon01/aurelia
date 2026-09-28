@@ -71,6 +71,11 @@ fastpath:
       tool: orbit.light
       args: { name: "{light}", level: "{level}" }
       reply: "Set to {level}%."
+    - name: remember-alias
+      match: '^remember\s+(?:that\s+)?(?P<alias>.+?)\s+(?:is|means)\s+(?:the\s+|my\s+)?(?P<device>.+)$'
+      tool: orbit.alias
+      args: { alias: "{alias}", device: "{device}" }
+      reply: "Got it: {alias} means {device}."
     - name: smartrent-code
       match: '^(?:smart\s*rent|2fa|two[- ]factor)\s+code\s+(?P<code>[0-9a-z]{4,10})$'
       tool: orbit.login

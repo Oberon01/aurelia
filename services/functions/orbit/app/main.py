@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from pydantic_settings import BaseSettings
 from redis.asyncio import Redis
 
+from .aliases import AliasStore
 from .devices import DeviceNotFound, describe, is_dimmer, kind_of, resolve
 from .home import Home
 
@@ -60,6 +61,17 @@ TOOLS_SPEC = [
          "fan_mode": {"type": "string", "enum": ["on", "auto"]}}}, "progress_unit": "steps"},
     {"name": "login", "description": "Finish signing in to SmartRent with the two-factor code the user received.",
      "input_schema": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]}},
+    {"name": "alias", "description": "Remember what the user calls a device, e.g. 'living room light' means the "
+                                     "device SmartRent calls 'Switch 2'. Use when a name didn't match and the user "
+                                     "confirms which device they meant.",
+     "input_schema": {"type": "object", "properties": {
+         "alias": {"type": "string", "description": "What the user calls it"},
+         "device": {"type": "string", "description": "The device's name in SmartRent"}},
+         "required": ["alias", "device"]}},
+    {"name": "aliases", "description": "List the device nicknames the user has saved.",
+     "input_schema": {"type": "object", "properties": {}}},
+    {"name": "forget_alias", "description": "Forget a saved device nickname.",
+     "input_schema": {"type": "object", "properties": {"alias": {"type": "string"}}, "required": ["alias"]}},
 ]
 REGISTRATION = {"name": "orbit", "description": "Smart home: door locks, lights, thermostat and sensors (SmartRent).",
                 "url": settings.function_url,
@@ -90,6 +102,7 @@ async def heartbeat() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.redis = Redis.from_url(settings.redis_url)
+    app.state.aliases = AliasStore(app.state.redis)
     app.state.home = Home(settings.smartrent_email, settings.smartrent_password, app.state.redis)
     tasks = [asyncio.create_task(heartbeat()), asyncio.create_task(app.state.home.start())]
     yield
@@ -152,11 +165,30 @@ def require_ready() -> list[Any]:
     return h.devices()
 
 
-def find(kind: str, name: str | None) -> Any:
+async def find(kind: str, name: str | None) -> Any:
+    devices = require_ready()
+    aliases = {**(rules().get("aliases") or {}), **await app.state.aliases.all()}
     try:
-        return resolve(require_ready(), kind, name, aliases=rules().get("aliases"))
+        return resolve(devices, kind, name, aliases=aliases)
     except DeviceNotFound as exc:
         raise ToolError(str(exc))
+
+
+def find_any(name: str) -> Any:
+    """A device of any kind by its SmartRent name (used when saving an alias)."""
+    devices = require_ready()
+    found = []
+    for kind in {kind_of(d) for d in devices}:
+        try:
+            found.append(resolve(devices, kind, name))
+        except DeviceNotFound:
+            pass
+    if len(found) == 1:
+        return found[0]
+    names = ", ".join(sorted(d.get_name() or "?" for d in devices))
+    if not found:
+        raise ToolError(f"There's no device called '{name}'. You have: {names}.")
+    raise ToolError(f"'{name}' could be {', '.join(d.get_name() for d in found)}. Which one?")
 
 
 async def confirm_state(device: Any) -> None:
@@ -182,7 +214,7 @@ async def status(ctx: TaskContext) -> dict:
 
 
 async def _set_lock(ctx: TaskContext, locked: bool) -> dict:
-    door = find("lock", ctx.args.get("name"))
+    door = await find("lock", ctx.args.get("name"))
     verb = "Locking" if locked else "Unlocking"
     if not await ctx.heads_up(f"{verb} {door.get_name()}"):
         return {"cancelled": True, "device": door.get_name()}
@@ -205,7 +237,7 @@ async def unlock(ctx: TaskContext) -> dict:
 
 
 async def light(ctx: TaskContext) -> dict:
-    lamp = find("light", ctx.args.get("name"))
+    lamp = await find("light", ctx.args.get("name"))
     level, on = ctx.args.get("level"), ctx.args.get("on")
     if level is None and on is None:
         raise ToolError("Say whether to turn it on or off, or a brightness.")
@@ -225,7 +257,7 @@ async def light(ctx: TaskContext) -> dict:
 
 
 async def thermostat(ctx: TaskContext) -> dict:
-    t = find("thermostat", ctx.args.get("name"))
+    t = await find("thermostat", ctx.args.get("name"))
     a = ctx.args
     limits = rules().get("thermostat", {})
     lo, hi = int(limits.get("min_f", 60)), int(limits.get("max_f", 85))
@@ -277,8 +309,30 @@ async def login(ctx: TaskContext) -> dict:
     return {"message": await home().complete_2fa(code)}
 
 
+async def alias(ctx: TaskContext) -> dict:
+    said, device = str(ctx.args.get("alias", "")).strip(), str(ctx.args.get("device", "")).strip()
+    if not said or not device:
+        raise ToolError("I need both what you call it and which device it is.")
+    target = find_any(device)
+    await app.state.aliases.set(said, target.get_name())
+    return {"message": f"Got it: '{said}' means {target.get_name()}.", "alias": said, "device": target.get_name()}
+
+
+async def aliases(ctx: TaskContext) -> dict:
+    saved = await app.state.aliases.all()
+    return {"aliases": [{"alias": k, "device": v} for k, v in sorted(saved.items())]}
+
+
+async def forget_alias(ctx: TaskContext) -> dict:
+    said = str(ctx.args.get("alias", "")).strip()
+    if not await app.state.aliases.forget(said):
+        raise ToolError(f"I don't have an alias '{said}'.")
+    return {"message": f"Forgot '{said}'."}
+
+
 TOOLS: dict[str, Callable[[TaskContext], Awaitable[dict]]] = {
     "status": status, "lock": lock, "unlock": unlock, "light": light, "thermostat": thermostat, "login": login,
+    "alias": alias, "aliases": aliases, "forget_alias": forget_alias,
 }
 
 

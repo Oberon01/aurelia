@@ -123,4 +123,14 @@ def resolve(devices: list[Any], kind: str, name: str | None, aliases: dict[str, 
     fuzzy = [d for d, n in by_name.items() if n and all(close(w, n.split()) for w in words)]
     if len(fuzzy) == 1:
         return fuzzy[0]
-    raise DeviceNotFound(f"No {kind} matches '{name}'. You have: {names}.")
+    # Nothing matched: suggest the likeliest device and how to remember it.
+    guess = difflib.get_close_matches(wanted, [n for n in by_name.values() if n], n=1, cutoff=0.3)
+    if len(candidates) == 1:
+        suggestion = candidates[0].get_name()
+    elif guess:
+        suggestion = next(d.get_name() for d, n in by_name.items() if n == guess[0])
+    else:
+        suggestion = None
+    hint = (f" Did you mean {suggestion}? If so, say: remember that {name} is {suggestion}."
+            if suggestion else "")
+    raise DeviceNotFound(f"No {kind} matches '{name}'. You have: {names}.{hint}")
