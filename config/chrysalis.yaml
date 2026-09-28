@@ -4,7 +4,7 @@
 # scripts/deploy.sh are never applied automatically (see README).
 
 enabled: true
-dry_run: true              # start here: plans and records releases, changes nothing.
+dry_run: false              # start here: plans and records releases, changes nothing.
                            # Set to false once a dry run's plan looks right.
 branch: main
 poll_seconds: 120
