@@ -46,10 +46,17 @@ progress in real units; honour cancel; report a result (partial if cancelled).
 
 ## Talk to her
 
-```powershell
-.\scripts\ask.ps1                    # interactive; "exit" to quit
-.\scripts\ask.ps1 "echo hello 3 times"
+```bash
+./scripts/ask.sh                     # on the server; interactive, "exit" to quit, "new" to start over
+./scripts/ask.sh "echo hello 3 times"
+./scripts/ask.sh --new "..."         # fresh conversation
 ```
+
+```powershell
+.\scripts\ask.ps1                    # from Windows (through an SSH tunnel: ssh -L 8080:localhost:8080 server)
+```
+
+`ask.sh` keeps the conversation between runs, so one-off requests keep their context.
 
 Or over HTTP: `POST /ask {"text": "...", "session_id": "..."}`. Each reply
 says which route answered (`fastpath` or `llm`), its latency, and any tasks it
@@ -182,6 +189,7 @@ narrow, never widen, a function's policy.
 config/aurelia.yaml          hot-reloaded runtime config
 config/governance/           charter + one policy per function (hot-reloaded)
 config/identity.md           Aurelia's personality and rules for the model (hot-reloaded)
+scripts/ask.sh               talk to Aurelia on the server (bash)
 scripts/ask.ps1              talk to Aurelia from PowerShell
 scripts/deploy.sh            zero-downtime update of one service
 services/orchestrator/       the brain (FastAPI)
