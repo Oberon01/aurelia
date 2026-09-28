@@ -217,7 +217,16 @@ def test_invalid_yaml_is_rejected_before_anything_changes(world):
 def test_local_edits_on_server_hold_the_release(world):
     (world["server"] / "config" / "aurelia.yaml").write_text("edited on server\n")
     world["commit"]("services/functions/probe/main.py", "v2\n", "probe v2")
-    assert "local edits" in run(world)
+    result = run(world)
+    assert "local edits" in result and "config/aurelia.yaml" in result
+
+
+def test_permission_change_on_server_is_a_local_edit(world):
+    import os
+    probe = world["server"] / "services" / "functions" / "probe" / "main.py"
+    os.chmod(probe, 0o755)
+    world["commit"]("README.md", "docs\n", "docs")
+    assert "services/functions/probe/main.py" in run(world)
 
 
 def test_protected_core_goes_live_without_touching_chrysalis(world):
