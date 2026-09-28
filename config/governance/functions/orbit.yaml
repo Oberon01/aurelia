@@ -21,3 +21,10 @@ rules:
   # Physical-world heads-up: seconds of visible countdown (cancellable) before
   # any lock/light/thermostat action. 0 until the display exists to show it.
   heads_up_seconds: 0
+
+  # What you say → the device's name in SmartRent. Matching already ignores
+  # "the"/"my" and words like "light" or "door", and tolerates small spelling
+  # differences; aliases are for names that are nothing alike.
+  aliases: {}
+    # "living room": "Switch 2"
+    # "front door": "Entry Lock"

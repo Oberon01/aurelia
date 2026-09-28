@@ -24,8 +24,13 @@ def _fill(template: str, groups: dict[str, str | None]) -> str:
     return _PLACEHOLDER.sub(lambda m: groups.get(m.group(1)) or (m.group(2) or ""), template)
 
 
+_POLITE = re.compile(r"^(?:(?:hey\s+)?(?:aura|aurelia)[,:]?\s+)?(?:(?:please|can you|could you|would you|will you)\s+)?"
+                     r"(?P<rest>.*?)(?:[,\s]+please)?$", re.IGNORECASE)
+
+
 def match(text: str, patterns: list[FastPathPattern]) -> FastPathMatch | None:
     cleaned = " ".join(text.strip().rstrip(".!?").split())
+    cleaned = _POLITE.match(cleaned).group("rest") or cleaned
     for p in patterns:
         try:
             m = re.fullmatch(p.match, cleaned, flags=re.IGNORECASE)

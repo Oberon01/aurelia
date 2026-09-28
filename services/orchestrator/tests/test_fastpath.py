@@ -31,3 +31,9 @@ def test_no_match_falls_through_to_llm():
 def test_bad_regex_is_skipped():
     broken = FastPathPattern(name="bad", match="(", tool="x.y")
     assert fastpath.match("echo ok", [broken, ECHO]).pattern.name == "echo"
+
+
+def test_polite_wrappers_are_ignored():
+    for text in ["please echo hi", "Aura, echo hi", "can you echo hi please", "hey aurelia echo hi."]:
+        m = fastpath.match(text, [ECHO])
+        assert m and m.args["message"] == "hi", text

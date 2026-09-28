@@ -61,6 +61,25 @@ def test_resolve_by_partial_name_generic_word_and_ambiguity(home):
         resolve(home, "light", "garage")
 
 
+@pytest.mark.parametrize("said", [
+    "my living room light", "living room", "the living room lights", "Living Room",
+    "living rm light", "livingroom", "light in the living room", "my living room",
+])
+def test_resolve_the_way_people_actually_say_it(home, said):
+    assert resolve(home, "light", said).get_name() == "Living Room Light"
+
+
+def test_resolve_with_real_world_names_and_aliases():
+    from .fakes import BinarySwitch
+    devices = [BinarySwitch(1, "Dining Rm Switch"), BinarySwitch(2, "Switch 2")]
+    assert resolve(devices, "light", "my dining room light").get_name() == "Dining Rm Switch"
+    with pytest.raises(DeviceNotFound):
+        resolve(devices, "light", "living room")          # must NOT become "Dining Rm"
+    assert resolve(devices, "light", "dinning room").get_name() == "Dining Rm Switch"   # typo
+    assert resolve(devices, "light", "the living room light",
+                   aliases={"living room": "Switch 2"}).get_name() == "Switch 2"
+
+
 # ---- tools -----------------------------------------------------------------------------
 
 def test_status_reports_known_and_unmodelled_devices(home):

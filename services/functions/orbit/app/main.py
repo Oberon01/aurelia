@@ -154,7 +154,7 @@ def require_ready() -> list[Any]:
 
 def find(kind: str, name: str | None) -> Any:
     try:
-        return resolve(require_ready(), kind, name)
+        return resolve(require_ready(), kind, name, aliases=rules().get("aliases"))
     except DeviceNotFound as exc:
         raise ToolError(str(exc))
 
