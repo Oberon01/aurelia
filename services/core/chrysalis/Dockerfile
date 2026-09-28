@@ -19,5 +19,12 @@ RUN python -m pytest -q tests
 FROM base AS runtime
 RUN uv sync --frozen --no-dev --no-install-project
 COPY app ./app
+# SSH (used by git) refuses to run for a user id with no account, so create one
+# matching your server user; the ids come from .env via docker-compose.yml.
+ARG AURELIA_UID=1000
+ARG AURELIA_GID=1000
+RUN (getent group "$AURELIA_GID" || groupadd -g "$AURELIA_GID" chrysalis) \
+ && useradd -u "$AURELIA_UID" -g "$AURELIA_GID" -M -d /tmp -s /usr/sbin/nologin chrysalis
+USER ${AURELIA_UID}:${AURELIA_GID}
 EXPOSE 9100
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9100", "--app-dir", "/srv"]

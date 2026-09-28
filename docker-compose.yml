@@ -112,7 +112,11 @@ services:
   # COMPOSE_PROFILES=chrysalis (the home server), never on a dev machine.
   chrysalis:
     profiles: ["chrysalis"]
-    build: ./services/core/chrysalis
+    build:
+      context: ./services/core/chrysalis
+      args:
+        AURELIA_UID: ${AURELIA_UID:-1000}
+        AURELIA_GID: ${AURELIA_GID:-1000}
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
