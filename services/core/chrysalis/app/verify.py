@@ -15,13 +15,29 @@ class Verifier:
         self.url = orchestrator_url.rstrip("/")
 
     async def functions(self) -> set[str]:
+        return set((await self._registered()).keys())
+
+    async def _registered(self) -> dict[str, str]:
         try:
             async with httpx.AsyncClient(timeout=5) as c:
                 r = await c.get(f"{self.url}/registry/functions")
                 r.raise_for_status()
-                return {f["name"] for f in r.json()}
+                return {f["name"]: f["url"] for f in r.json()}
         except httpx.HTTPError:
-            return set()
+            return {}
+
+    async def reachable_functions(self) -> set[str]:
+        """Registered functions whose own /health answers — a registration left over
+        from a container that's being replaced doesn't count."""
+        ok = set()
+        async with httpx.AsyncClient(timeout=3) as c:
+            for name, url in (await self._registered()).items():
+                try:
+                    if (await c.get(f"{url.rstrip('/')}/health")).status_code == 200:
+                        ok.add(name)
+                except httpx.HTTPError:
+                    pass
+        return ok
 
     async def validate_config(self, path: str, content: str) -> str | None:
         """Ask the running orchestrator whether a config file matches its schema.
@@ -59,20 +75,25 @@ class Verifier:
 
             deadline = loop.time() + cfg.functions_timeout_seconds
             while True:
-                missing = expected_functions - await self.functions()
+                missing = expected_functions - await self.reachable_functions()
                 if not missing:
                     break
                 if loop.time() > deadline:
-                    raise VerifyError(f"functions did not re-register: {', '.join(sorted(missing))}")
+                    raise VerifyError(f"functions not reachable after deploy: {', '.join(sorted(missing))}")
                 await asyncio.sleep(2)
-            passed.append(f"{len(expected_functions)} function(s) registered")
+            passed.append(f"{len(expected_functions)} function(s) registered and reachable")
 
             if cfg.smoke_test and "probe" in expected_functions:
-                r = await c.post(f"{self.url}/tasks", json={
-                    "tool": "probe.echo", "args": {"message": "chrysalis smoke test", "steps": 0},
-                    "user": "chrysalis", "trigger": "chrysalis"})
-                if r.status_code != 202:
-                    raise VerifyError(f"smoke test was refused ({r.status_code}): {r.text[:200]}")
+                deadline = loop.time() + 30
+                while True:      # a function that just started may need a moment
+                    r = await c.post(f"{self.url}/tasks", json={
+                        "tool": "probe.echo", "args": {"message": "chrysalis smoke test", "steps": 0},
+                        "user": "chrysalis", "trigger": "chrysalis"})
+                    if r.status_code == 202:
+                        break
+                    if r.status_code not in (404, 502) or loop.time() > deadline:
+                        raise VerifyError(f"smoke test was refused ({r.status_code}): {r.text[:200]}")
+                    await asyncio.sleep(2)
                 task_id = r.json()["task_id"]
                 deadline = loop.time() + 20
                 while True:

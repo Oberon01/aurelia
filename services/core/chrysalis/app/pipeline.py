@@ -234,6 +234,16 @@ class Chrysalis:
                 await self.git.reset_to(prev)          # config back to the last good version
             except GitError as git_exc:
                 detail += f" Could not reset the working copy: {git_exc}"
+            if plan.compose and deployed:
+                # Re-apply the previous compose file: services it doesn't define (added by
+                # this release) are removed, and everything else returns to its previous form.
+                try:
+                    previous = await self.docker.compose_services()
+                    await self.docker.apply_stack(sorted(previous - NEVER_RECREATE - {"migrate"}),
+                                                  remove_orphans=True)
+                    detail += " Previous stack re-applied."
+                except Exception as stack_exc:
+                    detail += f" Re-applying the previous stack failed: {stack_exc}"
             await self.store.update(rid, status, detail, finished=True)
             log.error("release %s %s: %s", sha[:8], status, detail)
             return f"{status}: {detail}"

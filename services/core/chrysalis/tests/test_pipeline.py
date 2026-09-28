@@ -52,7 +52,8 @@ class FakeDocker:
     async def has_image(self, svc, tag): return (svc, tag) in self.images
     async def migrate(self): self.calls.append(("migrate",))
     async def swap(self, svc): self.calls.append(("swap", svc))
-    async def apply_stack(self, services): self.calls.append(("apply_stack", tuple(services)))
+    async def apply_stack(self, services, remove_orphans=False):
+        self.calls.append(("apply_stack", tuple(services), remove_orphans))
     async def health(self, svc): return ["unhealthy"] if svc in self.unhealthy else ["healthy"]
     async def tags(self, svc): return [t for s, t in self.images if s == svc]
     async def remove_tag(self, svc, tag): self.images.discard((svc, tag))
@@ -299,4 +300,15 @@ def test_config_the_orchestrator_would_reject_is_not_applied(world):
     world["commit"]("config/aurelia.yaml", "fastpath: {patterns: [{args: {on: x}}]}\n", "bad schema")
     result = run(world)
     assert result.startswith("failed") and "doesn't match what the orchestrator accepts" in result
+    assert server_head(world) == before
+
+
+def test_failed_stack_change_restores_previous_stack_and_removes_new_services(world):
+    before = server_head(world)
+    world["verifier"].fail = True
+    world["commit"]("docker-compose.yml", "services: {}\n", "add a service")
+    result = run(world)
+    assert result.startswith("rolled_back") and "Previous stack re-applied" in result
+    applies = [c for c in world["docker"].calls if c[0] == "apply_stack"]
+    assert applies[0][2] is False and applies[-1][2] is True          # deploy, then restore with orphans removed
     assert server_head(world) == before

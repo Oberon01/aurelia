@@ -86,8 +86,12 @@ class Docker:
         # Run through bash so it works even if the file lost its executable bit (e.g. committed from Windows).
         await self._run("bash", "./scripts/deploy.sh", service, env={"SKIP_BUILD": "1"})
 
-    async def apply_stack(self, services: list[str]) -> None:
-        await self._run("docker", "compose", "up", "-d", "--no-build", *services)
+    async def apply_stack(self, services: list[str], remove_orphans: bool = False) -> None:
+        """Apply the compose file and wait until every service is healthy (or fail)."""
+        args = ["docker", "compose", "up", "-d", "--no-build", "--wait", "--wait-timeout", "180"]
+        if remove_orphans:
+            args.append("--remove-orphans")
+        await self._run(*args, *services)
 
     async def health(self, service: str) -> list[str]:
         """Health of each running container of a service: healthy | unhealthy | starting | none | exited."""
