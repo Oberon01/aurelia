@@ -37,7 +37,7 @@ settings = Settings()
 
 REGISTRATION = {
     "name": "probe",
-    "description": "Diagnostics: tools for testing and inspecting Aurelia herself.",
+    "description": "Diagnostics: tools for testing and inspecting Aurelia.",
     "url": settings.function_url,
     "tools": [
         {
