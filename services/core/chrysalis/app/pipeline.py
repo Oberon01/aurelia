@@ -40,28 +40,41 @@ class Chrysalis:
     def __init__(self, settings: Settings, git: Git, docker: Docker, verifier: Verifier, store: Store):
         self.settings, self.git, self.docker, self.verifier, self.store = settings, git, docker, verifier, store
         self.lock = asyncio.Lock()          # one release or rollback at a time
-        self.state = {"last_check": None, "last_error": None, "busy": None}
+        self.state = {"last_check": None, "last_error": None, "busy": None, "docker": None}
 
     def config(self) -> ChrysalisConfig:
         return load_config(self.settings.repo_path)
 
     # ---- startup ---------------------------------------------------------------
 
-    async def adopt_baseline(self) -> None:
-        """First run: record what's running now as the first good release, so there's
-        something to roll back to."""
-        if await self.store.live(1):
+    async def ensure_baseline(self) -> None:
+        """Record what's running as the first good release (first run only), and make
+        sure the current live release has images saved to roll back to."""
+        problem = await self.docker.access()
+        self.state["docker"] = problem or "ok"
+        if problem:
+            log.error("Docker access: %s", problem)
             return
-        sha = await self.git.head()
+        live = await self.store.live(1)
         known = await self.docker.compose_services()
-        tagged = []
+        if not live:
+            sha = await self.git.head()
+            rid = await self.store.create(sha, None, "", "baseline adopted by Chrysalis", [],
+                                          {"services": [], "summary": "baseline"}, "live")
+            await self.store.update(rid, "live", "Baseline at startup.", True)
+            log.info("baseline adopted at %s", sha[:8])
+            live = await self.store.live(1)
+        sha = live[0]["sha"]
+        saved = []
         for svc in built_services(known):
-            if await self.docker.has_image(svc, "latest") and await self.docker.tag(svc, "latest", sha, check=False):
-                tagged.append(svc)
-        rid = await self.store.create(sha, None, "", "baseline adopted by Chrysalis", [],
-                                      {"services": tagged, "summary": "baseline"}, "live")
-        await self.store.update(rid, "live", f"Baseline at startup; images tagged: {', '.join(tagged) or 'none'}", True)
-        log.info("baseline adopted at %s", sha[:8])
+            if not await self.docker.has_image(svc, sha) and await self.docker.has_image(svc, "latest"):
+                await self.docker.tag(svc, "latest", sha)
+            if await self.docker.has_image(svc, sha):
+                saved.append(svc)
+        log.info("live release %s: rollback images saved for %s", sha[:8], ", ".join(saved) or "nothing")
+
+    # Kept for callers of the old name.
+    adopt_baseline = ensure_baseline
 
     # ---- the watch loop ----------------------------------------------------------
 
@@ -87,6 +100,13 @@ class Chrysalis:
                 return "up to date"
             if await self.store.decided(remote, cfg.dry_run):
                 return f"{remote[:8]} already decided"
+
+            # An environment problem is not the commit's fault: don't record anything,
+            # so the same commit is tried again once the problem is fixed.
+            problem = await self.docker.access()
+            self.state["docker"] = problem or "ok"
+            if problem:
+                raise RuntimeError(problem)
 
             commits = await self.git.commits(local, remote)
             newest = commits[0] if commits else None

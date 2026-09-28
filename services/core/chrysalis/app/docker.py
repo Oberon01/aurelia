@@ -40,6 +40,16 @@ class Docker:
             raise DockerError(f"{' '.join(args[:5])} failed:\n{_tail(result.output)}")
         return result
 
+    async def access(self) -> str | None:
+        """None if the Docker daemon is reachable; otherwise a plain explanation."""
+        r = await self._run("docker", "version", "--format", "{{.Server.Version}}", check=False, timeout=20)
+        if r.code == 0:
+            return None
+        if "permission denied" in r.output.lower():
+            return ("No permission to use the Docker socket. Set DOCKER_GID in .env to the socket's group "
+                    "(stat -c %g /var/run/docker.sock), then: docker compose up -d chrysalis")
+        return "Docker is not reachable: " + _tail(r.output, 3)
+
     def image(self, service: str) -> str:
         return f"{self.project}-{service}"
 

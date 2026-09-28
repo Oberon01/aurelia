@@ -23,6 +23,9 @@ class FakeDocker:
         self.fail_test = False
         self.test_stages = {"services/orchestrator", "services/functions/probe"}
         self.unhealthy: set[str] = set()
+        self.no_access: str | None = None
+
+    async def access(self): return self.no_access
 
     async def compose_services(self):
         return {"proxy", "postgres", "redis", "migrate", "orchestrator", "probe", "chrysalis"}
@@ -256,3 +259,21 @@ def test_rollback_of_orchestrator_retags_migrate_without_swapping_it(world):
     swapped = {c[1] for c in world["docker"].calls if c[0] == "swap"}
     assert "migrate" not in swapped and "orchestrator" in swapped
     assert any(c[:3] == ("tag", "migrate", c[2]) and c[3] == "latest" for c in world["docker"].calls if c[0] == "tag")
+
+
+def test_no_docker_access_records_nothing_and_retries_later(world):
+    world["docker"].no_access = "No permission to use the Docker socket."
+    world["commit"]("services/functions/probe/main.py", "v2\n", "probe v2")
+    with pytest.raises(RuntimeError, match="Docker socket"):
+        run(world)
+    assert [r["status"] for r in world["store"].rows] == ["live"]     # only the baseline
+    world["docker"].no_access = None
+    assert run(world).startswith("live")                              # same commit, now deployed
+
+
+def test_baseline_images_are_saved_once_docker_works(world):
+    sha = world["store"].rows[0]["sha"]
+    world["docker"].images = {("probe", "latest"), ("orchestrator", "latest")}   # tags lost
+    asyncio.run(world["c"].ensure_baseline())
+    assert ("probe", sha) in world["docker"].images and ("orchestrator", sha) in world["docker"].images
+    assert len([r for r in world["store"].rows if r["status"] == "live"]) == 1   # no duplicate baseline

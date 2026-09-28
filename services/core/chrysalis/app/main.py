@@ -46,7 +46,7 @@ async def lifespan(app: FastAPI):
     app.state.chrysalis = Chrysalis(settings, Git(settings.repo_path), Docker(settings.repo_path, settings.project),
                                     Verifier(settings.orchestrator_url), Store(pool))
     try:
-        await app.state.chrysalis.adopt_baseline()
+        await app.state.chrysalis.ensure_baseline()
     except Exception:
         log.exception("could not adopt a baseline yet; will keep watching")
     tasks = [asyncio.create_task(app.state.chrysalis.loop()), asyncio.create_task(heartbeat())]
@@ -85,7 +85,8 @@ async def status():
         "version": (await c.git.head())[:8],
         "live_release": _brief(live[0]) if live else None,
         "dry_run": cfg.dry_run, "enabled": cfg.enabled, "branch": cfg.branch,
-        "busy": c.state["busy"], "last_check": c.state["last_check"], "last_error": c.state["last_error"],
+        "docker": c.state["docker"], "busy": c.state["busy"],
+        "last_check": c.state["last_check"], "last_error": c.state["last_error"],
     }
 
 
