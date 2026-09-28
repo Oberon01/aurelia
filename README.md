@@ -19,7 +19,7 @@ space-themed name. Tools are addressed as `<function>.<tool>`.
 | `probe` | Diagnostics, testing Aurelia herself | `probe.echo` | Built (reference) |
 | `nebula` | The web (the cloud) | `nebula.search`, `nebula.download`, `nebula.open` | Planned, policy drafted |
 | `constellation` | Devices and shared computer access | `constellation.search_files`, `constellation.open` | Planned, policy drafted |
-| `orbit` | Smart home: SmartRent (locks, lights, thermostat, sensors) and Roku TVs | `orbit.status`, `orbit.lock`, `orbit.unlock`, `orbit.light`, `orbit.thermostat`, `orbit.login`, `orbit.alias`, `orbit.tv_power`, `orbit.tv_input`, `orbit.tv_app`, `orbit.tv_remote` | Built |
+| `orbit` | Smart home: SmartRent (locks, lights, thermostat, sensors) and Roku TVs | `orbit.status`, `orbit.lock`, `orbit.unlock`, `orbit.light`, `orbit.thermostat`, `orbit.login`, `orbit.alias`, `orbit.tv_power`, `orbit.tv_input`, `orbit.tv_inputs`, `orbit.tv_app`, `orbit.tv_remote` | Built |
 | `kepler` | Scholar: research, summaries, knowledge base | | Planned |
 | `nova` | Developer: code in a sandbox | | Planned |
 | `beacon` | Communication: messages, calls, calendar | | Planned |
@@ -163,9 +163,11 @@ gives the TV a new address, the next command notices and follows it. On the TV:
 2. Settings > System > Power > **Fast TV Start: on**. Without it the TV drops
    off the network when it's off, so it can't be turned back on remotely.
 
-Optional, in `orbit.yaml` under `rules.tv`: `subnets` (your network, e.g.
-`192.168.1.0/24`, makes a search take ~1s instead of ~10s) and `inputs`
-(your names for inputs, e.g. `{ pc: hdmi2 }`). Aurelia can't see the TV's
+Inputs are read from the TV each time, so if you rename one on the TV (HDMI 2
+→ "PC"), `switch the tv to the pc` works and follows later renames;
+`orbit.tv_inputs` lists them. Optional, in `orbit.yaml` under `rules.tv`:
+`subnets` (your network, e.g. `192.168.1.0/24`, makes a search take ~1s
+instead of ~10s) and `inputs` (extra names, e.g. `{ xbox: hdmi1 }`). Aurelia can't see the TV's
 screen, so she can press buttons and type into search boxes when you direct
 her, but can't pick "that one" from what's showing. Playing a specific
 YouTube video works by its id (`orbit.tv_app` with `content_id`), which is how

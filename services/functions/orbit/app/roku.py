@@ -81,6 +81,46 @@ def input_key(said: str, named: dict[str, str] | None = None) -> str:
     return INPUTS[s]
 
 
+# Short names → the id suffix Roku TVs use for that input.
+INPUT_IDS = {"hdmi1": "hdmi1", "hdmi2": "hdmi2", "hdmi3": "hdmi3", "hdmi4": "hdmi4", "av": "cvbs", "tuner": "dtv"}
+
+
+def _norm(text: str) -> str:
+    s = " ".join(re.sub(r"[^\w ]+", " ", text.lower()).split())
+    for lead in ("the ", "my "):
+        s = s.removeprefix(lead)
+    return s
+
+
+def pick_input(said: str, tv_inputs: list[dict[str, str]], named: dict[str, str] | None = None) -> dict[str, str]:
+    """Choose an input from what the TV reports. Returns {"name", and "id" to launch
+    or "key" to press}. Matches the TV's own names first ("PC" if you renamed HDMI 2
+    on the TV), then your names from the policy, then standard ones ("hdmi 2")."""
+    s = _norm(said)
+    for inp in tv_inputs:                                # the TV's names, e.g. "PC", "Live TV"
+        n = _norm(inp["name"])
+        if s == n or s.replace(" ", "") == n.replace(" ", ""):
+            return {"id": inp["id"], "name": inp["name"]}
+    for yours, real in (named or {}).items():            # your names in orbit.yaml
+        if _norm(yours) == s:
+            s = _norm(real)
+            break
+    try:
+        key = input_key(s)
+    except RokuError:
+        if tv_inputs:
+            raise RokuError(f"The TV has no input called '{said}'. Its inputs: "
+                            f"{', '.join(i['name'] for i in tv_inputs)}.")
+        raise
+    suffix = INPUT_IDS[next(k for k, v in INPUTS.items() if v == key)]
+    for inp in tv_inputs:
+        if inp["id"] == f"tvinput.{suffix}":
+            return {"id": inp["id"], "name": inp["name"]}
+    if tv_inputs:
+        raise RokuError(f"The TV has no input '{said}'. Its inputs: {', '.join(i['name'] for i in tv_inputs)}.")
+    return {"key": key, "name": said}                    # TV didn't list inputs: press the button
+
+
 def parse_info(xml: str) -> dict[str, str]:
     root = ET.fromstring(xml)
     return {child.tag: (child.text or "").strip() for child in root}
@@ -93,6 +133,7 @@ class RokuTv:
         self.serial, self.ip, self.info = serial, ip, info or {}
         self.online = True
         self.app: str | None = None
+        self.app_id: str | None = None
 
     @property
     def name(self) -> str:
@@ -260,14 +301,26 @@ class Roku:
         for ch in text:
             await self._post(tv, f"/keypress/Lit_{quote(ch, safe='')}")
 
-    async def apps(self, tv: RokuTv) -> list[dict[str, str]]:
+    async def _installed(self, tv: RokuTv) -> list[dict[str, str]]:
         root = await self._get(tv, "/query/apps")
-        return [{"id": a.get("id"), "name": (a.text or "").strip()} for a in root.findall("app")]
+        return [{"id": a.get("id"), "type": a.get("type"), "name": (a.text or "").strip()}
+                for a in root.findall("app")]
+
+    async def apps(self, tv: RokuTv) -> list[dict[str, str]]:
+        """Installed apps (not inputs)."""
+        return [a for a in await self._installed(tv) if a["type"] != "tvin"]
+
+    async def inputs(self, tv: RokuTv) -> list[dict[str, str]]:
+        """The TV's inputs as the TV names them right now, including names you gave
+        them on the TV ("PC" instead of "HDMI 2"). id like 'tvinput.hdmi2'."""
+        return [a for a in await self._installed(tv) if a["type"] == "tvin"]
 
     async def active_app(self, tv: RokuTv) -> str | None:
         root = await self._get(tv, "/query/active-app")
         app = root.find("app")
-        tv.app = (app.text or "").strip() if app is not None and app.get("id") else None
+        showing = app is not None and app.get("id")
+        tv.app = (app.text or "").strip() if showing else None
+        tv.app_id = app.get("id") if showing else None
         return tv.app                      # None: the home screen
 
     async def media_state(self, tv: RokuTv) -> str | None:

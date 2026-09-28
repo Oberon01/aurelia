@@ -22,6 +22,8 @@ class FakeTv:
         self.media = "play"
         self.pressed: list[str] = []
         self.launched: list[str] = []
+        # As a Roku TV reports them; HDMI 2 renamed "PC" on the TV.
+        self.inputs = {"tvinput.hdmi1": "HDMI 1", "tvinput.hdmi2": "PC", "tvinput.dtv": "Live TV"}
 
     def info(self):
         return (f"<device-info><serial-number>{self.serial}</serial-number><is-tv>true</is-tv>"
@@ -52,7 +54,8 @@ class FakeNet:
             return httpx.Response(200, text=tv.info())
         if path == "/query/apps":
             return httpx.Response(200, text="<apps>" + "".join(
-                f'<app id="{i}" type="appl">{n}</app>' for i, n in APPS.items()) + "</apps>")
+                f'<app id="{i}" type="appl">{n}</app>' for i, n in APPS.items()) + "".join(
+                f'<app id="{i}" type="tvin">{n}</app>' for i, n in tv.inputs.items()) + "</apps>")
         if path == "/query/active-app":
             app_id, name = tv.active
             attr = f' id="{app_id}"' if app_id else ""
@@ -74,7 +77,7 @@ class FakeNet:
         if path.startswith("/launch/"):
             app_id = path.removeprefix("/launch/")
             tv.launched.append(app_id + (f"?{url.query}" if url.query else ""))
-            tv.active = (app_id, APPS[app_id])
+            tv.active = (app_id, {**APPS, **tv.inputs}[app_id])
             return httpx.Response(200)
         return httpx.Response(404)
 
@@ -163,7 +166,7 @@ def tv(monkeypatch):
         fakeredis.aioredis.FakeRedis())
     main.app.state.roku = make_roku(net)
     monkeypatch.setattr(main, "POLICY", {"policy": {"rules": {
-        "heads_up_seconds": 0, "tv": {"subnets": SUBNET, "inputs": {"pc": "hdmi2"}}}}})
+        "heads_up_seconds": 0, "tv": {"subnets": SUBNET, "inputs": {"xbox": "hdmi1"}}}}})
     return t
 
 
@@ -179,8 +182,28 @@ def test_power_on_is_confirmed(tv):
 
 
 def test_switch_to_the_pc_wakes_the_tv_first(tv):
-    out = run(main.tv_input, {"input": "the pc"})
-    assert tv.pressed == ["PowerOn", "InputHDMI2"] and out["app"] == "HDMI 2"
+    out = run(main.tv_input, {"input": "the pc"})                 # the TV's own name for HDMI 2
+    assert tv.pressed == ["PowerOn"] and tv.launched == ["tvinput.hdmi2"] and out["input"] == "PC"
+
+
+def test_inputs_follow_what_the_tv_calls_them(tv):
+    assert run(main.tv_input, {"input": "hdmi 2"})["input"] == "PC"          # standard name still works
+    assert run(main.tv_input, {"input": "the xbox"})["input"] == "HDMI 1"     # your name from orbit.yaml
+    assert run(main.tv_input, {"input": "antenna"})["input"] == "Live TV"
+    tv.inputs["tvinput.hdmi2"] = "Gaming PC"                                  # renamed on the TV later
+    assert run(main.tv_input, {"input": "gaming pc"})["input"] == "Gaming PC"
+    with pytest.raises(ToolError, match="Its inputs: HDMI 1, Gaming PC, Live TV"):
+        run(main.tv_input, {"input": "hdmi 4"})
+
+
+def test_list_inputs_and_apps_separately(tv):
+    tv.power = "PowerOn"
+    run(main.tv_input, {"input": "pc"})
+    out = run(main.tv_inputs, {})
+    assert [(i["name"], i["port"], i["showing"]) for i in out["inputs"]] == [
+        ("HDMI 1", "hdmi1", False), ("PC", "hdmi2", True), ("Live TV", "dtv", False)]
+    assert out["your_names"] == {"xbox": "hdmi1"}
+    assert "PC" not in run(main.tv_apps, {})["apps"]
 
 
 def test_open_app_and_a_specific_youtube_video(tv):

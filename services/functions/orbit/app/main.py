@@ -23,7 +23,7 @@ from redis.asyncio import Redis
 from .aliases import AliasStore
 from .devices import DeviceNotFound, describe, is_dimmer, kind_of, resolve
 from .home import Home
-from .roku import Roku, RokuError, RokuTv, input_key, key_name
+from .roku import Roku, RokuError, RokuTv, key_name, pick_input
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -82,8 +82,9 @@ TOOLS_SPEC = [
     {"name": "tv_power", "description": "Turn a TV on or off.",
      "input_schema": {"type": "object", "properties": {"name": TV, "on": {"type": "boolean"}},
                       "required": ["on"]}, "progress_unit": "steps"},
-    {"name": "tv_input", "description": "Switch a TV to an input: 'hdmi 1'-'hdmi 4', 'av', 'tuner' (antenna), "
-                                        "or a name the user gave an input, like 'pc'. Turns the TV on if needed.",
+    {"name": "tv_input", "description": "Switch a TV to an input, by the name the TV shows for it (see tv_inputs; "
+                                        "e.g. 'PC' if the user renamed HDMI 2) or a standard one: 'hdmi 1'-'hdmi 4', "
+                                        "'av', 'tuner'. Turns the TV on if needed.",
      "input_schema": {"type": "object", "properties": {"name": TV, "input": {"type": "string"}},
                       "required": ["input"]}, "progress_unit": "steps"},
     {"name": "tv_app", "description": "Open an app on a TV (YouTube, Netflix, Hulu...). Turns the TV on if needed. "
@@ -104,6 +105,9 @@ TOOLS_SPEC = [
          "repeat": {"type": "integer", "minimum": 1, "maximum": 20},
          "text": {"type": "string"}}}, "progress_unit": "presses"},
     {"name": "tv_apps", "description": "List the apps installed on a TV.",
+     "input_schema": {"type": "object", "properties": {"name": TV}}},
+    {"name": "tv_inputs", "description": "List a TV's inputs (HDMI ports, antenna...) with the names the TV "
+                                         "currently gives them, and which one is showing.",
      "input_schema": {"type": "object", "properties": {"name": TV}}},
     {"name": "tv_discover", "description": "Search the home network for Roku TVs again (normally automatic).",
      "input_schema": {"type": "object", "properties": {}}, "progress_unit": "steps"},
@@ -506,20 +510,41 @@ async def tv_power(ctx: TaskContext) -> dict:
 async def tv_input(ctx: TaskContext) -> dict:
     tv = await find_tv(ctx.args.get("name"))
     said = str(ctx.args.get("input") or "").strip()
+    if not said:
+        raise ToolError("Which input?")
+    roku: Roku = app.state.roku
     try:
-        key = input_key(said, tv_rules().get("inputs"))
-    except RokuError as exc:
-        raise ToolError(str(exc))
-    try:
+        target = pick_input(said, await roku.inputs(tv), tv_rules().get("inputs"))
         await wake(ctx, tv, 0, 3)
-        await ctx.progress(1, 3, "steps", f"Switching to {said}")
-        await app.state.roku.keypress(tv, key)
+        await ctx.progress(1, 3, "steps", f"Switching to {target['name']}")
+        if "id" in target:
+            await roku.launch(tv, target["id"])          # the TV's own input entry
+        else:
+            await roku.keypress(tv, target["key"])
         await settle()
-        await app.state.roku.active_app(tv)
+        await roku.active_app(tv)
     except RokuError as exc:
         raise ToolError(str(exc))
     await ctx.progress(3, 3, "steps", "Confirmed")
-    return {**describe(tv), "input": said}
+    if "id" in target and tv.app_id != target["id"]:
+        raise ToolError(f"I asked {tv.name} to switch to {target['name']}, but it's showing "
+                        f"{tv.app or 'the home screen'}.")
+    return {**describe(tv), "input": target["name"]}
+
+
+async def tv_inputs(ctx: TaskContext) -> dict:
+    tv = await find_tv(ctx.args.get("name"))
+    roku: Roku = app.state.roku
+    try:
+        inputs = await roku.inputs(tv)
+        await roku.active_app(tv)
+    except RokuError as exc:
+        raise ToolError(str(exc))
+    yours = tv_rules().get("inputs") or {}
+    return {"device": tv.name,
+            "inputs": [{"name": i["name"], "port": i["id"].removeprefix("tvinput."),
+                        "showing": tv.is_on and tv.app_id == i["id"]} for i in inputs],
+            **({"your_names": yours} if yours else {})}
 
 
 def match_app(apps: list[dict[str, str]], said: str) -> dict[str, str]:
@@ -634,7 +659,7 @@ TOOLS: dict[str, Callable[[TaskContext], Awaitable[dict]]] = {
     "status": status, "lock": lock, "unlock": unlock, "light": light, "thermostat": thermostat, "login": login,
     "alias": alias, "aliases": aliases, "forget_alias": forget_alias,
     "tv_status": tv_status, "tv_power": tv_power, "tv_input": tv_input, "tv_app": tv_app,
-    "tv_remote": tv_remote, "tv_apps": tv_apps, "tv_discover": tv_discover,
+    "tv_remote": tv_remote, "tv_apps": tv_apps, "tv_inputs": tv_inputs, "tv_discover": tv_discover,
 }
 
 

@@ -16,6 +16,7 @@ tools:
   forget_alias: { tier: act }
   tv_status:    { tier: reference }
   tv_apps:      { tier: reference }
+  tv_inputs:    { tier: reference }
   tv_discover:  { tier: read }     # looks around the home network for TVs
   tv_power:     { tier: act }
   tv_input:     { tier: act }
@@ -44,6 +45,8 @@ rules:
     # Where to look. Empty = the ranges most home routers use. Listing yours
     # (e.g. "192.168.1.0/24"; run `ip route` on the server) makes a search ~1s instead of ~10s.
     subnets: ["192.168.1.0/24"]
-    # Your names for inputs: "switch the TV to the pc".
-    inputs: {}          # e.g. { pc: hdmi2, xbox: hdmi1 }
+    # Inputs are read from the TV, so names you give them on the TV itself
+    # ("PC" for HDMI 2) work automatically and follow any rename. These are
+    # extra names on top of that, if you'd rather not rename on the TV.
+    inputs: {}          # e.g. { xbox: hdmi1 }
     rediscover_minutes: 30
