@@ -26,7 +26,29 @@ class RetentionConfig(BaseModel):
 
 class LLMConfig(BaseModel):
     default_provider: str = "claude"
-    routes: dict[str, Any] = {}
+    routes: dict[str, list[str]] = {"chat": ["claude"]}
+    providers: dict[str, dict[str, Any]] = {}
+    monthly_token_cap: int = 2_000_000       # input + output tokens across cloud providers
+    max_tool_rounds: int = 5                 # tool calls the LLM may chain for one request
+    wait_for_result_seconds: float = 8       # wait this long for a task result before replying
+
+
+class SessionConfig(BaseModel):
+    ttl_minutes: int = 60
+    max_turns: int = 20
+
+
+class FastPathPattern(BaseModel):
+    name: str
+    match: str                  # regex, matched case-insensitively against the whole request
+    tool: str                   # "<function>.<tool>"
+    args: dict[str, str] = {}   # values may use {group} or {group|default}
+    reply: str = "Done."        # templated confirmation, same placeholders
+
+
+class FastPathConfig(BaseModel):
+    enabled: bool = True
+    patterns: list[FastPathPattern] = []
 
 
 class RegistryConfig(BaseModel):
@@ -37,6 +59,8 @@ class RuntimeConfig(BaseModel):
     display: DisplayConfig = DisplayConfig()
     retention: RetentionConfig = RetentionConfig()
     llm: LLMConfig = LLMConfig()
+    session: SessionConfig = SessionConfig()
+    fastpath: FastPathConfig = FastPathConfig()
     registry: RegistryConfig = RegistryConfig()
 
 

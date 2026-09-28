@@ -144,6 +144,37 @@ async def get_task(task_id: str):
     return dict(row)
 
 
+# ---- used by the assistant (/ask) -----------------------------------------
+
+class _AppContext:
+    """Lets internal callers reuse the route handlers, which only need request.app."""
+    def __init__(self, app):
+        self.app = app
+
+
+async def launch(app, body: StartTask) -> str:
+    """Start a task through the exact same path as POST /tasks — registry,
+    governance, rate limits, logging. Raises HTTPException on refusal."""
+    return (await start_task(body, _AppContext(app)))["task_id"]
+
+
+async def wait_for_result(task_id: str, seconds: float) -> dict[str, Any] | None:
+    """Poll until the task finishes or `seconds` pass. None = still running."""
+    import asyncio
+    import json
+    deadline = asyncio.get_running_loop().time() + seconds
+    while True:
+        row = await db.pool().fetchrow(
+            "SELECT status, partial, result, error, duration_ms FROM task_runs WHERE id=$1", uuid.UUID(task_id))
+        if row and row["status"] != "running":
+            out = dict(row)
+            out["result"] = json.loads(out["result"]) if out["result"] else None
+            return out
+        if asyncio.get_running_loop().time() >= deadline:
+            return None
+        await asyncio.sleep(0.2)
+
+
 async def _finish(request: Request, task_id: str, tool: str, body: Result) -> None:
     await db.pool().execute(
         "UPDATE task_runs SET status=$2, partial=$3, result=$4::jsonb, error=$5, finished_at=now(), "

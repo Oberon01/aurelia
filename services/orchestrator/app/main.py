@@ -5,10 +5,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from redis.asyncio import Redis
 
-from . import db, registry, tasks
+from . import assistant, db, registry, tasks
 from .config import ConfigStore
 from .events import CHANNEL
 from .governance import GovernanceStore
+from .llm.router import Router
 from .settings import settings
 
 logging.basicConfig(level=logging.INFO, format='{"ts":"%(asctime)s","lvl":"%(levelname)s","log":"%(name)s","msg":"%(message)s"}')
@@ -21,6 +22,7 @@ async def lifespan(app: FastAPI):
     watcher = app.state.config.start()
     app.state.governance = GovernanceStore(settings.governance_path)
     gov_watcher = app.state.governance.start()
+    app.state.llm = Router(app.state.config)
     app.state.redis = Redis.from_url(settings.redis_url)
     await db.connect(settings.database_url)
     app.state.draining = False
@@ -38,8 +40,9 @@ async def lifespan(app: FastAPI):
         log.info("orchestrator stopped")
 
 
-app = FastAPI(title="Aurelia Orchestrator", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Aurelia Orchestrator", version="0.2.0", lifespan=lifespan)
 app.include_router(tasks.router)
+app.include_router(assistant.router)
 
 
 @app.get("/health")

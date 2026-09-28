@@ -9,9 +9,48 @@ retention:
   warm_days: 90   # still an open decision
 
 llm:
-  # Filled in during Phase 1 (provider interface).
   default_provider: claude
-  routes: {}
+  # Purpose → providers in order; the first that answers wins.
+  # Add ollama after claude for a local fallback, or put it first to prefer local.
+  routes:
+    chat: [claude]
+  providers:
+    claude:
+      model: claude-haiku-4-5-20251001   # cheapest tier by default; escalate per route later
+      max_tokens: 1024
+    ollama:
+      base_url: http://host.docker.internal:11434
+      model: qwen2.5:7b-instruct
+      timeout_seconds: 60
+  monthly_token_cap: 2000000     # hard stop for cloud tokens this calendar month
+  max_tool_rounds: 5
+  wait_for_result_seconds: 8
+
+session:
+  ttl_minutes: 60        # a conversation is forgotten after this long idle
+  max_turns: 20
+
+# Predictable commands skip the LLM entirely. First match wins.
+# Placeholders: {group} from the regex, {group|default} when the group is optional.
+fastpath:
+  enabled: true
+  patterns:
+    - name: echo
+      match: '^(?:probe\s+)?echo\s+(?P<message>.+?)(?:\s+(?P<steps>\d+)\s+times)?$'
+      tool: probe.echo
+      args: { message: "{message}", steps: "{steps|3}" }
+      reply: 'Echoing "{message}".'
+    # Examples for functions still to come:
+    # - name: open-on-device
+    #   match: '^open\s+(?P<target>.+?)\s+on\s+(?:the\s+)?(?P<device>.+)$'
+    #   tool: constellation.open
+    #   args: { target: "{target}", device: "{device}" }
+    #   reply: "Opening {target} on {device}."
+    # - name: lock-door
+    #   match: '^lock\s+(?:the\s+)?(?P<door>.+?)(?:\s+door)?$'
+    #   tool: orbit.lock
+    #   args: { door: "{door}" }
+    #   reply: "Locking the {door} door."
 
 registry:
   # A function (and its tools) is dropped if it misses heartbeats this long.

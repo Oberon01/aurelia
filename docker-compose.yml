@@ -15,7 +15,7 @@ services:
       - --entrypoints.web.address=:80
       - --ping=true
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"   # this machine only; on the home box, change to "8080:80" once auth exists
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     healthcheck:
@@ -68,6 +68,8 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     volumes:
       - ./config:/config:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # reach a local Ollama on the host (Linux)
     depends_on:
       migrate:
         condition: service_completed_successfully

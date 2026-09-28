@@ -5,8 +5,9 @@ orchestrator that routes requests to containerized **functions** and shows her
 work on the surgical-view display. She's the software built by **Project Monarch**.
 Design doc: the *Monarch — Design Doc* in the Monarch project.
 
-This is **Phase 0: the foundation.** No LLM yet — just the always-on skeleton
-every later phase plugs into.
+**Phase 1: Aurelia understands requests.** You talk to her in plain language;
+a fast path handles predictable commands instantly, and a language model picks
+functions and tools for everything else, always through governance.
 
 ## Functions and tools
 
@@ -18,7 +19,11 @@ space-themed name. Tools are addressed as `<function>.<tool>`.
 | `probe` | Diagnostics, testing Aurelia herself | `probe.echo` | Built (reference) |
 | `nebula` | The web (the cloud) | `nebula.search`, `nebula.download`, `nebula.open` | Planned, policy drafted |
 | `constellation` | Devices and shared computer access | `constellation.search_files`, `constellation.open` | Planned, policy drafted |
-| `orbit` | Smart home (SmartRent) | | Planned |
+| `orbit` | Smart home (SmartRent) | | Next to build |
+| `kepler` | Scholar: research, summaries, knowledge base | | Planned |
+| `nova` | Developer: code in a sandbox | | Planned |
+| `beacon` | Communication: messages, calls, calendar | | Planned |
+| `libra` | Bookkeeping: services and subscriptions | | Planned |
 | `kuiper` | Files and storage | | Planned |
 | `pulsar` | Scheduling and automations | | Planned |
 | `parallax` | Analytics on task history | | Planned |
@@ -32,12 +37,51 @@ progress in real units; honour cancel; report a result (partial if cancelled).
 
 | Piece | What it does |
 | --- | --- |
-| `proxy` (Traefik) | Only entry point, on port 8080. Routes only to healthy containers. |
+| `proxy` (Traefik) | Only entry point, on `localhost:8080`. Routes only to healthy containers. |
 | `postgres` (pgvector) | Tasks, and later memory and panel snapshots. |
 | `redis` | Function registry, cancel flags, panel event bus. |
 | `migrate` | One-shot: applies pending SQL migrations, then exits. |
-| `orchestrator` | FastAPI: function registry, task lifecycle, `/ws` panel event stream, hot-reloaded config. |
+| `orchestrator` | FastAPI: `/ask`, fast path, LLM providers, function registry, governance, task lifecycle, `/ws` panel events. |
 | `probe` | Reference function with one tool, `echo`. |
+
+## Talk to her
+
+```powershell
+.\scripts\ask.ps1                    # interactive; "exit" to quit
+.\scripts\ask.ps1 "echo hello 3 times"
+```
+
+Or over HTTP: `POST /ask {"text": "...", "session_id": "..."}`. Each reply
+says which route answered (`fastpath` or `llm`), its latency, and any tasks it
+started. Actions that need confirmation come back in `needs_confirmation`;
+approve or decline with `POST /ask/confirm {"action_id": "...", "approve": true}`.
+`ask.ps1` prompts you for these.
+
+**How a request is handled**
+
+1. **Fast path.** Patterns in `config/aurelia.yaml` → `fastpath` match
+   predictable commands and run the tool directly with a templated reply: no
+   model call, no cost. Add patterns as functions arrive (examples are there
+   for Constellation and Orbit).
+2. **Language model.** Anything else goes to the model chosen by
+   `llm.routes.chat`, an ordered list: the first provider that answers wins
+   (e.g. `[claude, ollama]` falls back to a local model). The model sees only
+   the tools governance allows for you, and every call it makes goes through
+   the same checks as `POST /tasks`. Tool output is wrapped as data, never
+   instructions.
+3. **Confirmation.** `change`-tier actions are held, not run, until you approve.
+
+**Personality and rules for the model:** `config/identity.md`, plus the
+charter's principles, appended automatically. Both hot-reload.
+
+**Cost control:** `llm.monthly_token_cap` stops cloud model calls for the rest
+of the month once reached (the fast path keeps working). Every request is
+logged in `ask_requests` and every model call in `llm_calls` with tokens and
+latency, for Libra and Parallax later.
+
+**Model setup:** put an Anthropic API key in `.env` as `ANTHROPIC_API_KEY`
+(use one with a low spend limit while testing). For a local model, run Ollama
+on the host and add `ollama` to `llm.routes.chat`.
 
 ## Run it
 
@@ -46,6 +90,7 @@ cp .env.example .env        # then change the password
 docker compose up -d --build
 curl localhost:8080/ready
 curl localhost:8080/registry/functions   # probe appears within ~10 s
+.\scripts\ask.ps1 "echo hello"            # Windows; the fast path needs no API key
 ```
 
 Watch the event stream in one terminal (any WebSocket client, e.g. `websocat`):
@@ -127,15 +172,20 @@ narrow, never widen, a function's policy.
   after the 20 s grace period. Checkpoint-and-resume arrives with the first
   long-running tool.
 - No auth yet. Keep port 8080 on your LAN only (remote access: Tailscale).
-- No LLM, display UI, memory tiers or mailbox — Phases 1–5.
+- The proxy only listens on `localhost`. Open it to the network (`"8080:80"`)
+  on the home box once authentication exists.
+- No display UI, memory tiers or mailbox yet — later phases.
 
 ## Layout
 
 ```
 config/aurelia.yaml          hot-reloaded runtime config
 config/governance/           charter + one policy per function (hot-reloaded)
+config/identity.md           Aurelia's personality and rules for the model (hot-reloaded)
+scripts/ask.ps1              talk to Aurelia from PowerShell
 scripts/deploy.sh            zero-downtime update of one service
 services/orchestrator/       the brain (FastAPI)
-  app/  migrations/
+  app/llm/                   provider interface: Claude, Ollama (+ scripted, tests only)
+  app/  migrations/  tests/
 services/functions/probe/    reference function (tool: echo)
 ```
