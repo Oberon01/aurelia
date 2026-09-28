@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
-from . import assistant, db, registry, tasks
+from . import assistant, db, memory, registry, tasks
 from .config import ConfigStore
 from .events import CHANNEL
 from .governance import GovernanceStore
@@ -27,9 +27,11 @@ async def lifespan(app: FastAPI):
     app.state.governance = GovernanceStore(settings.governance_path)
     gov_watcher = app.state.governance.start()
     app.state.llm = Router(app.state.config)
+    app.state.embedder = memory.Embedder(app.state.config)
     app.state.redis = Redis.from_url(settings.redis_url)
     await db.connect(settings.database_url)
     app.state.draining = False
+    maintenance = asyncio.create_task(memory.maintenance_loop(app))
     log.info("orchestrator ready")
     try:
         yield
@@ -39,6 +41,7 @@ async def lifespan(app: FastAPI):
         app.state.draining = True
         watcher.cancel()
         gov_watcher.cancel()
+        maintenance.cancel()
         await db.close()
         await app.state.redis.aclose()
         log.info("orchestrator stopped")
@@ -47,6 +50,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Aurelia Orchestrator", version="0.2.0", lifespan=lifespan)
 app.include_router(tasks.router)
 app.include_router(assistant.router)
+app.include_router(memory.router)
 
 
 VIEW = Path(__file__).parent / "static" / "view.html"

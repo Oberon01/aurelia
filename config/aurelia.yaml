@@ -5,8 +5,18 @@ display:
   live_mode_threshold_seconds: 30
 
 retention:
+  # Saved result panels: full for hot_days, then a summary until warm_days,
+  # then only the task's metadata (timing, outcome) is kept. Pinned panels stay full.
   hot_days: 7
   warm_days: 90   # still an open decision
+
+memory:
+  restore: true              # a repeated look-up shows its last panel at once, with its age
+  maintenance_minutes: 60    # tiering, daily stats and embeddings
+  embeddings:                # recall by meaning; optional (word search works without it)
+    enabled: true
+    provider: ollama         # uses llm.providers.ollama.base_url unless base_url is set here
+    model: nomic-embed-text
 
 llm:
   default_provider: claude

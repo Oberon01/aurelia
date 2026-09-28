@@ -57,7 +57,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 .title{font-family:var(--display);font-size:18px;font-weight:600;color:var(--ink-strong);letter-spacing:.3px}
 .working .title{font-size:13px;font-weight:500;letter-spacing:3px;text-transform:uppercase;color:var(--ink-faint)}
 .stage.solo .working .title{font-size:15px}
-.meta{font-family:var(--mono);font-size:13px;color:var(--ink-dim);white-space:nowrap}
+.meta{font-family:var(--mono);font-size:13px;color:var(--ink-dim);white-space:nowrap;display:flex;gap:10px;align-items:center}
 .close{position:absolute;top:8px;right:8px;width:32px;height:32px;border:0;border-radius:6px;background:transparent;color:var(--ink-faint);font-size:18px;line-height:1}
 .close:hover{background:var(--cyan-track);color:var(--ink-strong)}
 .reading .head,.failed .head,.asking .head{padding-right:28px}
@@ -93,6 +93,15 @@ button{font:inherit;color:inherit;cursor:pointer}
 .chips{display:flex;flex-wrap:wrap;gap:8px}
 .chip{padding:5px 10px;border:1px solid var(--cyan-soft);border-radius:14px;font-size:13px;color:var(--ink-dim)}
 .chip.on{border-color:var(--cyan);color:var(--ink-strong)}
+.age{font-family:var(--mono);font-size:11px;letter-spacing:1px;color:var(--ink-faint);text-transform:uppercase}
+.age.stale{color:var(--warn)}
+.refresh{height:2px;border-radius:1px;background:var(--cyan-track);overflow:hidden;margin-top:-6px}
+.refresh .fill{width:30%;animation:slide 1.4s ease-in-out infinite}
+.refresh .fill::after{display:none}
+.pin{min-height:32px;padding:0 10px;border-radius:6px;border:1px solid var(--cyan-soft);background:transparent;color:var(--ink-faint);font-family:var(--mono);font-size:11px;letter-spacing:1px}
+.pin:hover{color:var(--ink-strong);border-color:var(--cyan-line)}
+.pin.on{color:var(--ground);background:var(--cyan);border-color:var(--cyan)}
+.more{font-family:var(--mono);font-size:12px;color:var(--ink-faint)}
 .tag{font-family:var(--mono);font-size:10px;letter-spacing:1px;color:var(--ground);background:var(--warn);padding:2px 6px;border-radius:3px}
 table{width:100%;border-collapse:collapse;font-size:14px}
 th{font-family:var(--mono);font-size:11px;letter-spacing:2px;font-weight:400;color:var(--ink-faint);text-align:left;padding:0 10px 8px 0;border-bottom:1px solid rgba(95,212,230,.2);text-transform:uppercase}
@@ -234,7 +243,8 @@ async function cancel(rec, button) {
 }
 
 // ---------------------------------------------------------------- result panel
-function renderResult(rec, data) {
+// memo (optional): a saved panel restored from memory → { age, stale, tier, taskId, refreshing, note }
+function renderResult(rec, data, memo) {
   const { status, partial, ...rest } = data;
   const n = rec.node;
   n.className = "panel reading";
@@ -243,9 +253,36 @@ function renderResult(rec, data) {
   head.append(el("div", "title", resultTitle(rec.tool, rest)));
   const meta = el("div", "meta");
   if (partial || rest.cancelled) meta.append(el("span", "tag", "STOPPED · PARTIAL"));
+  if (memo) {
+    const words = [memo.stale ? "stale" : null, memo.age, memo.tier === "warm" ? "summary" : null].filter(Boolean);
+    meta.append(el("span", "age" + (memo.stale ? " stale" : ""), words.join(" · ")));
+  }
+  const pinId = memo ? memo.taskId : rec.taskId;
+  if (pinId && !String(pinId).startsWith("confirm-")) meta.append(pinButton(pinId, memo && memo.tier === "pinned"));
   head.append(meta);
   n.append(head);
+  if (memo && memo.refreshing) { const r = el("div", "refresh"); r.append(el("div", "fill")); n.append(r); }
+  if (memo && memo.note) n.append(el("div", "error", memo.note));
   n.append(body(rec.tool, rest));
+}
+
+function pinButton(taskId, pinned) {
+  const b = el("button", "pin" + (pinned ? " on" : ""), pinned ? "PINNED" : "PIN");
+  b.type = "button";
+  b.setAttribute("aria-pressed", pinned ? "true" : "false");
+  b.title = "Pinned panels are kept in full, however old";
+  b.addEventListener("click", async () => {
+    const want = b.getAttribute("aria-pressed") !== "true";
+    b.disabled = true;
+    try {
+      const r = await fetch(`/memory/snapshots/${taskId}/pin`, { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pinned: want }) });
+      if (r.ok) { b.setAttribute("aria-pressed", String(want)); b.textContent = want ? "PINNED" : "PIN"; b.classList.toggle("on", want); }
+      else say("That panel isn't saved, so it can't be pinned.");
+    } catch (e) { say("I can't reach Aurelia right now."); }
+    b.disabled = false;
+  });
+  return b;
 }
 
 function resultTitle(tool, d) {
@@ -257,7 +294,7 @@ function resultTitle(tool, d) {
 function body(tool, d) {
   const wrap = el("div");
   wrap.style.display = "flex"; wrap.style.flexDirection = "column"; wrap.style.gap = "14px";
-  const used = new Set(["cancelled"]);
+  const used = new Set(["cancelled", "_more"]);
 
   if (d.message) { wrap.append(el("div", "msg", d.message)); used.add("message"); }
   if (Array.isArray(d.devices) || Array.isArray(d.tvs)) {
@@ -290,6 +327,10 @@ function body(tool, d) {
   }
   const rest = Object.fromEntries(Object.entries(d).filter(([k, v]) => !used.has(k) && v !== null && v !== undefined));
   if (Object.keys(rest).length) wrap.append(generic(rest));
+  if (d._more) {
+    const cut = Object.entries(d._more).map(([k, n]) => `${n} more ${k.replace(/_/g, " ")}`).join(", ");
+    wrap.append(el("div", "more", `+ ${cut} (summary; the full panel aged out)`));
+  }
   if (!wrap.children.length) wrap.append(el("div", "msg", "Done."));
   return wrap;
 }
@@ -394,20 +435,34 @@ function onEvent(ev) {
       rec = rec || makePanel(id, ev.tool);
       rec.unit = d.unit || null;
       rec.cancellable = d.cancellable !== false;
-      renderProgress(rec, null);
+      if (d.snapshot) {                              // memory: show the last panel now, refresh behind it
+        const sn = d.snapshot;
+        rec.memo = { age: sn.age, stale: sn.stale, tier: sn.tier, taskId: sn.task_id, refreshing: true };
+        rec.snapshotData = { ...sn.data, partial: sn.partial };
+        renderResult(rec, rec.snapshotData, rec.memo);
+      } else {
+        renderProgress(rec, null);
+      }
       break;
     case "panel.progress":
       rec = rec || makePanel(id, ev.tool);
-      if (rec.state === "running") renderProgress(rec, d);
+      if (rec.state === "running" && !rec.memo) renderProgress(rec, d);
       break;
     case "panel.result":
       rec = rec || makePanel(id, ev.tool);
       rec.state = "reading";
+      rec.memo = null;                               // the fresh result replaces any restored panel
       renderResult(rec, d);
       break;
     case "panel.close":
       if (!rec) return;
-      if (d.status === "failed" && !d.has_result) {
+      if (rec.memo && !d.has_result && rec.state === "running") {
+        // The refresh brought nothing new: keep the restored panel, say what happened.
+        rec.state = "reading";
+        rec.memo.refreshing = false;
+        if (d.status === "failed") rec.memo.note = "Couldn't refresh: " + (d.error || "the tool failed");
+        renderResult(rec, rec.snapshotData, rec.memo);
+      } else if (d.status === "failed" && !d.has_result) {
         rec.state = "failed";
         rec.node.className = "panel failed";
         rec.node.replaceChildren(closeButton(rec));

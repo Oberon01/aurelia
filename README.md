@@ -113,6 +113,47 @@ them (how they should leave is still an open decision). Chrysalis's own smoke
 tests are hidden. This is the Phase 2 minimum; the installable overlay app
 comes with Constellation (Phase 7).
 
+## Memory
+
+Every task that returns something to read is saved as a panel snapshot, next
+to the task's permanent metadata (tool, arguments, timing, outcome).
+
+- **Repeat a look-up, see the last answer at once.** Ask for the home status
+  again and the last panel appears immediately, labelled with its age (and
+  "stale" past the tool's freshness window) while a fresh run replaces it.
+  Only look-ups do this; actions like lock or light never show an old result
+  as if it were new.
+- **Tiers** (days in `retention` in `config/aurelia.yaml`): full panel for 7
+  days, then a summary (first few items plus counts) until 90, then metadata
+  only. **Pin** a panel on the display to keep it in full regardless of age.
+- **Daily stats per tool** (runs, failures, median / p90 / worst time) roll up
+  in `tool_stats_daily`, with a weekly view. Phase 4's inference reads these.
+- **Recall by meaning** through local embeddings, when available; otherwise by
+  words. `GET /memory/recall?q=is the front door locked`
+
+Maintenance (tiering, rollups, embeddings) runs hourly on one orchestrator at
+a time; `POST /memory/maintain` runs it now. Other endpoints:
+`GET /memory/snapshots`, `GET /memory/snapshots/<task id>`,
+`POST /memory/snapshots/<task id>/pin`, `GET /memory/stats?tool=orbit.status`.
+
+**Embeddings are optional.** They use Ollama on the server with
+`nomic-embed-text` (small, fine on a CPU). Without it everything else works and
+recall matches words; snapshots are embedded later once it's there:
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull nomic-embed-text
+# Ollama must accept connections from Docker (it listens on 127.0.0.1 by default):
+sudo systemctl edit ollama     # add:  [Service]  Environment="OLLAMA_HOST=0.0.0.0:11434"
+sudo systemctl restart ollama
+```
+
+Keep port 11434 closed to the rest of the network (it has no login).
+
+The end-to-end memory test needs a real Postgres with pgvector and Redis, so
+the deploy test stage skips it. Run it locally with `TEST_DATABASE_URL` and
+`TEST_REDIS_URL` set: `uv run python -m pytest -q tests/integration`.
+
 ## Run it
 
 ```bash
@@ -315,8 +356,10 @@ narrow, never widen, a function's policy.
 - No auth yet. Keep port 8080 on your LAN only (remote access: Tailscale).
 - The proxy only listens on `localhost`. Open it to the network (`"8080:80"`)
   on the home box once authentication exists.
-- The display is the minimal web view; memory tiers and the mailbox come in
-  Phases 3 and 4 (see the phase table in the design doc).
+- The display is the minimal web view; the mailbox and digest come in
+  Phase 4 (see the phase table in the design doc).
+- Daily stats use the database's clock (UTC in the container), so a "day"
+  runs midnight to midnight UTC, not Central.
 
 ## Layout
 

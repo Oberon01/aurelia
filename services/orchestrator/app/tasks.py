@@ -4,6 +4,8 @@ Nothing here lives in process memory. The task row is in Postgres, events go
 through Redis, and tools call back over HTTP to whichever replica answers —
 so an orchestrator can be swapped mid-task without the task noticing.
 """
+import json
+import logging
 import uuid
 from typing import Any
 
@@ -11,9 +13,10 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from . import db, registry
+from . import db, memory, registry
 from .events import PanelEvent, publish
 
+log = logging.getLogger("aurelia.tasks")
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 CANCEL_PREFIX = "aurelia:cancel:"
 
@@ -73,11 +76,19 @@ async def start_task(body: StartTask, request: Request):
         uuid.UUID(task_id), name, _json(body.args), body.trigger, resolved.tool.progress_unit,
         body.user, decision.tier, body.confirmed,
     )
-    await publish(_redis(request), PanelEvent(type="panel.open", task_id=task_id, tool=name,
-                                               data={"args": body.args, "user": body.user,
-                                                     "trigger": body.trigger,
-                                                     "cancellable": resolved.tool.cancellable,
-                                                     "unit": resolved.tool.progress_unit}))
+    open_data: dict[str, Any] = {"args": body.args, "user": body.user, "trigger": body.trigger,
+                                 "cancellable": resolved.tool.cancellable, "unit": resolved.tool.progress_unit}
+    # Memory: a repeated look-up shows its last panel at once (labelled with its
+    # age) while this run refreshes it. Actions never restore an old result.
+    if (decision.tier in memory.RESTORE_TIERS and request.app.state.config.current.memory.restore
+            and not memory.is_system_user(gov, body.user)):
+        try:
+            snap = await memory.latest(name, body.args, body.user, resolved.tool.freshness_seconds)
+            if snap:
+                open_data["snapshot"] = snap
+        except Exception:
+            log.exception("couldn't look up a saved panel for %s", name)
+    await publish(_redis(request), PanelEvent(type="panel.open", task_id=task_id, tool=name, data=open_data))
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.post(f"{resolved.url}/tools/{resolved.tool.name}/invoke",
@@ -186,6 +197,14 @@ async def _finish(request: Request, task_id: str, tool: str, body: Result) -> No
         uuid.UUID(task_id), body.status, body.partial, _json(body.data), body.error,
     )
     redis = _redis(request)
+    if body.data and body.status != "failed":
+        try:
+            row = await db.pool().fetchrow("SELECT args, user_id FROM task_runs WHERE id=$1", uuid.UUID(task_id))
+            if row and not memory.is_system_user(request.app.state.governance, row["user_id"]):
+                args = row["args"] if isinstance(row["args"], dict) else json.loads(row["args"])
+                await memory.save(task_id, tool, args, row["user_id"], body.data, body.partial)
+        except Exception:
+            log.exception("couldn't save the panel for task %s", task_id)
     if body.data:
         await publish(redis, PanelEvent(type="panel.result", task_id=task_id, tool=tool,
                                         data={"status": body.status, "partial": body.partial, **body.data}))

@@ -24,6 +24,21 @@ class RetentionConfig(BaseModel):
     warm_days: int = 90
 
 
+class EmbeddingConfig(BaseModel):
+    enabled: bool = True
+    provider: str = "ollama"                 # the only one for now; runs locally, free
+    model: str = "nomic-embed-text"
+    base_url: str | None = None              # None = llm.providers.ollama.base_url
+    dimensions: int = 768                    # must match the vector(768) column
+    timeout_seconds: float = 20
+
+
+class MemoryConfig(BaseModel):
+    restore: bool = True                     # repeated look-ups show their last panel at once
+    maintenance_minutes: int = 60            # tiering, rollups and embedding backfill
+    embeddings: EmbeddingConfig = EmbeddingConfig()
+
+
 class LLMConfig(BaseModel):
     default_provider: str = "claude"
     routes: dict[str, list[str]] = {"chat": ["claude"]}
@@ -58,6 +73,7 @@ class RegistryConfig(BaseModel):
 class RuntimeConfig(BaseModel):
     display: DisplayConfig = DisplayConfig()
     retention: RetentionConfig = RetentionConfig()
+    memory: MemoryConfig = MemoryConfig()
     llm: LLMConfig = LLMConfig()
     session: SessionConfig = SessionConfig()
     fastpath: FastPathConfig = FastPathConfig()
