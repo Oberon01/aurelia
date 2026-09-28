@@ -40,17 +40,48 @@ fastpath:
       tool: probe.echo
       args: { message: "{message}", steps: "{steps|3}" }
       reply: 'Echoing "{message}".'
-    # Examples for functions still to come:
+    # Orbit (smart home). Unlock is governed as a "change": it always asks you first.
+    - name: lock-up
+      match: '^lock\s+(?:up|(?:the\s+)?doors?)$'
+      tool: orbit.lock
+      args: {}
+      reply: "Locked."
+    - name: lock-door
+      match: '^lock\s+(?:the\s+)?(?P<door>.+?)(?:\s+door)?$'
+      tool: orbit.lock
+      args: { name: "{door}" }
+      reply: "Locked."
+    - name: unlock-door
+      match: '^unlock\s+(?:the\s+)?(?P<door>.+?)(?:\s+door)?$'
+      tool: orbit.unlock
+      args: { name: "{door}" }
+      reply: "Unlocked."
+    - name: light-on-off
+      match: '^turn\s+(?P<state>on|off)\s+(?:the\s+)?(?P<light>.+?)(?:\s+lights?)?$'
+      tool: orbit.light
+      args: { name: "{light}", "on": "{state}" }   # "on" quoted: bare on means true in YAML
+      reply: "Turned {state}."
+    - name: thermostat-target
+      match: '^(?:set\s+)?(?:the\s+)?(?:thermostat|temperature|temp|heat|ac|a/c)\s+to\s+(?P<temp>\d{2})(?:\s*(?:°|degrees?|f))*$'
+      tool: orbit.thermostat
+      args: { target: "{temp}" }
+      reply: "Thermostat set to {temp}°."
+    - name: light-level
+      match: '^(?:set|dim)\s+(?:the\s+)?(?!thermostat|temp|heat|ac\b|a/c)(?P<light>.+?)(?:\s+lights?)?\s+to\s+(?P<level>\d{1,3})\s*(?:%|percent)?$'
+      tool: orbit.light
+      args: { name: "{light}", level: "{level}" }
+      reply: "Set to {level}%."
+    - name: smartrent-code
+      match: '^(?:smart\s*rent|2fa|two[- ]factor)\s+code\s+(?P<code>[0-9a-z]{4,10})$'
+      tool: orbit.login
+      args: { code: "{code}" }
+      reply: "Code sent to SmartRent."
+    # Example for a function still to come:
     # - name: open-on-device
     #   match: '^open\s+(?P<target>.+?)\s+on\s+(?:the\s+)?(?P<device>.+)$'
     #   tool: constellation.open
     #   args: { target: "{target}", device: "{device}" }
     #   reply: "Opening {target} on {device}."
-    # - name: lock-door
-    #   match: '^lock\s+(?:the\s+)?(?P<door>.+?)(?:\s+door)?$'
-    #   tool: orbit.lock
-    #   args: { door: "{door}" }
-    #   reply: "Locking the {door} door."
 
 registry:
   # A function (and its tools) is dropped if it misses heartbeats this long.

@@ -19,7 +19,7 @@ space-themed name. Tools are addressed as `<function>.<tool>`.
 | `probe` | Diagnostics, testing Aurelia herself | `probe.echo` | Built (reference) |
 | `nebula` | The web (the cloud) | `nebula.search`, `nebula.download`, `nebula.open` | Planned, policy drafted |
 | `constellation` | Devices and shared computer access | `constellation.search_files`, `constellation.open` | Planned, policy drafted |
-| `orbit` | Smart home (SmartRent) | | Next to build |
+| `orbit` | Smart home (SmartRent): locks, lights, thermostat, sensors | `orbit.status`, `orbit.lock`, `orbit.unlock`, `orbit.light`, `orbit.thermostat`, `orbit.login` | Built |
 | `kepler` | Scholar: research, summaries, knowledge base | | Planned |
 | `nova` | Developer: code in a sandbox | | Planned |
 | `beacon` | Communication: messages, calls, calendar | | Planned |
@@ -43,6 +43,7 @@ progress in real units; honour cancel; report a result (partial if cancelled).
 | `migrate` | One-shot: applies pending SQL migrations, then exits. |
 | `orchestrator` | FastAPI: `/ask`, fast path, LLM providers, function registry, governance, task lifecycle, `/ws` panel events. |
 | `probe` | Reference function with one tool, `echo`. |
+| `orbit` | Smart home through SmartRent. |
 | `chrysalis` | Update system (home server only): watches GitHub, tests, deploys, rolls back. Also a function: `status`, `releases`, `rollback`, `approve`. |
 
 ## Talk to her
@@ -123,6 +124,27 @@ curl -X POST localhost:8080/tasks/<task_id>/cancel
 
 It stops cleanly and returns a partial result. Every run lands in `task_runs`
 with its duration, even trivial ones.
+
+## Orbit: the smart home
+
+Put your SmartRent login in `.env` on the server (`SMARTRENT_EMAIL`,
+`SMARTRENT_PASSWORD`). If SmartRent sends you a two-factor code, give it to
+Aurelia: `smartrent code 123456`. The session is saved, so restarts and deploys
+don't ask again.
+
+Things to say (fast path, no model call):
+
+| Say | Does |
+| --- | --- |
+| `lock up`, `lock the front door` | Locks; confirms the lock's real state afterwards |
+| `unlock the front door` | Asks for your confirmation first, always |
+| `turn on the living room light`, `turn off the lights` | Lights; asks "which light?" if it's ambiguous |
+| `set the bedroom lamp to 40%` | Dimmable lights (a plain switch treats >0 as on) |
+| `set the thermostat to 71` | Target for the current mode; refuses outside 60–85°F |
+
+Anything else ("is the door locked?", "what's the temperature inside?") goes
+through the model, which uses `orbit.status`. Limits and the physical-world
+heads-up delay live in `config/governance/functions/orbit.yaml`.
 
 ## Update without downtime
 
@@ -215,7 +237,8 @@ Rules live in `config/governance/` and are hot-reloaded:
 | `change` | Refused with `409 needs_confirmation` until re-sent with `"confirmed": true` |
 | `never` | Always refused |
 
-The orchestrator enforces tiers, enabled/disabled functions, per-function rate limits and users before any tool runs; every refusal is logged in
+The orchestrator enforces tiers, enabled/disabled functions, per-function rate
+limits and users before any tool runs; every refusal is logged in
 `governance_denials`. Each function also fetches its own policy from
 `/governance/functions/<name>` and enforces its specific rules itself. A policy
 file that fails to parse is ignored and the last good version stays in force.
@@ -258,6 +281,7 @@ services/orchestrator/       the brain (FastAPI)
   app/llm/                   provider interface: Claude, Ollama (+ scripted, tests only)
   app/  migrations/  tests/
 services/functions/probe/    reference function (tool: echo)
+services/functions/orbit/    smart home (SmartRent)
 services/core/chrysalis/     update system (protected core)
 config/chrysalis.yaml        Chrysalis settings: dry run, polling, held authors, checks
 ```

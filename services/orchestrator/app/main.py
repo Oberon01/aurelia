@@ -2,7 +2,9 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
+import yaml
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 from redis.asyncio import Redis
 
 from . import assistant, db, registry, tasks
@@ -85,6 +87,35 @@ async def list_functions(request: Request):
 @app.get("/config")
 async def current_config(request: Request):
     return request.app.state.config.current
+
+
+class ConfigCheck(BaseModel):
+    path: str          # repo-relative, e.g. "config/aurelia.yaml"
+    content: str
+
+
+@app.post("/config/validate")
+async def validate_config(body: ConfigCheck):
+    """Check a config file against the schema this orchestrator enforces, before
+    it's applied. Chrysalis calls this for every changed config file."""
+    from .config import RuntimeConfig
+    from .governance import Charter, FunctionPolicy
+    import re
+    models = {"config/aurelia.yaml": RuntimeConfig, "config/governance/charter.yaml": Charter}
+    model = models.get(body.path)
+    if model is None and re.fullmatch(r"config/governance/functions/[\w-]+\.yaml", body.path):
+        model = FunctionPolicy
+    if model is None:
+        return {"valid": True, "checked": False}
+    try:
+        data = yaml.safe_load(body.content) or {}
+        model.model_validate(data)
+        if model is RuntimeConfig:          # every fast-path regex must compile
+            for p in data.get("fastpath", {}).get("patterns", []):
+                re.compile(p["match"])
+    except Exception as exc:
+        return {"valid": False, "checked": True, "error": str(exc).splitlines()[0:4]}
+    return {"valid": True, "checked": True}
 
 
 # ---- governance (read-only over HTTP; changed only by editing the files) ---

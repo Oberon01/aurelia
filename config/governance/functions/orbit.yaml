@@ -1,0 +1,23 @@
+# Orbit — the smart home (SmartRent). Physical-world actions: unlocking always
+# needs your confirmation; locking and lights run on request.
+function: orbit
+enabled: true
+
+tools:
+  status:     { tier: reference }
+  lock:       { tier: act }
+  unlock:     { tier: change }     # always asks you first
+  light:      { tier: act }
+  thermostat: { tier: act }
+  login:      { tier: act }        # you supply the 2FA code
+
+rate_limit_per_minute: 30
+
+# Enforced inside Orbit.
+rules:
+  thermostat:
+    min_f: 60          # setpoints outside this range are refused
+    max_f: 85
+  # Physical-world heads-up: seconds of visible countdown (cancellable) before
+  # any lock/light/thermostat action. 0 until the display exists to show it.
+  heads_up_seconds: 0

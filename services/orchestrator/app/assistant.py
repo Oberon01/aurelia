@@ -103,6 +103,8 @@ async def confirm(body: Confirm, request: Request):
     except HTTPException as exc:
         return {"reply": f"I couldn't do that: {_reason(exc)}", "task_ids": []}
     result = await wait_for_result(task_id, app.state.config.current.llm.wait_for_result_seconds)
+    if result and result["status"] == "completed" and pending.get("reply"):
+        return {"reply": pending["reply"], "task_ids": [task_id]}
     return {"reply": _summarize(pending["tool"], result), "task_ids": [task_id]}
 
 
@@ -115,9 +117,10 @@ async def _run_fastpath(app, body: Ask, fp, resolved) -> dict[str, Any]:
         task_id = await launch(app, StartTask(tool=resolved.qualified_name, args=args, user=body.user))
     except HTTPException as exc:
         if exc.status_code == 409:
-            action = await _hold(app, resolved.qualified_name, args, body.user, _reason(exc))
+            action = await _hold(app, resolved.qualified_name, args, body.user, _reason(exc),
+                                 reply=fastpath.render_reply(fp.pattern, fp.groups))
             out["needs_confirmation"].append(action)
-            out["reply"] = f"That needs your confirmation: {_reason(exc)}"
+            out["reply"] = "That needs your confirmation first."
         else:
             out["reply"] = f"I can't do that: {_reason(exc)}"
         return out
@@ -237,10 +240,10 @@ def _system_prompt(app, functions: list[dict]) -> str:
 
 # ---- helpers ------------------------------------------------------------------
 
-async def _hold(app, tool: str, args: dict, user: str, reason: str) -> dict[str, Any]:
+async def _hold(app, tool: str, args: dict, user: str, reason: str, reply: str | None = None) -> dict[str, Any]:
     action_id = uuid.uuid4().hex
     await app.state.redis.set(PENDING_PREFIX + action_id,
-                              json.dumps({"tool": tool, "args": args, "user": user}), ex=PENDING_TTL)
+                              json.dumps({"tool": tool, "args": args, "user": user, "reply": reply}), ex=PENDING_TTL)
     return {"action_id": action_id, "tool": tool, "args": args, "reason": reason}
 
 
@@ -251,10 +254,12 @@ def _reason(exc: HTTPException) -> str:
 
 def _summarize(tool: str, result: dict | None) -> str:
     if result is None:
-        return f"Started {tool}; it's still running."
+        return "Started; it's still running."
     if result["status"] == "completed":
-        return f"Done: {tool}."
-    return f"{tool} ended as {result['status']}" + (f": {result['error']}" if result.get("error") else ".")
+        return "Done."
+    if result.get("error"):
+        return f"That didn't work: {result['error']}"
+    return f"That ended as {result['status']}."
 
 
 def _uses_cloud(cfg) -> bool:

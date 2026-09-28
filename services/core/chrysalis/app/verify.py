@@ -23,6 +23,23 @@ class Verifier:
         except httpx.HTTPError:
             return set()
 
+    async def validate_config(self, path: str, content: str) -> str | None:
+        """Ask the running orchestrator whether a config file matches its schema.
+        Returns an error message, or None if valid (or if the orchestrator can't be asked)."""
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.post(f"{self.url}/config/validate", json={"path": path, "content": content})
+                if r.status_code == 404:        # an older orchestrator without the endpoint
+                    return None
+                r.raise_for_status()
+                body = r.json()
+        except httpx.HTTPError:
+            return None
+        if body.get("valid"):
+            return None
+        err = body.get("error")
+        return " ".join(err) if isinstance(err, list) else str(err)
+
     async def run(self, cfg: VerifyConfig, expected_functions: set[str]) -> list[str]:
         """Returns what passed; raises VerifyError on the first failure."""
         passed = []

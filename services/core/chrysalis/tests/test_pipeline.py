@@ -59,7 +59,11 @@ class FakeDocker:
 
 
 class FakeVerifier:
-    def __init__(self): self.fail = False
+    def __init__(self):
+        self.fail = False
+        self.config_error = None
+
+    async def validate_config(self, path, content): return self.config_error
     async def functions(self): return {"probe"}
     async def run(self, cfg, expected):
         if self.fail:
@@ -277,3 +281,22 @@ def test_baseline_images_are_saved_once_docker_works(world):
     asyncio.run(world["c"].ensure_baseline())
     assert ("probe", sha) in world["docker"].images and ("orchestrator", sha) in world["docker"].images
     assert len([r for r in world["store"].rows if r["status"] == "live"]) == 1   # no duplicate baseline
+
+
+def test_previous_images_are_saved_before_building_even_without_a_baseline(world):
+    before = server_head(world)
+    world["docker"].images = {("probe", "latest"), ("orchestrator", "latest"), ("migrate", "latest")}
+    world["verifier"].fail = True
+    world["commit"]("services/functions/probe/main.py", "v2\n", "probe v2")
+    result = run(world)
+    assert "Rolled back probe" in result
+    assert ("tag", "probe", before[:8], "latest") in world["docker"].calls   # restored the saved image
+
+
+def test_config_the_orchestrator_would_reject_is_not_applied(world):
+    before = server_head(world)
+    world["verifier"].config_error = "fastpath.patterns.4.args: Input should be a valid string"
+    world["commit"]("config/aurelia.yaml", "fastpath: {patterns: [{args: {on: x}}]}\n", "bad schema")
+    result = run(world)
+    assert result.startswith("failed") and "doesn't match what the orchestrator accepts" in result
+    assert server_head(world) == before

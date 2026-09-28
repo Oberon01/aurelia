@@ -150,13 +150,22 @@ class Chrysalis:
 
     async def _invalid_config(self, sha: str, plan: Plan) -> str | None:
         for path in plan.config:
-            if path.endswith((".yaml", ".yml")):
-                try:
-                    yaml.safe_load(await self.git.show(sha, path))
-                except GitError:
-                    continue            # file deleted in this commit
-                except yaml.YAMLError as exc:
-                    return f"Invalid YAML in {path}; nothing applied. {str(exc).splitlines()[0]}"
+            if not path.endswith((".yaml", ".yml")):
+                continue
+            try:
+                content = await self.git.show(sha, path)
+            except GitError:
+                continue                # file deleted in this commit
+            try:
+                yaml.safe_load(content)
+            except yaml.YAMLError as exc:
+                return f"Invalid YAML in {path}; nothing applied. {str(exc).splitlines()[0]}"
+            # Schema check by the running orchestrator — unless this commit changes the
+            # orchestrator too, in which case its schema may be changing with it.
+            if "orchestrator" not in plan.services:
+                problem = await self.verifier.validate_config(path, content)
+                if problem:
+                    return f"{path} doesn't match what the orchestrator accepts; nothing applied. {problem}"
         return None
 
     # ---- a release -------------------------------------------------------------
