@@ -43,6 +43,7 @@ progress in real units; honour cancel; report a result (partial if cancelled).
 | `migrate` | One-shot: applies pending SQL migrations, then exits. |
 | `orchestrator` | FastAPI: `/ask`, fast path, LLM providers, function registry, governance, task lifecycle, `/ws` panel events. |
 | `probe` | Reference function with one tool, `echo`. |
+| `chrysalis` | Update system (home server only): watches GitHub, tests, deploys, rolls back. Also a function: `status`, `releases`, `rollback`, `approve`. |
 
 ## Talk to her
 
@@ -125,15 +126,77 @@ with its duration, even trivial ones.
 
 ## Update without downtime
 
+**Automatic (Chrysalis).** On the home server, Chrysalis watches `main` on
+GitHub and releases every new commit by itself:
+
+1. Classifies what changed: `config/` hot-reloads (after YAML validation),
+   `services/orchestrator` and `services/functions/<name>` rebuild only that
+   service, `docker-compose.yml` applies the stack, docs need nothing.
+2. Runs each changed service's `test` stage (the unit tests). A failure stops
+   the release before anything changes.
+3. Builds images tagged with the commit, migrates, swaps with zero downtime
+   (orchestrator first).
+4. Verifies: orchestrator ready, every function re-registered, a real
+   `probe.echo` task, then watches for crash loops.
+5. Goes live, or restores the previous images **and** the previous commit.
+   A failed commit is never retried; the next commit is.
+
+The last 5 good releases keep their images, so rollback takes seconds. Every
+decision is recorded in the `releases` table. Your commits deploy
+automatically; commits by anyone in `hold_authors` (Aurelia's identity, later)
+wait for approval. Ask Aurelia: "what's your update status?", "show recent
+releases", "roll back" (needs your confirmation).
+
+Chrysalis is **protected core**: changes to `services/core/` or
+`scripts/deploy.sh` are recorded but never applied automatically. Apply them on
+the server with `docker compose up -d --build chrysalis`.
+
+**Manual.**
+
 ```bash
 ./scripts/deploy.sh orchestrator    # or probe, or any future function
 ```
 
 Starts the new container beside the old one, waits for its health check,
 then retires the old one. A failed health check rolls back automatically.
-Try it with the WebSocket open: you'll see at most a reconnect.
 
-Config changes need no deploy at all: edit `config/aurelia.yaml` and save.
+## Setting up Chrysalis (home server, once)
+
+1. **Deploy key** (read-only access to this repo only):
+   ```bash
+   ssh-keygen -t ed25519 -f ~/.ssh/aurelia_deploy -N "" -C "aurelia server"
+   cat ~/.ssh/aurelia_deploy.pub
+   ```
+   GitHub → the repo → Settings → Deploy keys → Add, paste it, leave write
+   access **off**.
+2. **Point the repo at SSH** and use that key for manual pulls too:
+   ```bash
+   git remote set-url origin git@github.com:Oberon01/aurelia.git
+   git config core.sshCommand "ssh -i ~/.ssh/aurelia_deploy -o IdentitiesOnly=yes"
+   git fetch   # accept GitHub's host key once
+   ```
+3. **Add to `.env`** (the commented block at the end of `.env.example`):
+   ```bash
+   COMPOSE_PROFILES=chrysalis
+   AURELIA_ROOT=/home/<you>/aurelia          # absolute path of this repo
+   AURELIA_UID=...                            # id -u
+   AURELIA_GID=...                            # id -g
+   DOCKER_GID=...                             # getent group docker | cut -d: -f3
+   DEPLOY_KEY_PATH=/home/<you>/.ssh/aurelia_deploy
+   ```
+4. **Start it:** `docker compose up -d --build`. It records what's running as
+   the baseline release and starts in **dry run** (`config/chrysalis.yaml`).
+5. **Check a dry run:** push a small change from your dev machine, wait two
+   minutes, then `docker compose logs chrysalis` or ask Aurelia for recent
+   releases. Each shows the plan it *would* have run.
+6. **Go live:** set `dry_run: false` in `config/chrysalis.yaml`, commit and
+   push. Chrysalis applies that as its own first config-only release.
+
+Chrysalis only runs where `COMPOSE_PROFILES=chrysalis` is set, so it never
+starts on a dev machine. Never edit tracked files on the server: Chrysalis
+holds releases while the working copy has local edits.
+
+Config changes need no deploy at all: they hot-reload.
 `curl localhost:8080/config` shows what's live.
 
 ## Governance
@@ -196,4 +259,6 @@ services/orchestrator/       the brain (FastAPI)
   app/llm/                   provider interface: Claude, Ollama (+ scripted, tests only)
   app/  migrations/  tests/
 services/functions/probe/    reference function (tool: echo)
+services/core/chrysalis/     update system (protected core)
+config/chrysalis.yaml        Chrysalis settings: dry run, polling, held authors, checks
 ```

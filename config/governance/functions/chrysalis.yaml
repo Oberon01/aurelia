@@ -1,0 +1,12 @@
+# Chrysalis — the update system. Protected core: Aurelia can ask for status and
+# propose actions, but rollbacks and approvals always need your confirmation.
+function: chrysalis
+enabled: true
+
+tools:
+  status:   { tier: reference }
+  releases: { tier: reference }
+  rollback: { tier: change }
+  approve:  { tier: change }
+
+rate_limit_per_minute: 30

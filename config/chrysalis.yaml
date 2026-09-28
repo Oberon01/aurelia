@@ -1,0 +1,22 @@
+# Chrysalis — how Aurelia updates herself. Re-read every cycle; no restart needed.
+#
+# Chrysalis itself is protected core: changes to its own code or to
+# scripts/deploy.sh are never applied automatically (see README).
+
+enabled: true
+dry_run: true              # start here: plans and records releases, changes nothing.
+                           # Set to false once a dry run's plan looks right.
+branch: main
+poll_seconds: 120
+
+# Commits by these authors (email) are held for your approval instead of
+# deploying automatically. Put Aurelia's / Nova's GitHub identity here.
+hold_authors: []
+
+verify:
+  ready_timeout_seconds: 60        # orchestrator must report ready within this
+  functions_timeout_seconds: 45    # every function online before must re-register
+  smoke_test: true                 # run a real probe.echo task end to end
+  watch_seconds: 120               # after going live, roll back if a changed service turns unhealthy
+
+keep_releases: 5                   # good releases whose images are kept for instant rollback

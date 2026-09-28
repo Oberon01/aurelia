@@ -41,3 +41,9 @@ users:
   owner:
     display_name: Kentrell
     role: owner
+  chrysalis:
+    display_name: Chrysalis (update system)
+    role: system
+    # Runs post-deploy smoke tests only.
+    deny:
+      chrysalis: [rollback]
