@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aurelia</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet">
+<!--
+  The surgical view (minimal, Phase 2). It holds no logic: it renders the
+  orchestrator's panel events from /ws and sends what you type to /ask.
+  Panel rules from the design doc:
+    - nothing to read      → "Complete" for about a second, then it fades out
+    - something to read    → the progress panel turns into the result panel
+    - one panel            → large; two or more → compact
+    - panels you can read sit in front; progress panels recede
+  Result panels stay until dismissed (x, or Esc clears all). How result
+  panels leave is still an open decision in the design doc.
+-->
+<style>
+:root{
+  --ground:#04070b; --ink:#d8f6fb; --ink-strong:#e9fbfe; --ink-dim:#9fc7cd; --ink-faint:#7fa7ae;
+  --cyan:#5fd4e6; --cyan-line:rgba(95,212,230,.55); --cyan-soft:rgba(95,212,230,.28);
+  --cyan-fill:rgba(95,212,230,.07); --cyan-track:rgba(95,212,230,.12);
+  --warn:#f2b35f; --warn-line:rgba(242,179,95,.6); --warn-fill:rgba(242,179,95,.08);
+  --bad:#ff8f8f; --bad-line:rgba(255,143,143,.55); --bad-fill:rgba(255,143,143,.07);
+  --display:'Chakra Petch',sans-serif; --mono:'IBM Plex Mono',ui-monospace,monospace; --sans:'IBM Plex Sans',system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--ground);color:var(--ink);font-family:var(--sans)}
+body{overflow:hidden}
+button{font:inherit;color:inherit;cursor:pointer}
+
+/* ---- top line ---- */
+.top{position:fixed;top:0;left:0;right:0;display:flex;justify-content:space-between;align-items:center;gap:16px;padding:24px 40px;z-index:5}
+.mark{font-family:var(--display);font-size:14px;letter-spacing:6px;color:var(--ink-faint)}
+.said{font-family:var(--mono);font-size:15px;color:var(--ink-dim);min-width:0;flex:1;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.conn{display:flex;gap:8px;align-items:center;font-family:var(--mono);font-size:12px;color:var(--ink-faint);white-space:nowrap}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--ink-faint)}
+.conn.live .dot{background:var(--cyan);animation:blink 1.6s ease-in-out infinite}
+.conn.down .dot{background:var(--warn)}
+.reply{position:fixed;top:64px;left:50%;transform:translateX(-50%);max-width:min(900px,90vw);text-align:center;font-size:17px;line-height:1.5;color:var(--ink-strong);transition:opacity .6s;z-index:5}
+.reply.quiet{opacity:0}
+
+/* ---- the stage ---- */
+.stage{position:absolute;inset:120px 40px 110px;display:flex;flex-wrap:wrap;align-items:flex-start;align-content:safe center;justify-content:safe center;gap:24px;overflow-y:auto;padding:4px}
+.panel{position:relative;width:380px;padding:22px 24px;border:1px solid var(--cyan-soft);border-radius:10px;background:rgba(95,212,230,.04);display:flex;flex-direction:column;gap:14px;
+  transition:opacity .5s, transform .5s, width .35s;animation:rise .35s ease-out}
+.panel.reading{order:0;width:600px;border-color:var(--cyan-line);background:var(--cyan-fill);box-shadow:0 0 40px rgba(95,212,230,.12)}
+.panel.working{order:1;opacity:.82}
+.panel.failed{border-color:var(--bad-line);background:var(--bad-fill)}
+.panel.asking{order:-1;border-color:var(--warn-line);background:var(--warn-fill)}
+.panel.leaving{opacity:0;transform:scale(.97)}
+.stage.solo .panel{width:min(880px,100%);padding:28px 32px}
+.stage.solo .panel .title{font-size:26px}
+.head{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.title{font-family:var(--display);font-size:18px;font-weight:600;color:var(--ink-strong);letter-spacing:.3px}
+.working .title{font-size:13px;font-weight:500;letter-spacing:3px;text-transform:uppercase;color:var(--ink-faint)}
+.stage.solo .working .title{font-size:15px}
+.meta{font-family:var(--mono);font-size:13px;color:var(--ink-dim);white-space:nowrap}
+.close{position:absolute;top:8px;right:8px;width:32px;height:32px;border:0;border-radius:6px;background:transparent;color:var(--ink-faint);font-size:18px;line-height:1}
+.close:hover{background:var(--cyan-track);color:var(--ink-strong)}
+.reading .head,.failed .head,.asking .head{padding-right:28px}
+
+/* progress */
+.bar{height:6px;border-radius:3px;background:var(--cyan-track);overflow:hidden;position:relative}
+.fill{height:100%;width:0;background:var(--cyan);transition:width .3s;position:relative;overflow:hidden}
+.fill::after{content:"";position:absolute;inset:0 auto 0 0;width:40%;background:rgba(255,255,255,.45);animation:sweep 2.2s linear infinite}
+.bar.unknown .fill{width:30%;animation:slide 1.4s ease-in-out infinite}
+.row{display:flex;justify-content:space-between;gap:12px;font-family:var(--mono);font-size:13px;color:var(--ink-dim)}
+.label{font-family:var(--mono);font-size:12px;color:var(--ink-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.btn{align-self:flex-start;min-height:44px;padding:0 16px;border-radius:8px;border:1px solid var(--cyan-line);background:transparent;color:var(--ink);font-size:14px}
+.btn:hover{background:var(--cyan-track)}
+.btn.primary{background:var(--cyan);border-color:var(--cyan);color:var(--ground);font-weight:500}
+.btn.primary:hover{background:#8fe3f0}
+.btns{display:flex;gap:10px;flex-wrap:wrap}
+.done{display:flex;gap:10px;align-items:center;font-family:var(--mono);font-size:14px;color:var(--ink-dim)}
+
+/* results */
+.devices{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}
+.dev{padding:14px 16px;border:1px solid var(--cyan-soft);border-radius:8px;background:rgba(4,7,11,.5);display:flex;flex-direction:column;gap:4px;min-width:0}
+.dev .name{font-size:14px;color:var(--ink-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dev .state{font-family:var(--display);font-size:22px;font-weight:600;color:var(--ink-strong)}
+.dev .sub{font-family:var(--mono);font-size:12px;color:var(--ink-faint)}
+.dev.alert{border-color:var(--warn-line);background:var(--warn-fill)}
+.dev.alert .state{color:var(--warn)}
+.dev.off .state{color:var(--ink-faint)}
+.kv{display:grid;grid-template-columns:minmax(90px,max-content) minmax(0,1fr);gap:6px 16px;font-size:15px}
+.kv .k{font-family:var(--mono);font-size:12px;letter-spacing:1px;color:var(--ink-faint);padding-top:2px;text-transform:uppercase}
+.kv .v{color:var(--ink);overflow-wrap:anywhere}
+.msg{font-size:16px;line-height:1.5;color:var(--ink-strong)}
+.error{font-size:15px;line-height:1.5;color:var(--bad)}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{padding:5px 10px;border:1px solid var(--cyan-soft);border-radius:14px;font-size:13px;color:var(--ink-dim)}
+.chip.on{border-color:var(--cyan);color:var(--ink-strong)}
+.tag{font-family:var(--mono);font-size:10px;letter-spacing:1px;color:var(--ground);background:var(--warn);padding:2px 6px;border-radius:3px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{font-family:var(--mono);font-size:11px;letter-spacing:2px;font-weight:400;color:var(--ink-faint);text-align:left;padding:0 10px 8px 0;border-bottom:1px solid rgba(95,212,230,.2);text-transform:uppercase}
+td{padding:8px 10px 8px 0;color:var(--ink);vertical-align:top;overflow-wrap:anywhere}
+
+/* ---- command bar ---- */
+.bar-wrap{position:fixed;left:50%;bottom:32px;transform:translateX(-50%);width:min(720px,90vw);z-index:5}
+.cmd{width:100%;min-height:48px;padding:12px 18px;border-radius:10px;border:1px solid transparent;background:transparent;color:var(--ink-strong);font-family:var(--mono);font-size:16px;outline:none;transition:border-color .2s, background .2s}
+.cmd::placeholder{color:rgba(127,167,174,.55)}
+.cmd:focus{border-color:var(--cyan-line);background:rgba(95,212,230,.06)}
+.cmd:focus::placeholder{color:var(--ink-faint)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes sweep{0%{transform:translateX(-100%)}100%{transform:translateX(250%)}}
+@keyframes slide{0%{margin-left:-30%}100%{margin-left:100%}}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@media (max-width:640px){
+  .top{padding:16px}.said{display:none}.reply{top:52px;font-size:15px;width:90vw}.stage{inset:128px 16px 96px}.panel,.panel.reading{width:100%}.devices{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="mark">AURELIA</div>
+  <div class="said" id="said"></div>
+  <div class="conn" id="conn" role="status"><span class="dot"></span><span id="connText">Connecting…</span></div>
+</header>
+<div class="reply quiet" id="reply" aria-live="polite"></div>
+<main class="stage" id="stage" aria-label="Panels"></main>
+<form class="bar-wrap" id="form" autocomplete="off">
+  <label class="sr" for="cmd">Talk to Aurelia</label>
+  <input class="cmd" id="cmd" placeholder="Press / to talk to Aurelia" spellcheck="false">
+</form>
+
+<script>
+"use strict";
+// ---------------------------------------------------------------- setup
+const stage = document.getElementById("stage");
+const panels = new Map();                       // task_id → panel record
+const hidden = new Set();                       // task ids from system users (Chrysalis smoke tests)
+const SYSTEM_USERS = new Set(["chrysalis"]);
+let session = null;
+try { session = localStorage.getItem("aurelia.session"); } catch (e) {}
+
+const TITLES = {
+  "orbit.status": "Home", "orbit.lock": "Lock", "orbit.unlock": "Unlock", "orbit.light": "Light",
+  "orbit.thermostat": "Thermostat", "orbit.login": "SmartRent sign-in", "orbit.alias": "Nickname",
+  "orbit.aliases": "Nicknames", "orbit.forget_alias": "Nickname", "orbit.tv_status": "TV",
+  "orbit.tv_power": "TV", "orbit.tv_input": "TV input", "orbit.tv_inputs": "TV inputs", "orbit.tv_app": "TV",
+  "orbit.tv_apps": "TV apps", "orbit.tv_remote": "TV remote", "orbit.tv_mute": "TV sound",
+  "orbit.tv_discover": "Finding TVs", "probe.echo": "Echo", "chrysalis.status": "Updates",
+  "chrysalis.releases": "Releases", "chrysalis.rollback": "Rollback", "chrysalis.approve": "Release approval",
+};
+function titleFor(tool) {
+  if (TITLES[tool]) return TITLES[tool];
+  const t = (tool.split(".")[1] || tool).replace(/_/g, " ");
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+// Tiny element builder: text only, never HTML, so nothing a tool returns can inject markup.
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined && text !== null) e.textContent = String(text);
+  return e;
+}
+
+// ---------------------------------------------------------------- layout
+function relayout() {
+  const live = [...stage.children].filter(p => !p.classList.contains("leaving"));
+  stage.classList.toggle("solo", live.length === 1);
+  const running = [...panels.values()].filter(p => p.state === "running").length;
+  document.getElementById("connText").textContent =
+    ws && ws.readyState === 1 ? (running ? `${running} running` : `${live.length} panel${live.length === 1 ? "" : "s"}`) : connWord;
+}
+
+function makePanel(taskId, tool) {
+  const node = el("section", "panel working");
+  node.setAttribute("aria-label", titleFor(tool));
+  const rec = { taskId, tool, node, state: "running", unit: null, cancellable: true };
+  panels.set(taskId, rec);
+  stage.appendChild(node);
+  renderProgress(rec, null);
+  relayout();
+  return rec;
+}
+
+function remove(rec, delay) {
+  setTimeout(() => {
+    rec.node.classList.add("leaving");
+    setTimeout(() => { rec.node.remove(); panels.delete(rec.taskId); relayout(); }, 500);
+  }, delay || 0);
+}
+
+function closeButton(rec) {
+  const b = el("button", "close", "×");
+  b.type = "button";
+  b.setAttribute("aria-label", "Dismiss");
+  b.addEventListener("click", () => remove(rec));
+  return b;
+}
+
+// ---------------------------------------------------------------- progress panel
+function renderProgress(rec, p) {
+  const n = rec.node;
+  n.replaceChildren();
+  const head = el("div", "head");
+  head.append(el("div", "title", titleFor(rec.tool)));
+  const known = p && p.total;
+  const pct = known ? Math.max(0, Math.min(100, Math.round(100 * p.current / p.total))) : null;
+  head.append(el("div", "meta", pct !== null ? `${pct}%` : ""));
+  n.append(head);
+  const bar = el("div", "bar" + (known ? "" : " unknown"));
+  const fill = el("div", "fill");
+  if (known) fill.style.width = pct + "%";
+  bar.append(fill);
+  n.append(bar);
+  if (p) {
+    const unit = p.unit || rec.unit || "";
+    const row = el("div", "row");
+    row.append(el("span", null, known ? `${fmt(p.current)} / ${fmt(p.total)} ${unit}`.trim() : `${fmt(p.current)} ${unit}`.trim()));
+    n.append(row);
+    if (p.label) n.append(el("div", "label", p.label));
+  }
+  if (rec.cancellable) {
+    const b = el("button", "btn", "Stop");
+    b.type = "button";
+    b.addEventListener("click", () => cancel(rec, b));
+    n.append(b);
+  }
+}
+function fmt(x) { return typeof x === "number" && !Number.isInteger(x) ? x.toFixed(1) : x; }
+
+async function cancel(rec, button) {
+  button.disabled = true; button.textContent = "Stopping…";
+  try { await fetch(`/tasks/${rec.taskId}/cancel`, { method: "POST" }); } catch (e) { button.textContent = "Couldn't stop"; }
+}
+
+// ---------------------------------------------------------------- result panel
+function renderResult(rec, data) {
+  const { status, partial, ...rest } = data;
+  const n = rec.node;
+  n.className = "panel reading";
+  n.replaceChildren(closeButton(rec));
+  const head = el("div", "head");
+  head.append(el("div", "title", resultTitle(rec.tool, rest)));
+  const meta = el("div", "meta");
+  if (partial || rest.cancelled) meta.append(el("span", "tag", "STOPPED · PARTIAL"));
+  head.append(meta);
+  n.append(head);
+  n.append(body(rec.tool, rest));
+}
+
+function resultTitle(tool, d) {
+  if (d.kind && d.name) return d.name;
+  if (typeof d.device === "string") return d.device;
+  return titleFor(tool);
+}
+
+function body(tool, d) {
+  const wrap = el("div");
+  wrap.style.display = "flex"; wrap.style.flexDirection = "column"; wrap.style.gap = "14px";
+  const used = new Set(["cancelled"]);
+
+  if (d.message) { wrap.append(el("div", "msg", d.message)); used.add("message"); }
+  if (Array.isArray(d.devices) || Array.isArray(d.tvs)) {
+    const list = [...(d.devices || []), ...(d.tvs || [])];
+    const grid = el("div", "devices");
+    list.forEach(x => grid.append(deviceCard(x)));
+    (d.other_devices || []).forEach(x => grid.append(otherCard(x)));
+    wrap.append(grid);
+    if (d.smartrent) wrap.append(el("div", "label", "SmartRent: " + d.smartrent));
+    ["devices", "tvs", "other_devices", "smartrent"].forEach(k => used.add(k));
+  } else if (d.kind) {
+    const grid = el("div", "devices"); grid.append(deviceCard(d)); wrap.append(grid);
+    Object.keys(d).forEach(k => used.add(k));
+  } else if (typeof d.locked === "boolean") {
+    const grid = el("div", "devices");
+    grid.append(deviceCard({ name: d.device, kind: "lock", locked: d.locked, online: true }));
+    wrap.append(grid); ["device", "locked"].forEach(k => used.add(k));
+  } else if (typeof d.muted === "boolean") {
+    wrap.append(el("div", "msg", d.muted ? "Muted." : "Sound on.")); ["device", "muted"].forEach(k => used.add(k));
+  }
+  if (Array.isArray(d.inputs)) {
+    const chips = el("div", "chips");
+    d.inputs.forEach(i => chips.append(el("span", "chip" + (i.showing ? " on" : ""), i.name + (i.showing ? " · showing" : ""))));
+    wrap.append(chips); used.add("inputs"); used.add("device");
+  }
+  if (Array.isArray(d.apps)) {
+    const chips = el("div", "chips");
+    d.apps.forEach(a => chips.append(el("span", "chip", a)));
+    wrap.append(chips); used.add("apps"); used.add("device");
+  }
+  const rest = Object.fromEntries(Object.entries(d).filter(([k, v]) => !used.has(k) && v !== null && v !== undefined));
+  if (Object.keys(rest).length) wrap.append(generic(rest));
+  if (!wrap.children.length) wrap.append(el("div", "msg", "Done."));
+  return wrap;
+}
+
+// A device as Orbit describes it.
+function deviceCard(d) {
+  const c = el("div", "dev");
+  let state = "", sub = [];
+  if (d.online === false) { state = "Offline"; c.classList.add("off"); }
+  else switch (d.kind) {
+    case "lock":
+      state = d.locked === true ? "Locked" : d.locked === false ? "Unlocked" : "Unknown";
+      if (d.locked === false) c.classList.add("alert");
+      break;
+    case "light":
+      state = d.on ? (typeof d.level === "number" ? `On · ${d.level}%` : "On") : "Off";
+      if (!d.on) c.classList.add("off");
+      break;
+    case "thermostat":
+      state = d.current_temp != null ? `${d.current_temp}°` : "—";
+      if (d.mode === "heat" || d.mode === "aux_heat") sub.push(`Heat to ${d.heat_setpoint}°`);
+      else if (d.mode === "cool") sub.push(`Cool to ${d.cool_setpoint}°`);
+      else if (d.mode === "auto") sub.push(`Auto ${d.heat_setpoint}–${d.cool_setpoint}°`);
+      else if (d.mode) sub.push(`Mode ${d.mode}`);
+      if (d.operating_state && d.operating_state !== "idle") sub.push(d.operating_state);
+      if (d.humidity != null) sub.push(`${d.humidity}% humidity`);
+      break;
+    case "leak_sensor":
+      state = d.active ? "Leak" : "Dry"; if (d.active) c.classList.add("alert"); break;
+    case "motion_sensor":
+      state = d.active ? "Motion" : "Still"; break;
+    case "tv":
+      state = d.on ? "On" : "Off";
+      if (!d.on) c.classList.add("off");
+      if (d.on && d.app) sub.push(d.app);
+      if (d.input && d.input !== d.app) sub.push(d.input);
+      break;
+    default:
+      state = d.kind || "Device";
+  }
+  if (typeof d.battery === "number") sub.push(`Battery ${d.battery}%`);
+  if (typeof d.battery === "number" && d.battery < 20) c.classList.add("alert");
+  c.append(el("div", "name", d.name || "Device"), el("div", "state", state));
+  if (sub.length) c.append(el("div", "sub", sub.join(" · ")));
+  return c;
+}
+
+// Devices Orbit doesn't model yet: name + raw readings.
+function otherCard(d) {
+  const c = el("div", "dev");
+  const readings = Object.entries(d.readings || {});
+  c.append(el("div", "name", d.name || "Sensor"));
+  const main = readings.find(([k]) => ["open", "leak", "motion", "active"].includes(k));
+  if (main) {
+    const on = String(main[1]) === "true";
+    const words = { open: ["Open", "Closed"], leak: ["Leak", "Dry"], motion: ["Motion", "Still"], active: ["Active", "Clear"] }[main[0]];
+    c.append(el("div", "state", on ? words[0] : words[1]));
+    if (on && (main[0] === "open" || main[0] === "leak")) c.classList.add("alert");
+  } else {
+    c.append(el("div", "state", (d.kind || "sensor").replace(/_/g, " ")));
+  }
+  const rest = readings.filter(r => r !== main).map(([k, v]) => `${k.replace(/_/g, " ")} ${v}`);
+  if (rest.length) c.append(el("div", "sub", rest.join(" · ")));
+  return c;
+}
+
+// Anything else: key/value rows, tables for lists of records.
+function generic(obj) {
+  const kv = el("div", "kv");
+  for (const [k, v] of Object.entries(obj)) {
+    kv.append(el("div", "k", k.replace(/_/g, " ")));
+    const cell = el("div", "v");
+    if (Array.isArray(v) && v.length && typeof v[0] === "object" && v[0] !== null) cell.append(table(v));
+    else if (Array.isArray(v)) cell.textContent = v.length ? v.join(", ") : "none";
+    else if (v && typeof v === "object") cell.append(generic(v));
+    else cell.textContent = typeof v === "boolean" ? (v ? "yes" : "no") : String(v);
+    kv.append(cell);
+  }
+  return kv;
+}
+function table(rows) {
+  const cols = [...new Set(rows.flatMap(r => Object.keys(r)))].slice(0, 6);
+  const t = el("table"), hr = el("tr");
+  cols.forEach(c => hr.append(el("th", null, c.replace(/_/g, " "))));
+  t.append(hr);
+  rows.slice(0, 50).forEach(r => {
+    const tr = el("tr");
+    cols.forEach(c => { const v = r[c]; tr.append(el("td", null, v === null || v === undefined ? "" : typeof v === "object" ? JSON.stringify(v) : v)); });
+    t.append(tr);
+  });
+  return t;
+}
+
+// ---------------------------------------------------------------- events
+function onEvent(ev) {
+  const id = ev.task_id, d = ev.data || {};
+  if (ev.type === "panel.open" && SYSTEM_USERS.has(d.user)) { hidden.add(id); return; }
+  if (hidden.has(id)) { if (ev.type === "panel.close") hidden.delete(id); return; }
+  let rec = panels.get(id);
+  switch (ev.type) {
+    case "panel.open":
+      rec = rec || makePanel(id, ev.tool);
+      rec.unit = d.unit || null;
+      rec.cancellable = d.cancellable !== false;
+      renderProgress(rec, null);
+      break;
+    case "panel.progress":
+      rec = rec || makePanel(id, ev.tool);
+      if (rec.state === "running") renderProgress(rec, d);
+      break;
+    case "panel.result":
+      rec = rec || makePanel(id, ev.tool);
+      rec.state = "reading";
+      renderResult(rec, d);
+      break;
+    case "panel.close":
+      if (!rec) return;
+      if (d.status === "failed" && !d.has_result) {
+        rec.state = "failed";
+        rec.node.className = "panel failed";
+        rec.node.replaceChildren(closeButton(rec));
+        const head = el("div", "head"); head.append(el("div", "title", titleFor(rec.tool)));
+        rec.node.append(head, el("div", "error", d.error || "That didn't work."));
+      } else if (!d.has_result) {
+        rec.state = "done";
+        rec.node.className = "panel working";
+        const head = el("div", "head"); head.append(el("div", "title", titleFor(rec.tool)));
+        const done = el("div", "done");
+        done.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#5fd4e6" stroke-width="1.6" aria-hidden="true"><path d="M2.5 7.5l3 3 6-7"/></svg>';
+        done.append(el("span", null, d.status === "cancelled" ? "Stopped" : "Complete"));
+        rec.node.replaceChildren(head, done);
+        remove(rec, 1100);
+      } else if (rec.state === "running") {
+        rec.state = "reading";
+      }
+      break;
+  }
+  relayout();
+}
+
+// ---------------------------------------------------------------- connection
+let ws = null, backoff = 1000, connWord = "Connecting…";
+function connect() {
+  const conn = document.getElementById("conn");
+  ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+  ws.onopen = () => { backoff = 1000; conn.className = "conn live"; relayout(); };
+  ws.onmessage = m => { try { onEvent(JSON.parse(m.data)); } catch (e) { console.warn("bad event", e); } };
+  ws.onclose = () => {
+    conn.className = "conn down"; connWord = "Reconnecting…";
+    document.getElementById("connText").textContent = connWord;
+    setTimeout(connect, backoff); backoff = Math.min(backoff * 2, 10000);
+  };
+}
+connect();
+
+// ---------------------------------------------------------------- talking
+const cmd = document.getElementById("cmd");
+const reply = document.getElementById("reply");
+let replyTimer = null;
+function say(text) {
+  reply.textContent = text; reply.classList.remove("quiet");
+  clearTimeout(replyTimer); replyTimer = setTimeout(() => reply.classList.add("quiet"), 15000);
+}
+
+async function ask(text) {
+  document.getElementById("said").textContent = "› " + text;
+  say("…");
+  try {
+    const r = await fetch("/ask", { method: "POST", headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ text, session_id: session }) });
+    const out = await r.json();
+    if (!r.ok) { say(out.detail ? String(out.detail) : "Something went wrong."); return; }
+    session = out.session_id;
+    try { localStorage.setItem("aurelia.session", session); } catch (e) {}
+    say(out.reply || "");
+    (out.needs_confirmation || []).forEach(showConfirm);
+  } catch (e) {
+    say("I can't reach Aurelia right now.");
+  }
+}
+
+function showConfirm(action) {
+  const node = el("section", "panel asking");
+  const rec = { taskId: "confirm-" + action.action_id, tool: action.tool, node, state: "asking" };
+  panels.set(rec.taskId, rec);
+  const head = el("div", "head"); head.append(el("div", "title", titleFor(action.tool)));
+  const what = Object.entries(action.args || {}).map(([k, v]) => `${k.replace(/_/g, " ")}: ${v}`).join(" · ");
+  const btns = el("div", "btns");
+  const yes = el("button", "btn primary", "Go ahead"); yes.type = "button";
+  const no = el("button", "btn", "Cancel"); no.type = "button";
+  btns.append(yes, no);
+  node.append(closeButton(rec), head, el("div", "msg", "This needs your confirmation."));
+  if (what) node.append(el("div", "label", what));
+  node.append(btns);
+  stage.appendChild(node); relayout();
+  const answer = async approve => {
+    yes.disabled = no.disabled = true;
+    try {
+      const r = await fetch("/ask/confirm", { method: "POST", headers: { "Content-Type": "application/json" },
+                                              body: JSON.stringify({ action_id: action.action_id, approve }) });
+      const out = await r.json();
+      say(r.ok ? out.reply : (out.detail || "That expired."));
+    } catch (e) { say("I can't reach Aurelia right now."); }
+    remove(rec);
+  };
+  yes.addEventListener("click", () => answer(true));
+  no.addEventListener("click", () => answer(false));
+}
+
+document.getElementById("form").addEventListener("submit", e => {
+  e.preventDefault();
+  const text = cmd.value.trim();
+  if (!text) return;
+  cmd.value = "";
+  ask(text);
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "/" && document.activeElement !== cmd) { e.preventDefault(); cmd.focus(); }
+  else if (e.key === "Escape") {
+    if (document.activeElement === cmd) cmd.blur();
+    else panels.forEach(rec => { if (rec.state !== "running") remove(rec); });
+  }
+});
+</script>
+</body>
+</html>

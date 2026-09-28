@@ -1,9 +1,11 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import yaml
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
@@ -45,6 +47,21 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Aurelia Orchestrator", version="0.2.0", lifespan=lifespan)
 app.include_router(tasks.router)
 app.include_router(assistant.router)
+
+
+VIEW = Path(__file__).parent / "static" / "view.html"
+
+
+@app.get("/", include_in_schema=False)
+async def root():
+    return RedirectResponse("/view")
+
+
+@app.get("/view", include_in_schema=False)
+async def view():
+    """The surgical view: a page that only renders panel events from /ws and
+    sends what you type to /ask. It holds no logic of its own."""
+    return FileResponse(VIEW, media_type="text/html", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/health")

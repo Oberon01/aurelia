@@ -74,7 +74,10 @@ async def start_task(body: StartTask, request: Request):
         body.user, decision.tier, body.confirmed,
     )
     await publish(_redis(request), PanelEvent(type="panel.open", task_id=task_id, tool=name,
-                                               data={"args": body.args}))
+                                               data={"args": body.args, "user": body.user,
+                                                     "trigger": body.trigger,
+                                                     "cancellable": resolved.tool.cancellable,
+                                                     "unit": resolved.tool.progress_unit}))
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.post(f"{resolved.url}/tools/{resolved.tool.name}/invoke",
@@ -188,7 +191,8 @@ async def _finish(request: Request, task_id: str, tool: str, body: Result) -> No
                                         data={"status": body.status, "partial": body.partial, **body.data}))
     # Nothing to read → the display flashes "Complete" and fades the panel out.
     await publish(redis, PanelEvent(type="panel.close", task_id=task_id, tool=tool,
-                                    data={"status": body.status, "has_result": bool(body.data)}))
+                                    data={"status": body.status, "has_result": bool(body.data),
+                                          "error": body.error}))
 
 
 async def _within_rate_limit(request: Request, function: str, per_minute: int) -> bool:

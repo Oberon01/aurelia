@@ -92,6 +92,27 @@ latency, for Libra and Parallax later.
 (use one with a low spend limit while testing). For a local model, run Ollama
 on the host and add `ollama` to `llm.routes.chat`.
 
+### The surgical view
+
+A dark page where panels appear only while something is relevant: progress
+bars while a task runs, results when it finishes, a "Complete" flash that
+fades when there's nothing to read, and a confirmation panel for anything that
+needs your go-ahead (unlock). Type into it like `ask.sh`: press `/`, type,
+Enter. Esc clears finished panels.
+
+From another computer, tunnel to the server and open it:
+
+```bash
+ssh -L 8080:localhost:8080 atlas@atlas-ai      # leave this running
+# then browse to http://localhost:8080/view
+```
+
+The orchestrator serves it at `/view`; it only renders the panel events from
+`/ws` and sends what you type to `/ask`. Result panels stay until you dismiss
+them (how they should leave is still an open decision). Chrysalis's own smoke
+tests are hidden. This is the Phase 2 minimum; the installable overlay app
+comes with Constellation (Phase 7).
+
 ## Run it
 
 ```bash
@@ -294,7 +315,8 @@ narrow, never widen, a function's policy.
 - No auth yet. Keep port 8080 on your LAN only (remote access: Tailscale).
 - The proxy only listens on `localhost`. Open it to the network (`"8080:80"`)
   on the home box once authentication exists.
-- No display UI, memory tiers or mailbox yet — later phases.
+- The display is the minimal web view; memory tiers and the mailbox come in
+  Phases 3 and 4 (see the phase table in the design doc).
 
 ## Layout
 
