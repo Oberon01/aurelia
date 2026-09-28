@@ -83,7 +83,8 @@ class Docker:
 
     async def swap(self, service: str) -> None:
         """Zero-downtime swap to the image tagged :latest (built beforehand)."""
-        await self._run("./scripts/deploy.sh", service, env={"SKIP_BUILD": "1"})
+        # Run through bash so it works even if the file lost its executable bit (e.g. committed from Windows).
+        await self._run("bash", "./scripts/deploy.sh", service, env={"SKIP_BUILD": "1"})
 
     async def apply_stack(self, services: list[str]) -> None:
         await self._run("docker", "compose", "up", "-d", "--no-build", *services)

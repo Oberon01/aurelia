@@ -177,6 +177,11 @@ class Chrysalis:
             known = await self.docker.compose_services()
             targets = built_services(known) if plan.compose else plan.services + (["migrate"] if plan.migrate else [])
             if targets:
+                # Save what's running now under the current commit before building over it,
+                # so a rollback always has the exact previous images to return to.
+                for svc in targets:
+                    if not await self.docker.has_image(svc, prev) and await self.docker.has_image(svc, "latest"):
+                        await self.docker.tag(svc, "latest", prev)
                 await self.docker.build(targets)
                 for svc in targets:
                     await self.docker.tag(svc, "latest", sha, check=False)
