@@ -43,6 +43,7 @@ router = APIRouter(prefix="/mnemosyne", tags=["mnemosyne"])
 
 NAME = "mnemosyne"
 LOCK_KEY = "aurelia:mnemosyne:lock"
+LAST_ROUND_KEY = "aurelia:mnemosyne:last_round"
 FAIL_PREFIX = "aurelia:mnemosyne:fail:"
 MAX_FAILURES = 3
 
@@ -489,6 +490,7 @@ async def record_loop(app) -> None:
         try:
             if await app.state.redis.set(LOCK_KEY, "1", nx=True, ex=int(minutes * 60) - 5):
                 stats = await record_quiet_conversations(app)
+                await app.state.redis.set(LAST_ROUND_KEY, datetime.now(timezone.utc).isoformat())
                 if any(stats.values()):
                     log.info("mnemosyne: %s", stats)
         except Exception:
@@ -496,8 +498,31 @@ async def record_loop(app) -> None:
         await asyncio.sleep(minutes * 60)
 
 
+@router.get("/health")
+async def health(request: Request):
+    """What Probe checks, like any function's /health: the record's database is reachable, and how it's doing."""
+    app = request.app
+    try:
+        counts = await db.pool().fetchrow(
+            "SELECT (SELECT count(*) FROM conversation_records WHERE NOT skipped) AS records, "
+            "(SELECT count(*) FROM remembered_facts) AS facts")
+    except Exception as exc:
+        return {"status": "error", "database": f"unreachable ({exc.__class__.__name__})"}
+    raw = await app.state.redis.get(LAST_ROUND_KEY)
+    if raw:
+        mins = int((datetime.now(timezone.utc) - datetime.fromisoformat(raw.decode() if isinstance(raw, bytes) else raw))
+                   .total_seconds() // 60)
+        last = "just now" if mins < 1 else f"{mins} min ago" if mins < 120 else f"{mins // 60} h ago"
+    else:
+        last = "not yet"
+    return {"status": "ok", "records": counts["records"], "facts": counts["facts"], "last_round": last,
+            "embeddings": "on" if app.state.embedder.enabled else "off (searching by words)"}
+
+
 @router.post("/record")
 async def record_now(request: Request, quiet_minutes: float | None = None):
     """Run a round now (the loop does this on its own). quiet_minutes overrides how long the latest
     stretch must have been quiet (0 = record everything now); conversations still split at the policy's gap."""
-    return await record_quiet_conversations(request.app, quiet_minutes)
+    stats = await record_quiet_conversations(request.app, quiet_minutes)
+    await request.app.state.redis.set(LAST_ROUND_KEY, datetime.now(timezone.utc).isoformat())
+    return stats

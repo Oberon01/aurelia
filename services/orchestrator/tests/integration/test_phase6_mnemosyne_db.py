@@ -139,6 +139,11 @@ def test_quiet_conversations_become_records_found_by_meaning(stack, model):
     assert found["recall"][0]["open"] == ["follow up"] and found["recall"][0]["topics"] == ["frieren"]
     assert record(stack)["recorded"] == 0                          # already recorded: never twice
 
+    # What Probe checks: <registered url>/health, like any function.
+    [url] = [f["url"] for f in httpx.get(f"{stack['orch']}/registry/functions").json() if f["name"] == "mnemosyne"]
+    h = httpx.get(f"{url}/health").json()
+    assert h["status"] == "ok" and h["records"] >= 1 and h["last_round"] == "just now" and h["embeddings"] == "on"
+
 
 def test_stretches_split_at_gaps_and_the_active_one_waits(stack, model):
     session = uuid.uuid4().hex
