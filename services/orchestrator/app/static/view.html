@@ -107,6 +107,25 @@ table{width:100%;border-collapse:collapse;font-size:14px}
 th{font-family:var(--mono);font-size:11px;letter-spacing:2px;font-weight:400;color:var(--ink-faint);text-align:left;padding:0 10px 8px 0;border-bottom:1px solid rgba(95,212,230,.2);text-transform:uppercase}
 td{padding:8px 10px 8px 0;color:var(--ink);vertical-align:top;max-width:320px}
 td .clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+/* functions */
+.fns{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
+.fn{padding:16px 18px;border:1px solid var(--cyan-soft);border-radius:8px;background:rgba(4,7,11,.5);display:flex;flex-direction:column;gap:6px;min-width:0}
+.fn .fname{font-family:var(--display);font-size:20px;font-weight:600;color:var(--ink-strong)}
+.fn .purpose{font-size:14px;line-height:1.4;color:var(--ink-dim)}
+.fn .facts{font-family:var(--mono);font-size:12px;color:var(--ink-faint);line-height:1.5}
+.fn .btn{min-height:36px;margin-top:4px;font-size:13px}
+.fn.planned{opacity:.7}
+.pill{display:inline-flex;gap:7px;align-items:center;font-family:var(--mono);font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-faint)}
+.pill::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.pill.online{color:var(--cyan)}.pill.unhealthy,.pill.offline{color:var(--bad)}.pill.disabled,.pill.no_policy{color:var(--warn)}.pill.planned{color:var(--ink-faint)}
+.tools{display:flex;flex-direction:column}
+.tl{display:grid;grid-template-columns:150px 92px minmax(0,1fr);gap:4px 16px;align-items:baseline;padding:10px 0;border-top:1px solid rgba(95,212,230,.12)}
+.tl:first-child{border-top:0}
+.tl .tname{font-family:var(--mono);font-size:14px;color:var(--ink-strong)}
+.tl .tier{font-family:var(--mono);font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-faint)}
+.tl .tier.act{color:var(--cyan)}.tl .tier.change{color:var(--warn)}.tl .tier.never{color:var(--bad)}
+.tl .desc{font-size:14px;color:var(--ink-dim);line-height:1.4}
+.tl .use{grid-column:3 / -1;font-family:var(--mono);font-size:12px;color:var(--ink-faint)}
 /* releases */
 .rels{display:flex;flex-direction:column}
 .rel{display:grid;grid-template-columns:104px 84px minmax(0,1fr) auto;gap:4px 16px;align-items:baseline;padding:10px 0;border-top:1px solid rgba(95,212,230,.12)}
@@ -137,6 +156,7 @@ td .clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;o
 @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 @media (max-width:640px){
   .top{padding:16px}.said{display:none}.reply{font-size:15px}.stage{margin:0 16px}.bar-wrap{margin:12px 0 16px}.panel,.panel.reading{width:100%}.devices{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}
+  .tl{grid-template-columns:minmax(0,1fr) auto}.tl .desc,.tl .use{grid-column:1 / -1;text-align:left}
   .rel{grid-template-columns:auto minmax(0,1fr) auto;gap:4px 10px}.rel .sha{display:none}.rel .why,.rel .svc{grid-column:1 / -1}
   .stage.solo .panel{padding:22px 20px}
 }
@@ -172,7 +192,7 @@ const TITLES = {
   "orbit.aliases": "Nicknames", "orbit.forget_alias": "Nickname", "orbit.tv_status": "TV",
   "orbit.tv_power": "TV", "orbit.tv_input": "TV input", "orbit.tv_inputs": "TV inputs", "orbit.tv_app": "TV",
   "orbit.tv_apps": "TV apps", "orbit.tv_remote": "TV remote", "orbit.tv_mute": "TV sound",
-  "orbit.tv_discover": "Finding TVs", "probe.echo": "Echo", "chrysalis.status": "Updates",
+  "orbit.tv_discover": "Finding TVs", "probe.echo": "Echo", "probe.functions": "Functions", "probe.function": "Function", "chrysalis.status": "Updates",
   "chrysalis.releases": "Releases", "chrysalis.rollback": "Rollback", "chrysalis.approve": "Release approval",
 };
 function titleFor(tool) {
@@ -332,6 +352,7 @@ function pinButton(taskId, pinned) {
 }
 
 function resultTitle(tool, d) {
+  if (typeof d.function === "string") return d.function;
   if (d.kind && d.name) return d.name;
   if (typeof d.device === "string") return d.device;
   return titleFor(tool);
@@ -362,6 +383,8 @@ function body(tool, d) {
     wrap.append(el("div", "msg", d.muted ? "Muted." : "Sound on.")); ["device", "muted"].forEach(k => used.add(k));
   }
   if (Array.isArray(d.releases)) { wrap.append(releases(d.releases)); used.add("releases"); }
+  if (Array.isArray(d.functions)) { wrap.append(functionCards(d.functions)); used.add("functions"); }
+  if (typeof d.function === "string") { wrap.append(functionDetail(d)); ["function", "state", "state_text", "purpose", "health", "rate_limit", "tools", "last_seen"].forEach(k => used.add(k)); }
   if (Array.isArray(d.inputs)) {
     const chips = el("div", "chips");
     d.inputs.forEach(i => chips.append(el("span", "chip" + (i.showing ? " on" : ""), i.name + (i.showing ? " · showing" : ""))));
@@ -380,6 +403,52 @@ function body(tool, d) {
   }
   if (!wrap.children.length) wrap.append(el("div", "msg", "Done."));
   return wrap;
+}
+
+// Probe: every function at a glance, and one in detail.
+function statusPill(status, text) { return el("span", "pill " + status, text || status.replace(/_/g, " ")); }
+function usage(runs, failed, last) {
+  const bits = [];
+  bits.push(runs ? `${runs} run${runs === 1 ? "" : "s"} this week${failed ? ` (${failed} failed)` : ""}` : "not used this week");
+  if (last) bits.push(`last used ${last}`);
+  return bits.join(" · ");
+}
+function functionCards(list) {
+  const grid = el("div", "fns");
+  list.forEach(f => {
+    const c = el("div", "fn" + (f.state === "planned" ? " planned" : ""));
+    const top = el("div", "head"); top.append(el("div", "fname", f.name), statusPill(f.state));
+    c.append(top);
+    if (f.purpose) c.append(el("div", "purpose", f.purpose));
+    c.append(el("div", "facts", `${f.tools} tool${f.tools === 1 ? "" : "s"} · ${usage(f.runs_7d, f.failed_7d, f.last_used)}`));
+    if (f.health) c.append(el("div", "facts", f.health));
+    if (f.state !== "online") c.append(el("div", "facts", f.state_text + (f.last_seen ? `, last seen ${f.last_seen}` : "")));
+    const b = el("button", "btn", "Details"); b.type = "button";
+    b.addEventListener("click", () => fetch("/tasks", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tool: "probe.function", args: { name: f.name.toLowerCase() } }) }).catch(() => say("I can't reach Aurelia right now.")));
+    c.append(b);
+    grid.append(c);
+  });
+  return grid;
+}
+function functionDetail(d) {
+  const box = el("div"); box.style.display = "flex"; box.style.flexDirection = "column"; box.style.gap = "14px";
+  const line = el("div", "head"); line.style.justifyContent = "flex-start";
+  line.append(statusPill(d.state, d.state_text));
+  box.append(line);
+  if (d.purpose) box.append(el("div", "msg", d.purpose));
+  const facts = [d.health, d.last_seen ? `Last seen ${d.last_seen}` : null, d.rate_limit ? `Rate limit ${d.rate_limit}` : null].filter(Boolean);
+  if (facts.length) box.append(el("div", "facts", facts.join(" · ")));
+  const tools = el("div", "tools");
+  (d.tools || []).forEach(t => {
+    const row = el("div", "tl");
+    const tier = String(t.tier || "");
+    row.append(el("div", "tname", t.tool), el("div", "tier " + tier.split(" ")[0], tier),
+               el("div", "desc", t.what_it_does || ""), el("div", "use", [usage(t.runs_7d, t.failed_7d, null), t.typical ? `typically ${t.typical}` : null, t.last_used].filter(Boolean).join(" · ")));
+    tools.append(row);
+  });
+  box.append(tools);
+  return box;
 }
 
 // Chrysalis releases: one line each; the reason only when something went wrong.
@@ -581,7 +650,7 @@ function onEvent(ev) {
       if (d.trigger === "refresh") { hidden.add(id); return; }      // its panel was closed meanwhile
       rec = rec || makePanel(id, ev.tool);
       Object.assign(rec, { unit: d.unit || null, cancellable: d.cancellable !== false, closeAfter: d.close_after || null,
-                           key: d.key, args: d.args || {}, refreshes: d.refreshes || [] });
+                           key: d.key, args: d.args || {}, refreshes: d.refreshes || [], tier: d.tier });
       if (d.snapshot) {                              // memory: show the last panel now, refresh behind it
         const sn = d.snapshot;
         rec.state = "refreshing";
@@ -645,11 +714,38 @@ function onEvent(ev) {
 }
 
 // ---------------------------------------------------------------- connection
-let ws = null, backoff = 1000, connWord = "Connecting…";
+// This page's version, filled in by the orchestrator when it serves the page.
+const VIEW_VERSION = "__VIEW_VERSION__";
+let ws = null, backoff = 1000, connWord = "Connecting…", connectedBefore = false;
+
+// After an update, reload into the new page and re-open the look-ups that were on
+// screen; memory shows each one at once while it refreshes.
+async function reloadIfUpdated() {
+  if (VIEW_VERSION.startsWith("__")) return;
+  try {
+    const r = await fetch("/view/version", { cache: "no-store" });
+    const { version } = await r.json();
+    if (!version || version === VIEW_VERSION) return;
+    const reopen = recs().filter(p => ["reference", "read"].includes(p.tier) && ["reading", "refreshing"].includes(p.state))
+                         .map(p => ({ tool: p.tool, args: p.args || {} }));
+    try { sessionStorage.setItem("aurelia.reopen", JSON.stringify(reopen)); } catch (e) {}
+    location.reload();
+  } catch (e) { /* try again on the next reconnect */ }
+}
+function reopenAfterReload() {
+  let list = [];
+  try { list = JSON.parse(sessionStorage.getItem("aurelia.reopen") || "[]"); sessionStorage.removeItem("aurelia.reopen"); } catch (e) {}
+  list.forEach(t => fetch("/tasks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(t) }).catch(() => {}));
+}
+
 function connect() {
   const conn = document.getElementById("conn");
   ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
-  ws.onopen = () => { backoff = 1000; conn.className = "conn live"; relayout(); };
+  ws.onopen = () => {
+    backoff = 1000; conn.className = "conn live"; relayout();
+    if (connectedBefore) reloadIfUpdated(); else reopenAfterReload();
+    connectedBefore = true;
+  };
   ws.onmessage = m => { try { onEvent(JSON.parse(m.data)); } catch (e) { console.warn("bad event", e); } };
   ws.onclose = () => {
     conn.className = "conn down"; connWord = "Reconnecting…";
@@ -715,7 +811,7 @@ function showConfirm(action) {
 
 document.getElementById("form").addEventListener("submit", e => {
   e.preventDefault();
-  const text = cmd.value.trim();
+  const text = cmd.value.trim().replace(/^\/+\s*/, "");      // a "/" typed out of habit isn't part of it
   if (!text) return;
   cmd.value = "";
   ask(text);

@@ -1,11 +1,12 @@
 import asyncio
+import hashlib
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import yaml
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
@@ -61,11 +62,23 @@ async def root():
     return RedirectResponse("/view")
 
 
+def _view() -> tuple[str, str]:
+    html = VIEW.read_text()
+    return html, hashlib.sha256(html.encode()).hexdigest()[:12]
+
+
 @app.get("/view", include_in_schema=False)
 async def view():
     """The surgical view: a page that only renders panel events from /ws and
-    sends what you type to /ask. It holds no logic of its own."""
-    return FileResponse(VIEW, media_type="text/html", headers={"Cache-Control": "no-cache"})
+    sends what you type to /ask. It holds no logic of its own. It carries its
+    version so it can reload itself when a newer one goes live."""
+    html, version = _view()
+    return HTMLResponse(html.replace("__VIEW_VERSION__", version), headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/view/version", include_in_schema=False)
+async def view_version():
+    return {"version": _view()[1]}
 
 
 @app.get("/health")
@@ -103,6 +116,12 @@ async def unregister_function(name: str, request: Request):
 @app.get("/registry/functions")
 async def list_functions(request: Request):
     return await registry.list_all(request.app.state.redis)
+
+
+@app.get("/registry/seen")
+async def functions_seen(request: Request):
+    """Every function that has ever registered, with its last heartbeat."""
+    return await registry.seen(request.app.state.redis)
 
 
 @app.get("/config")
@@ -144,6 +163,14 @@ async def validate_config(body: ConfigCheck):
 @app.get("/governance/charter")
 async def governance_charter(request: Request):
     return request.app.state.governance.charter
+
+
+@app.get("/governance/functions")
+async def governance_functions(request: Request):
+    """Every function that has a policy, running or not (read-only)."""
+    gov = request.app.state.governance
+    return [{"function": name, "enabled": p.enabled, "tools": {t: tp.tier for t, tp in p.tools.items()},
+             "rate_limit_per_minute": gov.rate_limit(name)} for name, p in sorted(gov.functions.items())]
 
 
 @app.get("/governance/functions/{name}")

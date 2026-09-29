@@ -59,6 +59,16 @@ fastpath:
       tool: orbit.status
       args: {}
       reply: "Here's the home."
+    - name: functions-status
+      match: '^(?:(?:what(?:''s|s| is| are)|how(?:''s|s| is| are)|show(?: me)?|list|check)\s+)?(?:the\s+)?(?:(?:status|state|health)\s+of\s+)?(?:all\s+)?(?:your|my|aurelia''s|the)\s+functions(?:\s+(?:status|doing))?$'
+      tool: probe.functions
+      args: {}
+      reply: "Here are my functions."
+    - name: function-detail
+      match: '^(?:(?:tell me about|describe|details (?:on|for|of)|status of|show(?: me)?|how(?:''s|s| is))\s+)?(?:the\s+|your\s+)?(?P<name>[a-z][\w-]*)\s+function(?:\s+(?:status|doing|details))?$'
+      tool: probe.function
+      args: { name: "{name}" }
+      reply: "Here's the {name} function."
     - name: lock-up
       match: '^lock\s+(?:up|(?:the\s+)?doors?)$'
       tool: orbit.lock

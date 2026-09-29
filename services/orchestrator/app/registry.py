@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from redis.asyncio import Redis
 
 PREFIX = "aurelia:function:"
+SEEN_KEY = "aurelia:functions:seen"   # every function that has ever registered → last heartbeat (never expires)
 
 
 class ToolSpec(BaseModel):
@@ -46,7 +47,15 @@ class ResolvedTool(BaseModel):
 
 
 async def register(redis: Redis, fn: FunctionRegistration, ttl: int) -> None:
+    from datetime import datetime, timezone
     await redis.set(PREFIX + fn.name, fn.model_dump_json(), ex=ttl)
+    await redis.hset(SEEN_KEY, fn.name, datetime.now(timezone.utc).isoformat())
+
+
+async def seen(redis: Redis) -> dict[str, str]:
+    """When each function last checked in, including ones that aren't running now."""
+    raw = await redis.hgetall(SEEN_KEY)
+    return {(k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v) for k, v in raw.items()}
 
 
 async def unregister(redis: Redis, name: str) -> bool:

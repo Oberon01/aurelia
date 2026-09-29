@@ -4,6 +4,8 @@ function: probe
 enabled: true
 
 tools:
-  echo: { tier: reference }
+  echo:      { tier: reference }
+  functions: { tier: reference }   # status of every function
+  function:  { tier: reference }   # one function in detail
 
 rate_limit_per_minute: 120

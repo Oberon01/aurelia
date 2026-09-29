@@ -10,8 +10,11 @@ space-themed name. Every function follows the same contract:
 4. Honour cancellation (POST /cancel/{id}, or the flag returned with each
    progress report): stop cleanly and report a partial result.
 
-Probe's one tool, `echo`, counts through `steps` one second at a time and then
-repeats `message`, so you can watch progress, cancellation and results end to end.
+Probe's tools:
+- `echo` counts through `steps` one second at a time and then repeats
+  `message`, so you can watch progress, cancellation and results end to end.
+- `functions` reports every function: running or not, healthy, its tools, recent use.
+- `function` reports one function in detail: purpose, health, each tool's tier and use.
 """
 import asyncio
 import logging
@@ -22,6 +25,8 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings
+
+from . import inspect
 
 log = logging.getLogger("function.probe")
 logging.basicConfig(level=logging.INFO)
@@ -54,6 +59,23 @@ REGISTRATION = {
             "progress_unit": "steps",
             "freshness_seconds": None,
             "cancellable": True,
+        },
+        {
+            "name": "functions",
+            "description": "Status of all of Aurelia's functions: running or not, healthy, how many tools, "
+                           "recent use. Use when asked about her functions or how she's doing.",
+            "input_schema": {"type": "object", "properties": {}},
+            "progress_unit": "functions",
+            "freshness_seconds": 30,
+        },
+        {
+            "name": "function",
+            "description": "Details of one function: purpose, status, health, and each tool with its "
+                           "permission tier and recent use.",
+            "input_schema": {"type": "object", "properties": {
+                "name": {"type": "string", "description": "Function name, e.g. 'orbit'"}}, "required": ["name"]},
+            "progress_unit": "steps",
+            "freshness_seconds": 30,
         },
     ],
 }
@@ -132,7 +154,55 @@ async def echo(ctx: TaskContext) -> None:
     await ctx.result({"message": message, "completed_steps": steps})
 
 
-TOOLS: dict[str, Callable[[TaskContext], Awaitable[None]]] = {"echo": echo}
+async def _gather(client: httpx.AsyncClient) -> tuple[list, list, list, list, dict]:
+    base = settings.orchestrator_url
+    reg, pol, week, year, seen = await asyncio.gather(
+        client.get(f"{base}/registry/functions"), client.get(f"{base}/governance/functions"),
+        client.get(f"{base}/tasks/summary", params={"days": 7}),
+        client.get(f"{base}/tasks/summary", params={"days": 365}), client.get(f"{base}/registry/seen"))
+    for r in (reg, pol, week, year, seen):
+        r.raise_for_status()
+    return reg.json(), pol.json(), week.json()["tools"], year.json()["tools"], seen.json()
+
+
+async def _health(client: httpx.AsyncClient, url: str) -> dict | None:
+    try:
+        r = await client.get(f"{url}/health", timeout=3)
+        return r.json() if r.is_success else None
+    except (httpx.HTTPError, ValueError):
+        return None
+
+
+async def functions(ctx: TaskContext) -> None:
+    async with httpx.AsyncClient(timeout=5) as client:
+        registered, policies, week, year, seen = await _gather(client)
+        health = {}
+        for i, fn in enumerate(registered, 1):
+            health[fn["name"]] = await _health(client, fn["url"])
+            await ctx.progress(i, len(registered), "functions", f"Checking {fn['name'].capitalize()}")
+    rows = inspect.overview(registered, policies, week, year, health, seen)
+    await ctx.result({"functions": rows})
+
+
+async def function(ctx: TaskContext) -> None:
+    async with httpx.AsyncClient(timeout=5) as client:
+        registered, policies, week, year, seen = await _gather(client)
+        names = sorted({f["name"] for f in registered} | {p["function"] for p in policies})
+        try:
+            name = inspect.find_name(str(ctx.args.get("name", "")), names)
+        except LookupError as exc:
+            raise RuntimeError(str(exc)) from None      # run() reports it as a plain failure
+        await ctx.progress(1, 2, "steps", f"Checking {name.capitalize()}")
+        fn = next((f for f in registered if f["name"] == name), None)
+        health = await _health(client, fn["url"]) if fn else None
+        r = await client.get(f"{settings.orchestrator_url}/governance/functions/{name}")
+        policy = r.json() if r.is_success else None
+    await ctx.progress(2, 2, "steps", "Done")
+    await ctx.result(inspect.detail(name, registered, policies, policy, week, year, health, seen))
+
+
+TOOLS: dict[str, Callable[[TaskContext], Awaitable[None]]] = {
+    "echo": echo, "functions": functions, "function": function}
 
 
 # ---- contract endpoints (same in every function) --------------------------

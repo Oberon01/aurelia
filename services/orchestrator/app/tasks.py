@@ -157,6 +157,19 @@ async def cancel_task(task_id: str, request: Request):
     return {"task_id": task_id, "status": "cancelling"}
 
 
+@router.get("/summary")
+async def task_summary(request: Request, days: int = 7, function: str | None = None):
+    """Recent use per tool (people's requests, not system checks): runs, failures, typical time, last run."""
+    system = [u for u, e in request.app.state.governance.charter.users.items() if e.role == "system"]
+    rows = await db.pool().fetch(
+        "SELECT tool, count(*) AS runs, count(*) FILTER (WHERE status='failed') AS failed, "
+        "percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms)::bigint AS median_ms, "
+        "max(started_at) AS last_run FROM task_runs "
+        "WHERE started_at > now() - make_interval(days => $1) AND ($2::text IS NULL OR tool LIKE $2 || '.%') "
+        "AND user_id <> ALL($3::text[]) GROUP BY tool ORDER BY tool", min(max(days, 1), 365), function, system)
+    return {"days": days, "tools": [{**dict(r), "last_run": r["last_run"].isoformat()} for r in rows]}
+
+
 @router.get("/{task_id}")
 async def get_task(task_id: str):
     row = await db.pool().fetchrow("SELECT * FROM task_runs WHERE id=$1", uuid.UUID(task_id))

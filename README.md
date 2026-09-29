@@ -16,7 +16,7 @@ space-themed name. Tools are addressed as `<function>.<tool>`.
 
 | Function | Domain | Example tools | Status |
 | --- | --- | --- | --- |
-| `probe` | Diagnostics, testing Aurelia herself | `probe.echo` | Built (reference) |
+| `probe` | Diagnostics, testing Aurelia herself | `probe.echo`, `probe.functions`, `probe.function` | Built (reference) |
 | `nebula` | The web (the cloud) | `nebula.search`, `nebula.download`, `nebula.open` | Planned, policy drafted |
 | `constellation` | Devices and shared computer access | `constellation.search_files`, `constellation.open` | Planned, policy drafted |
 | `orbit` | Smart home: SmartRent (locks, lights, thermostat, sensors) and Roku TVs | `orbit.status`, `orbit.lock`, `orbit.unlock`, `orbit.light`, `orbit.thermostat`, `orbit.login`, `orbit.alias`, `orbit.tv_power`, `orbit.tv_input`, `orbit.tv_inputs`, `orbit.tv_app`, `orbit.tv_remote`, `orbit.tv_mute` | Built |
@@ -114,6 +114,17 @@ which is merged into any panel showing that device (the card glows, the panel
 says "updated just now"); look-ups an action declares it changes (a tool's
 `refreshes` list, e.g. `orbit.alias` → `orbit.aliases`) are re-run in place
 when the merge didn't already cover them.
+
+Ask about her functions ("what's the status of your functions", "tell me about
+the orbit function") and Probe answers with panels: every function as a card
+(running, offline with when it was last seen, or planned; tool count; recent
+use; its own health note), and one function in detail (purpose, health, rate
+limit, rules, and each tool with its tier and recent use). "Details" on a card
+opens the detail panel.
+
+When an update changes the page itself, the display notices on its next
+reconnect, reloads, and re-opens the look-ups that were on screen (memory shows
+them at once while they refresh). No manual refresh needed.
 
 The orchestrator serves it at `/view`; it only renders the panel events from
 `/ws` and sends what you type to `/ask`. Result panels stay until you dismiss
