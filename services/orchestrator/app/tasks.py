@@ -78,7 +78,10 @@ async def start_task(body: StartTask, request: Request):
     )
     open_data: dict[str, Any] = {"args": body.args, "user": body.user, "trigger": body.trigger,
                                  "cancellable": resolved.tool.cancellable, "unit": resolved.tool.progress_unit,
-                                 "tier": decision.tier}
+                                 "tier": decision.tier,
+                                 # Same tool + same key = the same panel: a repeat refreshes it in place.
+                                 "key": memory.args_key(body.args),
+                                 "refreshes": resolved.tool.refreshes}
     if decision.tier in ("act", "change"):
         # Actions confirm and get out of the way; look-ups stay until dismissed.
         open_data["close_after"] = request.app.state.config.current.display.action_panel_seconds

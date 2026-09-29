@@ -107,6 +107,14 @@ ssh -L 8080:localhost:8080 atlas@atlas-ai      # leave this running
 # then browse to http://localhost:8080/view
 ```
 
+Panels stay live. Asking the same thing again refreshes the panel already on
+screen instead of opening another. When an action finishes, open panels it
+affects update in place: Orbit's actions return the device's confirmed state,
+which is merged into any panel showing that device (the card glows, the panel
+says "updated just now"); look-ups an action declares it changes (a tool's
+`refreshes` list, e.g. `orbit.alias` → `orbit.aliases`) are re-run in place
+when the merge didn't already cover them.
+
 The orchestrator serves it at `/view`; it only renders the panel events from
 `/ws` and sends what you type to `/ask`. Result panels stay until you dismiss
 them (how they should leave is still an open decision). Chrysalis's own smoke

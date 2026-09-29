@@ -117,6 +117,26 @@ TOOLS_SPEC = [
     {"name": "tv_discover", "description": "Search the home network for Roku TVs again (normally automatic).",
      "input_schema": {"type": "object", "properties": {}}, "progress_unit": "steps"},
 ]
+# Look-ups each action changes. When the action finishes, the display updates
+# any of these panels that are open (from the action's confirmed device state
+# when it carries one, otherwise by re-running the look-up in place).
+REFRESHES = {
+    "lock": ["orbit.status"],
+    "unlock": ["orbit.status"],
+    "light": ["orbit.status"],
+    "thermostat": ["orbit.status"],
+    "login": ["orbit.status"],
+    "alias": ["orbit.aliases"],
+    "forget_alias": ["orbit.aliases"],
+    "tv_power": ["orbit.status", "orbit.tv_status"],
+    "tv_input": ["orbit.status", "orbit.tv_status", "orbit.tv_inputs"],
+    "tv_app": ["orbit.status", "orbit.tv_status", "orbit.tv_inputs"],
+    "tv_remote": ["orbit.tv_status"],
+    "tv_discover": ["orbit.tv_status"],
+}
+for _t in TOOLS_SPEC:
+    _t["refreshes"] = REFRESHES.get(_t["name"], [])
+
 REGISTRATION = {"name": "orbit", "description": "Smart home: door locks, lights, thermostat and sensors (SmartRent), "
                                          "and TVs (Roku): power, inputs, apps, remote.",
                 "url": settings.function_url,

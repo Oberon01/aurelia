@@ -23,6 +23,9 @@ class ToolSpec(BaseModel):
     progress_unit: str | None = None    # "bytes", "files", "devices", "steps"… None = no measurable quantity
     freshness_seconds: int | None = None
     cancellable: bool = True
+    # Look-ups this action changes, e.g. orbit.lock → ["orbit.status"]. The display
+    # refreshes those panels in place when the action finishes, if they're open.
+    refreshes: list[str] = []
 
 
 class FunctionRegistration(BaseModel):

@@ -161,6 +161,7 @@ def sql(stack, query, *args):
 def test_repeated_lookup_restores_last_panel_with_age(stack):
     first, opened = run_task(stack, "testfn.status")
     assert "snapshot" not in opened
+    assert opened["key"] == "{}" and opened["refreshes"] == [] and opened["tier"] == "reference"
     second, opened = run_task(stack, "testfn.status")
     snap = opened["snapshot"]
     assert snap["task_id"] == first and snap["age"] == "just now" and snap["stale"] is False
