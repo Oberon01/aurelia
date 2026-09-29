@@ -114,6 +114,19 @@ class TaskContext:
             pass
 
 
+def throttled(ctx: TaskContext, label: Callable[[int, int | None], str], every: float = 0.25):
+    """Byte progress at most four times a second (a 100 MB file is ~1,600 chunks), plus the last one."""
+    import time
+    last = [0.0]
+
+    async def report(got: int, total: int | None) -> None:
+        now = time.monotonic()
+        if now - last[0] >= every or (total and got >= total):
+            last[0] = now
+            await ctx.progress(got, total, "bytes", label(got, total))
+    return report
+
+
 def _query(ctx: TaskContext) -> str:
     q = " ".join(str(ctx.args.get("query") or "").split())
     if not q:
@@ -154,8 +167,7 @@ async def read(ctx: TaskContext) -> dict:
     r = rules("read")
     max_bytes = int(float(r.get("max_mb", 5)) * 1024 * 1024)
 
-    async def progress(got: int, total: int | None) -> None:
-        await ctx.progress(got, total, "bytes", f"Reading {url.split('/')[2] if '//' in url else url}")
+    progress = throttled(ctx, lambda got, total: f"Reading {url.split('/')[2] if '//' in url else url}")
 
     async with client(float(r.get("timeout_seconds", 15))) as c:
         page = await fetch(c, guard(), url, max_bytes, progress, lambda: ctx.cancelled)
@@ -168,8 +180,7 @@ async def download(ctx: TaskContext) -> dict:
     max_bytes = int(float(d.get("max_size_mb", 2048)) * 1024 * 1024)
     blocked = list(d.get("blocked_extensions") or [])
 
-    async def progress(got: int, total: int | None) -> None:
-        await ctx.progress(got, total, "bytes", f"{human_size(got)}" + (f" of {human_size(total)}" if total else ""))
+    progress = throttled(ctx, lambda got, total: url.split("/")[2] if "//" in url else url)
 
     async with client(float(d.get("timeout_seconds", 60))) as c:
         saved = await save(c, guard(), url, settings.downloads_dir, max_bytes, blocked, progress, lambda: ctx.cancelled)

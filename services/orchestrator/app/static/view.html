@@ -434,47 +434,59 @@ function closeButton(rec) {
 }
 
 // ---------------------------------------------------------------- progress panel
+// Built once, then only the numbers change: rebuilding on every update (several a
+// second for a download) would replace the Stop button under your mouse and lose the click.
 function renderProgress(rec, p) {
   const n = rec.node;
-  n.replaceChildren();
-  const head = el("div", "head");
-  head.append(el("div", "title", titleFor(rec.tool)));
-  const known = p && p.total;
+  if (!rec.prog || rec.prog.node !== n || !n.contains(rec.prog.bar)) {
+    n.replaceChildren();
+    const head = el("div", "head");
+    const meta = el("div", "meta");
+    head.append(el("div", "title", titleFor(rec.tool)), meta);
+    n.append(head);
+    if (rec.subtitle) n.append(el("div", "msg", rec.subtitle));
+    const bar = el("div", "bar unknown"), fill = el("div", "fill");
+    bar.append(fill);
+    const row = el("div", "row"), rowText = el("span");
+    row.append(rowText); row.hidden = true;
+    const label = el("div", "label"); label.hidden = true;
+    n.append(bar, row, label);
+    let stop = null;
+    if (rec.cancellable) {
+      stop = el("button", "btn", "Stop"); stop.type = "button";
+      stop.addEventListener("click", () => cancel(rec, stop));
+      n.append(stop);
+    }
+    rec.prog = { node: n, meta, bar, fill, row, rowText, label, stop };
+  }
+  const g = rec.prog;
+  const known = !!(p && p.total);
   const pct = known ? Math.max(0, Math.min(100, Math.round(100 * p.current / p.total))) : null;
-  head.append(el("div", "meta", pct !== null ? `${pct}%` : ""));
-  n.append(head);
-  if (rec.subtitle) n.append(el("div", "msg", rec.subtitle));
-  const bar = el("div", "bar" + (known ? "" : " unknown"));
-  const fill = el("div", "fill");
-  if (known) fill.style.width = pct + "%";
-  bar.append(fill);
-  n.append(bar);
+  g.meta.textContent = pct !== null ? `${pct}%` : "";
+  g.bar.classList.toggle("unknown", !known);
+  g.fill.style.width = known ? pct + "%" : "";
   if (p) {
     const unit = p.unit || rec.unit || "";
-    const row = el("div", "row");
-    const size = n => n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} GB` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB`
-                    : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} bytes`;
-    const stepText = unit === "bytes"
+    const size = x => x >= 1073741824 ? `${(x / 1073741824).toFixed(1)} GB` : x >= 1048576 ? `${(x / 1048576).toFixed(1)} MB`
+                    : x >= 1024 ? `${Math.round(x / 1024)} KB` : `${x} bytes`;
+    g.rowText.textContent = unit === "bytes"
       ? (known ? `${size(p.current)} of ${size(p.total)}` : size(p.current))
       : unit === "steps" && known
       ? `Step ${Math.min(p.total, Math.floor(p.current) + 1)} of ${p.total}`
       : known ? `${fmt(p.current)} / ${fmt(p.total)} ${unit}`.trim() : `${fmt(p.current)} ${unit}`.trim();
-    row.append(el("span", null, stepText));
-    n.append(row);
-    if (p.label) n.append(el("div", "label", p.label));
-  }
-  if (rec.cancellable) {
-    const b = el("button", "btn", "Stop");
-    b.type = "button";
-    b.addEventListener("click", () => cancel(rec, b));
-    n.append(b);
+    g.row.hidden = false;
+    g.label.textContent = p.label || "";
+    g.label.hidden = !p.label;
   }
 }
 function fmt(x) { return typeof x === "number" && !Number.isInteger(x) ? x.toFixed(1) : x; }
 
 async function cancel(rec, button) {
   button.disabled = true; button.textContent = "Stopping…";
-  try { await fetch(`/tasks/${rec.taskId}/cancel`, { method: "POST" }); } catch (e) { button.textContent = "Couldn't stop"; }
+  try {
+    const r = await fetch(`/tasks/${rec.taskId}/cancel`, { method: "POST" });
+    if (!r.ok) { button.textContent = "Couldn't stop"; setTimeout(() => { button.disabled = false; button.textContent = "Stop"; }, 2000); }
+  } catch (e) { button.textContent = "Couldn't stop"; }
 }
 
 // ---------------------------------------------------------------- result panel
