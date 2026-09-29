@@ -57,8 +57,8 @@ class LLMConfig(BaseModel):
 
 
 class SessionConfig(BaseModel):
-    ttl_minutes: int = 60
-    max_turns: int = 20
+    ttl_minutes: int = 1440     # a day; Mnemosyne keeps what matters beyond that
+    max_turns: int = 30
 
 
 class FastPathPattern(BaseModel):

@@ -48,8 +48,8 @@ llm:
   wait_for_result_seconds: 8
 
 session:
-  ttl_minutes: 60        # a conversation is forgotten after this long idle
-  max_turns: 20
+  ttl_minutes: 1440      # a conversation lasts a day after the last request
+  max_turns: 30          # turns sent back to the model; results and the screen are added separately
 
 # Predictable commands skip the LLM entirely. First match wins.
 # Placeholders: {group} from the regex, {group|default} when the group is optional.

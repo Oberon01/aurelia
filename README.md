@@ -60,7 +60,9 @@ progress in real units; honour cancel; report a result (partial if cancelled).
 
 `ask.sh` keeps the conversation between runs, so one-off requests keep their context.
 
-Or over HTTP: `POST /ask {"text": "...", "session_id": "..."}`. Each reply
+Or over HTTP: `POST /ask {"text": "...", "session_id": "...", "screen": {...}}`
+(`screen` is optional: the panels you see, `{"panels": [{"n", "task_id", "tool", "title"}], "focus": n}`,
+sent by the display). Each reply
 says which route answered (`fastpath` or `llm`), its latency, and any tasks it
 started. Actions that need confirmation come back in `needs_confirmation`;
 approve or decline with `POST /ask/confirm {"action_id": "...", "approve": true}`.
@@ -128,6 +130,22 @@ the orbit function") and Probe answers with panels: every function as a card
 use; its own health note), and one function in detail (purpose, health, rate
 limit, rules, and each tool with its tier and recent use). "Details" on a card
 opens the detail panel.
+
+**Follow-ups and focus.** Every panel shows its number in its top-left
+corner. Each request tells Aurelia what's on screen by those numbers, plus
+what earlier requests in the conversation found (even after you close their
+panels), so follow-ups work: "download the third one", "summarize panel 2",
+"was the lamp off?". Click a panel to focus it: it lights up, a chip in the
+command bar shows which one, and what you type is about that panel unless you
+name another ("lock the door" is still just a request). Click the chip's ×,
+the empty space around the panels, or press Esc to let go; the next Esc clears
+the screen as before. A focused action panel doesn't auto-close.
+
+You can send a request before the last one is answered. They share one
+conversation, and each answer keeps its own line under what you asked, so none
+overwrites another. A conversation lasts a day after your last request
+(`session.ttl_minutes`); what was on screen for each request is kept in
+`ask_requests.screen`. How it works: `services/orchestrator/app/context.py`.
 
 When an update changes the page itself, the display notices on its next
 reconnect, reloads, and re-opens the look-ups that were on screen (memory shows

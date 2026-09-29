@@ -20,14 +20,13 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from . import db, fastpath, registry
+from . import context, db, fastpath, registry
 from .llm.base import Message, ProviderError, ToolDef
 from .settings import settings
 from .tasks import StartTask, launch, wait_for_result
 
 router = APIRouter(prefix="/ask", tags=["assistant"])
 
-SESSION_PREFIX = "aurelia:session:"
 PENDING_PREFIX = "aurelia:pending:"
 PENDING_TTL = 600
 CLOUD_PROVIDERS = ("claude",)
@@ -37,6 +36,7 @@ class Ask(BaseModel):
     text: str
     session_id: str | None = None
     user: str = "owner"
+    screen: context.Screen | None = None     # the panels you can see, by number, and the one in focus
 
 
 class Confirm(BaseModel):
@@ -64,8 +64,9 @@ async def ask(body: Ask, request: Request):
     from . import digest
     asyncio.create_task(digest.maybe_show(app, body.user))
     request_id = str(uuid.uuid4())
-    session_id = body.session_id or uuid.uuid4().hex
-    history = await _load_session(app, session_id)
+    # The display makes its own session id, so two requests sent at once share one conversation.
+    session_id = body.session_id if context.valid_session(body.session_id) else uuid.uuid4().hex
+    history = await context.load(app.state.redis, session_id)
 
     outcome: dict[str, Any] = {"route": "llm", "reply": "", "task_ids": [], "needs_confirmation": []}
 
@@ -78,13 +79,18 @@ async def ask(body: Ask, request: Request):
 
     latency = int((time.monotonic() - started) * 1000)
     await db.pool().execute(
-        "INSERT INTO ask_requests (id, session_id, user_id, text, route, reply, task_ids, latency_ms) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7::uuid[], $8)",
+        "INSERT INTO ask_requests (id, session_id, user_id, text, route, reply, task_ids, latency_ms, screen) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7::uuid[], $8, $9::jsonb)",
         uuid.UUID(request_id), session_id, body.user, body.text, outcome["route"], outcome["reply"],
         [uuid.UUID(t) for t in outcome["task_ids"]], latency,
+        body.screen.model_dump_json() if body.screen else None,
     )
-    await _save_session(app, session_id, history + [Message("user", body.text),
-                                                    Message("assistant", outcome["reply"])])
+    s_cfg = cfg.session
+    turn = {"role": "user", "text": body.text, "tasks": outcome["task_ids"]}
+    focused = _focused(body.screen)
+    if focused:
+        turn["about"] = f"{focused.n} · {focused.title or focused.tool}"
+    await context.append(app.state.redis, session_id, turn, outcome["reply"], s_cfg.max_turns, s_cfg.ttl_minutes)
     return {"request_id": request_id, "session_id": session_id, "latency_ms": latency, **outcome}
 
 
@@ -139,7 +145,7 @@ async def _run_fastpath(app, body: Ask, fp, resolved) -> dict[str, Any]:
 
 # ---- LLM loop -----------------------------------------------------------------
 
-async def _run_llm(app, body: Ask, history: list[Message], request_id: str) -> dict[str, Any]:
+async def _run_llm(app, body: Ask, history: list[dict[str, Any]], request_id: str) -> dict[str, Any]:
     cfg = app.state.config.current.llm
     out: dict[str, Any] = {"route": "llm", "reply": "", "task_ids": [], "needs_confirmation": []}
 
@@ -149,8 +155,12 @@ async def _run_llm(app, body: Ask, history: list[Message], request_id: str) -> d
         return out
 
     tools, by_api, functions = await _tool_defs(app, body.user)
+    if body.screen and body.screen.panels:
+        tools = tools + [PANEL_TOOL]
     system = _system_prompt(app, functions)
-    messages = history + [Message("user", body.text)]
+    # What's on screen and what earlier turns found go with this request only, as data.
+    ctx = await context.block(body.screen, history)
+    messages = context.messages(history) + [Message("user", f"{ctx}\n\n{body.text}" if ctx else body.text)]
 
     for _ in range(cfg.max_tool_rounds + 1):
         started = time.monotonic()
@@ -167,13 +177,47 @@ async def _run_llm(app, body: Ask, history: list[Message], request_id: str) -> d
 
         messages.append(Message("assistant", completion.text, tool_calls=completion.tool_calls))
         for call in completion.tool_calls:
-            qualified = by_api.get(call.name)
-            result_text, is_error = await _run_tool_call(app, body.user, qualified, call.args, out)
+            if call.name == PANEL_TOOL.name:
+                result_text, is_error = await _read_panel(body.screen, call.args)
+            else:
+                result_text, is_error = await _run_tool_call(app, body.user, by_api.get(call.name), call.args, out)
             messages.append(Message("tool", result_text, tool_call_id=call.id,
                                     tool_name=call.name, is_error=is_error))
 
     out["reply"] = "That took more steps than I'm allowed for one request, so I stopped."
     return out
+
+
+# Reads what's already on your screen, so it isn't a function's tool and needs no task:
+# the same data the panel shows, to the same person looking at it.
+PANEL_TOOL = ToolDef(
+    name="display__panel",
+    description="[Display] Read one panel on the user's screen in full, by the number shown on it. Use it when the "
+                "short form in the context isn't enough (e.g. to summarize a page, or items past the first 20).",
+    input_schema={"type": "object", "properties": {"panel": {"type": "integer", "minimum": 1}}, "required": ["panel"]},
+)
+
+
+def _focused(screen: context.Screen | None) -> context.PanelRef | None:
+    if not screen or screen.focus is None:
+        return None
+    return next((p for p in screen.panels if p.n == screen.focus), None)
+
+
+async def _read_panel(screen: context.Screen | None, args: dict) -> tuple[str, bool]:
+    try:
+        n = int(args.get("panel"))
+    except (TypeError, ValueError):
+        return _data({"status": "error", "error": "say which panel, by its number"}), True
+    ref = next((p for p in (screen.panels if screen else []) if p.n == n), None)
+    if ref is None:
+        shown = sorted(p.n for p in (screen.panels if screen else []))
+        return _data({"status": "error", "error": f"there is no panel {n} on screen", "panels": shown}), True
+    info = (await context.results([ref.task_id])).get(ref.task_id)
+    if info is None:
+        return _data({"status": "error", "error": "that panel's data is no longer available"}), True
+    return _data({"panel": n, "title": ref.title, "tool": info["tool"], "status": info["status"],
+                  "result": info["result"], "error": info["error"]}), False
 
 
 async def _run_tool_call(app, user: str, qualified: str | None, args: dict, out: dict) -> tuple[str, bool]:
@@ -290,18 +334,3 @@ async def _log_llm_call(request_id: str, completion, started: float) -> None:
         completion.usage.output_tokens, completion.usage.cache_read_tokens,
         int((time.monotonic() - started) * 1000),
     )
-
-
-async def _load_session(app, session_id: str) -> list[Message]:
-    raw = await app.state.redis.get(SESSION_PREFIX + session_id)
-    if not raw:
-        return []
-    return [Message(m["role"], m["text"]) for m in json.loads(raw)]
-
-
-async def _save_session(app, session_id: str, messages: list[Message]) -> None:
-    cfg = app.state.config.current.session
-    # Only user text and final replies are kept, so stored history is always valid to resend.
-    kept = [{"role": m.role, "text": m.text} for m in messages if m.role in ("user", "assistant") and m.text]
-    kept = kept[-cfg.max_turns * 2:]
-    await app.state.redis.set(SESSION_PREFIX + session_id, json.dumps(kept), ex=cfg.ttl_minutes * 60)

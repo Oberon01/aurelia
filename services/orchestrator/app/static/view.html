@@ -46,6 +46,12 @@ button{font:inherit;color:inherit;cursor:pointer}
 .conn.down .dot{background:var(--warn)}
 .reply{justify-self:center;width:min(900px,90vw);max-height:26vh;overflow-y:auto;padding:0 0 16px;text-align:center;font-size:17px;line-height:1.5;color:var(--ink-strong);white-space:pre-line;transition:opacity .6s}
 .reply.quiet{opacity:0;max-height:0;padding:0}
+/* several requests at once: each keeps its own line */
+.reply .ex{padding:8px 0;border-top:1px solid rgba(95,212,230,.12);text-align:left}
+.reply .ex:first-child{border-top:0;padding-top:0}
+.reply .q{font-family:var(--mono);font-size:12px;color:var(--ink-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.reply .a{font-size:16px}
+.reply .ex.pending .a{color:var(--ink-faint)}
 
 /* ---- the stage ---- */
 /* Up to 4 panels share the screen (1 large, 2 side by side, 3-4 in a 2x2 grid);
@@ -66,6 +72,10 @@ button{font:inherit;color:inherit;cursor:pointer}
 .panel.asking{order:-1;border-color:var(--warn-line);background:var(--warn-fill)}
 .panel.leaving{opacity:0;transform:scale(.97)}
 .panel.queued{display:none}
+/* Every panel shows its number, so "panel 2" and "the third one" mean what you see. */
+.panel[data-n]::before{content:attr(data-n);position:absolute;top:0;left:14px;min-width:20px;padding:1px 6px 2px;border-radius:0 0 5px 5px;background:var(--cyan-soft);color:var(--ink-strong);font-family:var(--mono);font-size:11px;text-align:center;line-height:1.3}
+.panel.focused{opacity:1;border-color:var(--cyan);box-shadow:0 0 0 1px var(--cyan),0 0 48px rgba(95,212,230,.22)}
+.panel.focused::before{background:var(--cyan);color:var(--ground)}
 .stage.n1 .panel{padding:28px 32px}
 .stage.n1 .panel .title{font-size:26px}
 .scroll{min-height:0;flex:1 1 auto;overflow-y:auto;margin-right:-10px;padding-right:10px;scrollbar-width:thin;scrollbar-color:rgba(95,212,230,.35) transparent}
@@ -220,7 +230,12 @@ details.mb-ev ul{margin:6px 0 0;padding-left:18px;font-family:var(--mono);font-s
 .rel .svc{grid-column:3 / -1;font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
 
 /* ---- command bar ---- */
-.bar-wrap{justify-self:center;width:min(720px,90vw);margin:16px 0 28px}
+.bar-wrap{justify-self:center;width:min(720px,90vw);margin:16px 0 28px;display:flex;gap:10px;align-items:center}
+.focuschip{flex-shrink:0;max-width:45%;min-height:36px;padding:0 10px 0 12px;border-radius:18px;border:1px solid var(--cyan);background:rgba(95,212,230,.12);color:var(--ink-strong);font-family:var(--mono);font-size:12px;display:flex;gap:8px;align-items:center}
+.focuschip[hidden]{display:none}
+.focuschip .ft{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.focuschip .fx{color:var(--ink-faint);font-size:15px;line-height:1}
+.focuschip:hover .fx{color:var(--ink-strong)}
 .cmd{width:100%;min-height:48px;padding:12px 18px;border-radius:10px;border:1px solid transparent;background:transparent;color:var(--ink-strong);font-family:var(--mono);font-size:16px;outline:none;transition:border-color .2s, background .2s}
 .cmd::placeholder{color:rgba(127,167,174,.55)}
 .cmd:focus{border-color:var(--cyan-line);background:rgba(95,212,230,.06)}
@@ -263,6 +278,7 @@ details.mb-ev ul{margin:6px 0 0;padding-left:18px;font-family:var(--mono);font-s
 </div>
 <form class="bar-wrap" id="form" autocomplete="off">
   <label class="sr" for="cmd">Talk to Aurelia</label>
+  <button type="button" class="focuschip" id="focuschip" hidden title="Stop focusing this panel"></button>
   <input class="cmd" id="cmd" placeholder="Press / to talk to Aurelia" spellcheck="false">
 </form>
 
@@ -275,6 +291,13 @@ const hidden = new Set();                       // task ids from system users (C
 const SYSTEM_USERS = new Set(["chrysalis"]);
 let session = null;
 try { session = localStorage.getItem("aurelia.session"); } catch (e) {}
+// Made here rather than by the first reply, so requests sent before that reply share one conversation.
+if (!session || !/^[A-Za-z0-9_-]{8,64}$/.test(session)) {
+  session = [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, "0")).join("");
+  try { localStorage.setItem("aurelia.session", session); } catch (e) {}
+}
+let focused = null;                             // the panel you clicked: what you type is about it
+const cmd = document.getElementById("cmd");
 
 const TITLES = {
   "orbit.status": "Home", "orbit.lock": "Lock", "orbit.unlock": "Unlock", "orbit.light": "Light",
@@ -327,7 +350,7 @@ function arrange() {
     back.queued = false; back.touched = Date.now();
     visible.push(back);
   }
-  all.forEach(p => p.node.classList.toggle("queued", !!p.queued));
+  all.forEach(p => { p.node.classList.toggle("queued", !!p.queued); p.node.classList.toggle("focused", p === focused); });
   // Three panels: the last one gets the full bottom row instead of half of it.
   const shown = [...stage.children].filter(n => all.some(p => p.node === n && !p.queued))
     .map((n, i) => ({ n, i, o: Number(getComputedStyle(n).order) || 0 }))
@@ -348,7 +371,7 @@ function renderRail(waiting) {
     const open = el("button", "open"); open.type = "button";
     const meta = p.state === "running" || p.state === "refreshing" ? ["qm live", "running"]
       : p.state === "failed" ? ["qm bad", "failed"] : ["qm", p.memo && p.memo.updated ? "updated" : "ready"];
-    open.append(el("span", "qt", p.node.querySelector(".title") ? p.node.querySelector(".title").textContent : titleFor(p.tool)),
+    open.append(el("span", "qt", (p.num ? p.num + " · " : "") + panelTitle(p)),
                 el("span", meta[0], meta[1]));
     open.addEventListener("click", () => { p.queued = false; p.touched = Date.now(); relayout(); });
     const x = el("button", "x", "×"); x.type = "button"; x.setAttribute("aria-label", "Dismiss");
@@ -373,6 +396,44 @@ function track(rec) {
   const touch = () => { rec.touched = Date.now(); };
   rec.node.addEventListener("pointerdown", touch);
   rec.node.addEventListener("focusin", touch);
+  // Clicking a panel (not one of its buttons or links, and not selecting text) focuses it.
+  rec.node.addEventListener("click", e => {
+    if (!rec.num || e.target.closest("a,button,input,select,textarea,summary,label")) return;
+    if (String(getSelection() || "").trim()) return;
+    setFocus(rec);
+  });
+}
+
+function panelTitle(p) {
+  const t = p.node.querySelector(".title");
+  return (t && t.textContent) || titleFor(p.tool);
+}
+
+// Lowest number not in use: numbers stay put while a panel is open.
+function nextNum() {
+  const used = new Set(recs().map(p => p.num));
+  let n = 1; while (used.has(n)) n++;
+  return n;
+}
+
+function setFocus(rec) {
+  focused = rec && rec.num ? rec : null;
+  const chip = document.getElementById("focuschip");
+  chip.hidden = !focused;
+  if (focused) {
+    chip.replaceChildren(el("span", "ft", `PANEL ${focused.num} · ${panelTitle(focused)}`), el("span", "fx", "×"));
+    focused.queued = false; focused.touched = Date.now();
+  }
+  cmd.placeholder = focused ? `Ask about panel ${focused.num}…` : "Press / to talk to Aurelia";
+  relayout();
+}
+
+// What's on screen, by number, sent with each request so she sees what you see.
+function screenState() {
+  const list = recs().filter(p => p.num && p.state !== "asking" && !p.node.classList.contains("leaving"))
+    .map(p => ({ n: p.num, task_id: (p.state === "refreshing" && p.memo && p.memo.taskId) || p.latestTask || p.taskId,
+                 tool: p.tool, title: panelTitle(p), queued: !!p.queued }));
+  return { panels: list, focus: focused && list.some(x => x.n === focused.num) ? focused.num : null };
 }
 
 // Each panel once, however many tasks point at it.
@@ -388,7 +449,8 @@ function openPanelFor(tool, key) {
 function makePanel(taskId, tool) {
   const node = el("section", "panel working");
   node.setAttribute("aria-label", titleFor(tool));
-  const rec = { taskId, latestTask: taskId, tool, node, state: "running", unit: null, cancellable: true };
+  const rec = { taskId, latestTask: taskId, tool, node, state: "running", unit: null, cancellable: true, num: nextNum() };
+  node.dataset.n = rec.num;
   panels.set(taskId, rec);
   track(rec);
   stage.appendChild(node);
@@ -402,7 +464,7 @@ function autoClose(rec) {
   if (!rec.closeAfter || rec.autoArmed) return;
   rec.autoArmed = true;
   const arm = () => { clearTimeout(rec.timer); if (!rec.closeAfter) return;
-                      rec.timer = setTimeout(() => { if (!rec.pinned && rec.closeAfter) remove(rec); }, rec.closeAfter * 1000); };
+                      rec.timer = setTimeout(() => { if (!rec.pinned && rec.closeAfter && rec !== focused) remove(rec); }, rec.closeAfter * 1000); };
   // Using the panel holds it: moving the pointer over it restarts the countdown, and
   // keyboard focus inside pauses it. A pointer merely resting where the panel
   // appeared doesn't count, or a panel under a still mouse would never close.
@@ -415,6 +477,7 @@ function autoClose(rec) {
 const dismissed = new Set();                    // release panels you closed: don't replay them
 function remove(rec, delay) {
   if (rec.tool === "chrysalis.release") dismissed.add(rec.taskId);
+  if (rec === focused) setFocus(null);
   setTimeout(() => {
     rec.node.classList.add("leaving");
     setTimeout(() => {
@@ -1237,28 +1300,48 @@ function connect() {
 connect();
 
 // ---------------------------------------------------------------- talking
-const cmd = document.getElementById("cmd");
 const reply = document.getElementById("reply");
 let replyTimer = null;
-function say(text) {
-  reply.textContent = text; reply.classList.remove("quiet");
-  clearTimeout(replyTimer); replyTimer = setTimeout(() => reply.classList.add("quiet"), 15000);
+// Recent exchanges. One on its own shows just the answer; several at once (you asked
+// again before the first came back) each keep their own line, so no answer overwrites another.
+const exchanges = [];
+const SHOW_MS = 15000;
+function showExchanges() {
+  const now = Date.now();
+  const live = exchanges.filter(e => e.pending || now - e.at < SHOW_MS).slice(-3);
+  clearTimeout(replyTimer);
+  if (!live.length) { reply.classList.add("quiet"); return; }
+  reply.classList.remove("quiet");
+  if (live.length === 1) reply.replaceChildren(document.createTextNode(live[0].pending ? "…" : live[0].reply));
+  else reply.replaceChildren(...live.map(e => {
+    const d = el("div", "ex" + (e.pending ? " pending" : ""));
+    if (e.text) d.append(el("div", "q", "› " + e.text + (e.about ? `  · panel ${e.about}` : "")));
+    d.append(el("div", "a", e.pending ? "…" : e.reply));
+    return d;
+  }));
+  if (!live.every(e => e.pending)) replyTimer = setTimeout(showExchanges, 1000);
+}
+function say(text) {                            // a reply that isn't to something you typed (a confirmation)
+  exchanges.push({ text: null, reply: text, pending: false, at: Date.now() });
+  showExchanges();
 }
 
 async function ask(text) {
-  document.getElementById("said").textContent = "› " + text;
-  say("…");
+  const screen = screenState();
+  const ex = { text, about: screen.focus, reply: null, pending: true, at: Date.now() };
+  exchanges.push(ex); if (exchanges.length > 12) exchanges.splice(0, exchanges.length - 12);
+  document.getElementById("said").textContent = "› " + text + (screen.focus ? `  · panel ${screen.focus}` : "");
+  showExchanges();
+  const done = t => { ex.reply = t; ex.pending = false; ex.at = Date.now(); showExchanges(); };
   try {
     const r = await fetch("/ask", { method: "POST", headers: { "Content-Type": "application/json" },
-                                    body: JSON.stringify({ text, session_id: session }) });
+                                    body: JSON.stringify({ text, session_id: session, screen }) });
     const out = await r.json();
-    if (!r.ok) { say(out.detail ? String(out.detail) : "Something went wrong."); return; }
-    session = out.session_id;
-    try { localStorage.setItem("aurelia.session", session); } catch (e) {}
-    say(out.reply || "");
+    if (!r.ok) { done(out.detail ? String(out.detail) : "Something went wrong."); return; }
+    done(out.reply || "");
     (out.needs_confirmation || []).forEach(showConfirm);
   } catch (e) {
-    say("I can't reach Aurelia right now.");
+    done("I can't reach Aurelia right now.");
   }
 }
 
@@ -1292,6 +1375,8 @@ function showConfirm(action) {
 }
 
 document.getElementById("mailchip").addEventListener("click", openMailbox);
+document.getElementById("focuschip").addEventListener("click", () => { setFocus(null); cmd.focus(); });
+stage.addEventListener("click", e => { if (e.target === stage) setFocus(null); });   // the empty space around panels
 document.getElementById("form").addEventListener("submit", e => {
   e.preventDefault();
   const text = cmd.value.trim().replace(/^\/+\s*/, "");      // a "/" typed out of habit isn't part of it
@@ -1302,7 +1387,8 @@ document.getElementById("form").addEventListener("submit", e => {
 document.addEventListener("keydown", e => {
   if (e.key === "/" && document.activeElement !== cmd) { e.preventDefault(); cmd.focus(); }
   else if (e.key === "Escape") {
-    if (document.activeElement === cmd) cmd.blur();
+    if (focused) setFocus(null);                 // first Esc lets go of the panel; the next one clears the screen
+    else if (document.activeElement === cmd) cmd.blur();
     else panels.forEach(rec => { if (rec.state !== "running") remove(rec); });
   }
 });
