@@ -18,6 +18,7 @@ import yaml
 from .docker import Docker, DockerError
 from .git import Git, GitError
 from .plan import NEVER_RECREATE, Plan, classify
+from .report import ReleaseProgress, Reporter
 from .settings import ChrysalisConfig, Settings, load_config
 from .store import Store
 from .verify import Verifier, VerifyError
@@ -37,8 +38,10 @@ def service_dir(service: str) -> str:
 
 
 class Chrysalis:
-    def __init__(self, settings: Settings, git: Git, docker: Docker, verifier: Verifier, store: Store):
+    def __init__(self, settings: Settings, git: Git, docker: Docker, verifier: Verifier, store: Store,
+                 reporter: Reporter | None = None):
         self.settings, self.git, self.docker, self.verifier, self.store = settings, git, docker, verifier, store
+        self.reporter = reporter or Reporter(None)          # None: tell no one (tests)
         self.lock = asyncio.Lock()          # one release or rollback at a time
         self.state = {"last_check": None, "last_error": None, "busy": None, "docker": None}
 
@@ -140,12 +143,13 @@ class Chrysalis:
                                           "Dry run: nothing changed. Plan: " + plan.summary())
 
             rid = await self.store.create(remote, local, author, message, paths, plan.as_dict(), "planned")
-            return await self._release(rid, local, remote, plan, cfg)
+            return await self._release(rid, local, remote, plan, cfg, author, message)
 
     async def _record(self, sha, prev, author, message, paths, plan: Plan, status, detail) -> str:
         rid = await self.store.create(sha, prev, author, message, paths, plan.as_dict(), status)
         await self.store.update(rid, status, detail, finished=True)
         log.info("%s %s: %s", status, sha[:8], detail)
+        await self.reporter.release(rid, sha, author, message, plan.services).finish(status, detail)
         return f"{status}: {detail}"
 
     async def _invalid_config(self, sha: str, plan: Plan) -> str | None:
@@ -170,22 +174,42 @@ class Chrysalis:
 
     # ---- a release -------------------------------------------------------------
 
-    async def _release(self, rid: int, prev: str, sha: str, plan: Plan, cfg: ChrysalisConfig) -> str:
+    def _steps(self, plan: Plan, targets: list[str]) -> tuple[list[str], str]:
+        """The steps a release will go through, as the display shows them."""
+        build = "Building " + (", ".join(t for t in targets if t != "migrate") or "images")
+        steps = ["Getting the new version"] + [f"Testing {s}" for s in plan.services]
+        if targets:
+            steps.append(build)
+        if plan.migrate or plan.compose:
+            steps.append("Migrating the database")
+        steps += ["Applying the new stack"] if plan.compose else [f"Swapping in {s}" for s in plan.services]
+        steps += ["Verifying", "Watching for crash loops"] if plan.needs_deploy else ["Applying config"]
+        return steps, build
+
+    async def _release(self, rid: int, prev: str, sha: str, plan: Plan, cfg: ChrysalisConfig,
+                       author: str = "", message: str = "") -> str:
         self.state["busy"] = f"release {sha[:8]}"
         deployed: list[str] = []
         stage = "testing"
+        progress = self.reporter.release(rid, sha, author, message, plan.services)
         try:
+            await progress.at("Getting the new version")
             expected = await self.verifier.functions()
             await self.git.fast_forward(sha)          # config hot-reloads from here
 
+            known = await self.docker.compose_services()
+            targets = built_services(known) if plan.compose else plan.services + (["migrate"] if plan.migrate else [])
+            steps, build_step = self._steps(plan, targets)
+            progress.plan(steps)
+
             await self.store.update(rid, "testing")
             for svc in plan.services:
+                await progress.at(f"Testing {svc}")
                 if await self.docker.has_test_stage(service_dir(svc)):
                     await self.docker.test(service_dir(svc))
 
-            known = await self.docker.compose_services()
-            targets = built_services(known) if plan.compose else plan.services + (["migrate"] if plan.migrate else [])
             if targets:
+                await progress.at(build_step)
                 # Save what's running now under the current commit before building over it,
                 # so a rollback always has the exact previous images to return to.
                 for svc in targets:
@@ -198,29 +222,35 @@ class Chrysalis:
             stage = "deploying"
             await self.store.update(rid, "deploying")
             if plan.migrate or plan.compose:
+                await progress.at("Migrating the database")
                 await self.docker.migrate()
             if plan.compose:
+                await progress.at("Applying the new stack")
                 stack = sorted(known - NEVER_RECREATE - {"migrate"})
                 deployed = [s for s in built_services(known) if s != "migrate"]
                 await self.docker.apply_stack(stack)
             else:
                 for svc in plan.services:
+                    await progress.at(f"Swapping in {svc}")
                     deployed.append(svc)
                     await self.docker.swap(svc)
 
             if plan.needs_deploy:
                 stage = "verifying"
                 await self.store.update(rid, "verifying")
+                await progress.at("Verifying")
                 passed = await self.verifier.run(cfg.verify, expected)
-                await self._watch(deployed, cfg.verify.watch_seconds)
+                await self._watch(deployed, cfg.verify.watch_seconds, progress)
                 passed.append(f"no crash loops for {cfg.verify.watch_seconds:.0f}s")
             else:
+                await progress.at("Applying config")
                 passed = ["no services to rebuild"]
 
-            await self.store.update(rid, "live", f"{plan.summary()}. Checks: {'; '.join(passed)}."
-                                    + (" " + " ".join(plan.notes) if plan.notes else ""), finished=True)
+            detail = f"{plan.summary()}. Checks: {'; '.join(passed)}." + (" " + " ".join(plan.notes) if plan.notes else "")
+            await self.store.update(rid, "live", detail, finished=True)
             await self._prune(cfg.keep_releases)
             log.info("release %s live", sha[:8])
+            await progress.finish("live", detail)
             return f"live: {plan.summary()}"
         except Exception as exc:   # DockerError, GitError, VerifyError or anything unexpected
             detail = f"Failed while {stage}: {exc}"
@@ -246,14 +276,18 @@ class Chrysalis:
                     detail += f" Re-applying the previous stack failed: {stack_exc}"
             await self.store.update(rid, status, detail, finished=True)
             log.error("release %s %s: %s", sha[:8], status, detail)
+            await progress.finish(status, detail)
             return f"{status}: {detail}"
         finally:
             self.state["busy"] = None
 
-    async def _watch(self, services: list[str], seconds: float) -> None:
+    async def _watch(self, services: list[str], seconds: float, progress: ReleaseProgress | None = None) -> None:
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + seconds
+        start = loop.time()
+        deadline = start + seconds
         while loop.time() < deadline:
+            if progress:
+                await progress.watching(loop.time() - start, seconds, "Watching for crash loops")
             for svc in services:
                 states = await self.docker.health(svc)
                 if not states or any(s in ("unhealthy", "exited") for s in states):

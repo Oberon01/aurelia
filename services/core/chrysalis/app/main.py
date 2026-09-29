@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from .docker import Docker
 from .git import Git
 from .pipeline import Chrysalis
+from .report import Reporter
 from .settings import Settings
 from .store import Store
 from .verify import Verifier
@@ -44,7 +45,7 @@ REGISTRATION = {
 async def lifespan(app: FastAPI):
     pool = await asyncpg.create_pool(settings.database_url, min_size=1, max_size=4)
     app.state.chrysalis = Chrysalis(settings, Git(settings.repo_path), Docker(settings.repo_path, settings.project),
-                                    Verifier(settings.orchestrator_url), Store(pool))
+                                    Verifier(settings.orchestrator_url), Store(pool), Reporter(settings.orchestrator_url))
     try:
         await app.state.chrysalis.ensure_baseline()
     except Exception:

@@ -312,3 +312,48 @@ def test_failed_stack_change_restores_previous_stack_and_removes_new_services(wo
     applies = [c for c in world["docker"].calls if c[0] == "apply_stack"]
     assert applies[0][2] is False and applies[-1][2] is True          # deploy, then restore with orphans removed
     assert server_head(world) == before
+
+
+# ---- what the display is told ---------------------------------------------------
+
+class RecordingReporter:
+    def __init__(self):
+        from app.report import Reporter
+        self.sent = []
+        self._real = Reporter(None)
+
+    async def send(self, state):
+        self.sent.append(state)
+
+    def release(self, *a, **k):
+        from app.report import ReleaseProgress
+        return ReleaseProgress(self, *a, **k)
+
+
+def test_release_progress_is_reported_step_by_step(world):
+    rec = world["c"].reporter = RecordingReporter()
+    sha = world["commit"]("services/functions/probe/main.py", "v2\n", "probe v2\n\nlonger body")
+    assert run(world).startswith("live")
+    labels = [s.get("label") for s in rec.sent if "label" in s]
+    assert labels[0] == "Getting the new version"
+    for step in ("Testing probe", "Building probe", "Swapping in probe", "Verifying"):
+        assert step in labels
+    assert any(l.startswith("Watching for crash loops · ") for l in labels)
+    last = rec.sent[-1]
+    assert last["outcome"] == "live" and last["current"] == last["total"] == 6
+    assert last["sha"] == sha[:8] and last["message"] == "probe v2"
+    currents = [s["current"] for s in rec.sent if s.get("total")]
+    assert currents == sorted(currents)                    # the bar only moves forward
+
+
+def test_rollback_and_held_releases_are_reported(world):
+    rec = world["c"].reporter = RecordingReporter()
+    world["verifier"].fail = True
+    world["commit"]("services/functions/probe/main.py", "v2\n", "probe v2")
+    run(world)
+    assert rec.sent[-1]["outcome"] == "rolled_back" and "Rolled back probe" in rec.sent[-1]["detail"]
+    rec.sent.clear()
+    world["verifier"].fail = False
+    world["commit"]("config/aurelia.yaml", "llm: {max_tool_rounds: 2}\n", "aurelia idea", author="aurelia@local")
+    run(world, ChrysalisConfig(dry_run=False, hold_authors=["aurelia@local"], verify=VerifyConfig(watch_seconds=0.2)))
+    assert [s["outcome"] for s in rec.sent] == ["held"]

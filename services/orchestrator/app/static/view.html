@@ -64,6 +64,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 .stage.n1 .panel .title{font-size:26px}
 .scroll{min-height:0;flex:1 1 auto;overflow-y:auto;margin-right:-10px;padding-right:10px;scrollbar-width:thin;scrollbar-color:rgba(95,212,230,.35) transparent}
 .scroll::-webkit-scrollbar{width:6px}.scroll::-webkit-scrollbar-thumb{background:rgba(95,212,230,.35);border-radius:3px}
+.rail[hidden]{display:none}
 .rail{min-height:0;display:flex;flex-direction:column;gap:8px;overflow-y:auto;padding:4px 0}
 .rail-head{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--ink-faint);padding:4px 2px}
 .qchip{display:flex;align-items:stretch;border:1px dashed var(--cyan-soft);border-radius:8px;background:rgba(95,212,230,.03);flex-shrink:0}
@@ -220,7 +221,8 @@ const TITLES = {
   "orbit.aliases": "Nicknames", "orbit.forget_alias": "Nickname", "orbit.tv_status": "TV",
   "orbit.tv_power": "TV", "orbit.tv_input": "TV input", "orbit.tv_inputs": "TV inputs", "orbit.tv_app": "TV",
   "orbit.tv_apps": "TV apps", "orbit.tv_remote": "TV remote", "orbit.tv_mute": "TV sound",
-  "orbit.tv_discover": "Finding TVs", "probe.echo": "Echo", "probe.functions": "Functions", "probe.function": "Function", "chrysalis.status": "Updates",
+  "orbit.tv_discover": "Finding TVs", "probe.echo": "Echo", "probe.functions": "Functions", "probe.function": "Function",
+  "chrysalis.release": "New release detected!", "chrysalis.status": "Updates",
   "chrysalis.releases": "Releases", "chrysalis.rollback": "Rollback", "chrysalis.approve": "Release approval",
 };
 function titleFor(tool) {
@@ -337,7 +339,9 @@ function autoClose(rec) {
   arm();
 }
 
+const dismissed = new Set();                    // release panels you closed: don't replay them
 function remove(rec, delay) {
+  if (rec.tool === "chrysalis.release") dismissed.add(rec.taskId);
   setTimeout(() => {
     rec.node.classList.add("leaving");
     setTimeout(() => {
@@ -366,6 +370,7 @@ function renderProgress(rec, p) {
   const pct = known ? Math.max(0, Math.min(100, Math.round(100 * p.current / p.total))) : null;
   head.append(el("div", "meta", pct !== null ? `${pct}%` : ""));
   n.append(head);
+  if (rec.subtitle) n.append(el("div", "msg", rec.subtitle));
   const bar = el("div", "bar" + (known ? "" : " unknown"));
   const fill = el("div", "fill");
   if (known) fill.style.width = pct + "%";
@@ -374,7 +379,10 @@ function renderProgress(rec, p) {
   if (p) {
     const unit = p.unit || rec.unit || "";
     const row = el("div", "row");
-    row.append(el("span", null, known ? `${fmt(p.current)} / ${fmt(p.total)} ${unit}`.trim() : `${fmt(p.current)} ${unit}`.trim()));
+    const stepText = unit === "steps" && known
+      ? `Step ${Math.min(p.total, Math.floor(p.current) + 1)} of ${p.total}`
+      : known ? `${fmt(p.current)} / ${fmt(p.total)} ${unit}`.trim() : `${fmt(p.current)} ${unit}`.trim();
+    row.append(el("span", null, stepText));
     n.append(row);
     if (p.label) n.append(el("div", "label", p.label));
   }
@@ -410,7 +418,7 @@ function renderResult(rec, data, memo) {
     if (words.length) meta.append(el("span", "age" + (memo.stale && !memo.updated ? " stale" : ""), words.join(" · ")));
   }
   const pinId = memo && memo.taskId ? memo.taskId : rec.latestTask;
-  if (pinId && !String(pinId).startsWith("confirm-")) meta.append(pinButton(pinId, rec.pinned || (memo && memo.tier === "pinned")));
+  if (pinId && !/^(confirm|release)-/.test(String(pinId))) meta.append(pinButton(pinId, rec.pinned || (memo && memo.tier === "pinned")));
   head.append(meta);
   n.append(head);
   if (memo && memo.refreshing) { const r = el("div", "refresh"); r.append(el("div", "fill")); n.append(r); }
@@ -441,6 +449,7 @@ function pinButton(taskId, pinned) {
 }
 
 function resultTitle(tool, d) {
+  if (typeof d.title === "string") return d.title;
   if (typeof d.function === "string") return d.function;
   if (d.kind && d.name) return d.name;
   if (typeof d.device === "string") return d.device;
@@ -472,6 +481,7 @@ function body(tool, d) {
     wrap.append(el("div", "msg", d.muted ? "Muted." : "Sound on.")); ["device", "muted"].forEach(k => used.add(k));
   }
   if (Array.isArray(d.releases)) { wrap.append(releases(d.releases)); used.add("releases"); }
+  if (d.release && typeof d.release === "object") { wrap.append(releaseOutcome(d.release)); used.add("release"); used.add("title"); }
   if (Array.isArray(d.functions)) { wrap.append(functionCards(d.functions)); used.add("functions"); }
   if (typeof d.function === "string") { wrap.append(functionDetail(d)); ["function", "state", "state_text", "purpose", "health", "rate_limit", "tools", "last_seen"].forEach(k => used.add(k)); }
   if (Array.isArray(d.inputs)) {
@@ -537,6 +547,19 @@ function functionDetail(d) {
     tools.append(row);
   });
   box.append(tools);
+  return box;
+}
+
+// One release, as it finished: what it was, and what happened.
+function releaseOutcome(r) {
+  const box = el("div"); box.style.display = "flex"; box.style.flexDirection = "column"; box.style.gap = "10px";
+  const tone = { live: "online", rolled_back: "offline", failed: "offline", held: "disabled" }[r.outcome] || "planned";
+  const words = { live: "live", rolled_back: "rolled back", failed: "failed", held: "waiting for approval", dry_run: "dry run" }[r.outcome] || r.outcome;
+  const top = el("div", "head"); top.style.justifyContent = "flex-start"; top.append(statusPill(tone, words));
+  box.append(top);
+  if (r.message) box.append(el("div", "msg", r.message));
+  box.append(el("div", "facts", [r.sha, r.author, (r.services || []).join(" · ") || null].filter(Boolean).join(" · ")));
+  if (r.detail) box.append(el("div", ["rolled_back", "failed"].includes(r.outcome) ? "error" : "facts", r.detail));
   return box;
 }
 
@@ -740,7 +763,8 @@ function onEvent(ev) {
       if (d.trigger === "refresh") { hidden.add(id); return; }      // its panel was closed meanwhile
       rec = rec || makePanel(id, ev.tool);
       Object.assign(rec, { unit: d.unit || null, cancellable: d.cancellable !== false, closeAfter: d.close_after || null,
-                           key: d.key, args: d.args || {}, refreshes: d.refreshes || [], tier: d.tier });
+                           key: d.key, args: d.args || {}, refreshes: d.refreshes || [], tier: d.tier,
+                           subtitle: d.subtitle || null });
       if (d.snapshot) {                              // memory: show the last panel now, refresh behind it
         const sn = d.snapshot;
         rec.state = "refreshing";
@@ -794,6 +818,7 @@ function onEvent(ev) {
       } else if (rec.state === "running") {
         rec.state = "reading";
       }
+      if (d.close_after !== undefined) rec.closeAfter = d.close_after;
       if (d.status !== "failed" && rec.state === "reading" && rec.taskId === id) autoClose(rec);
       // An action finished: re-run the look-ups it changes that the merge didn't already update.
       if (d.status === "completed" && rec.taskId === id && (rec.refreshes || []).length)
@@ -829,6 +854,18 @@ function reopenAfterReload() {
   list.forEach(t => fetch("/tasks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(t) }).catch(() => {}));
 }
 
+// A release may be under way (the orchestrator itself may be what's being swapped,
+// which is why we were disconnected): pick its panel back up from where it is.
+async function catchUpOnRelease() {
+  try {
+    const { events } = await (await fetch("/releases/current", { cache: "no-store" })).json();
+    if (!events || !events.length) return;
+    const id = events[0].task_id, rec = panels.get(id);
+    if (dismissed.has(id) || (rec && rec.state !== "running")) return;           // already showing how it ended
+    events.forEach(e => { if (!(e.type === "panel.open" && panels.has(id))) onEvent(e); });
+  } catch (e) { /* nothing to catch up on */ }
+}
+
 function connect() {
   const conn = document.getElementById("conn");
   ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
@@ -836,6 +873,7 @@ function connect() {
     backoff = 1000; conn.className = "conn live"; relayout();
     if (connectedBefore) reloadIfUpdated(); else reopenAfterReload();
     connectedBefore = true;
+    catchUpOnRelease();
   };
   ws.onmessage = m => { try { onEvent(JSON.parse(m.data)); } catch (e) { console.warn("bad event", e); } };
   ws.onclose = () => {

@@ -279,6 +279,15 @@ GitHub and releases every new commit by itself:
 5. Goes live, or restores the previous images **and** the previous commit.
    A failed commit is never retried; the next commit is.
 
+Each release shows on the display as a **"New release detected!"** panel: the
+commit message and a progress bar through testing, building, migrating, the
+swap, verification and the crash-loop watch (with a countdown). It ends as
+"Release live" (fades after 20 s), "Release rolled back" or "Release failed"
+with the reason (stays), or "Release waiting for approval". Chrysalis reports
+each step to the orchestrator (`POST /releases/progress`), which keeps the
+latest in Redis, so a display that reconnects mid-release (the orchestrator may
+be what's being swapped) picks the panel back up where it is.
+
 The last 5 good releases keep their images, so rollback takes seconds. Every
 decision is recorded in the `releases` table. Your commits deploy
 automatically; commits by anyone in `hold_authors` (Aurelia's identity, later)

@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
-from . import assistant, db, memory, registry, tasks
+from . import assistant, db, memory, registry, releases, tasks
 from .config import ConfigStore
 from .events import CHANNEL
 from .governance import GovernanceStore
@@ -52,6 +52,7 @@ app = FastAPI(title="Aurelia Orchestrator", version="0.2.0", lifespan=lifespan)
 app.include_router(tasks.router)
 app.include_router(assistant.router)
 app.include_router(memory.router)
+app.include_router(releases.router)
 
 
 VIEW = Path(__file__).parent / "static" / "view.html"
