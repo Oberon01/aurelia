@@ -17,7 +17,7 @@ space-themed name. Tools are addressed as `<function>.<tool>`.
 | Function | Domain | Example tools | Status |
 | --- | --- | --- | --- |
 | `probe` | Diagnostics, testing Aurelia herself | `probe.echo`, `probe.functions`, `probe.function` | Built (reference) |
-| `nebula` | The web (the cloud) | `nebula.search`, `nebula.download`, `nebula.open` | Planned, policy drafted |
+| `nebula` | The web: search (web and YouTube), read pages, download files, open links | `nebula.search`, `nebula.youtube`, `nebula.read`, `nebula.download`, `nebula.open` | Built |
 | `constellation` | Devices and shared computer access | `constellation.search_files`, `constellation.open` | Planned, policy drafted |
 | `orbit` | Smart home: SmartRent (locks, lights, thermostat, sensors) and Roku TVs | `orbit.status`, `orbit.lock`, `orbit.unlock`, `orbit.light`, `orbit.thermostat`, `orbit.login`, `orbit.alias`, `orbit.tv_power`, `orbit.tv_input`, `orbit.tv_inputs`, `orbit.tv_app`, `orbit.tv_remote`, `orbit.tv_mute` | Built |
 | `kepler` | Scholar: research, summaries, knowledge base | | Planned |
@@ -138,6 +138,44 @@ The orchestrator serves it at `/view`; it only renders the panel events from
 them (how they should leave is still an open decision). Chrysalis's own smoke
 tests are hidden. This is the Phase 2 minimum; the installable overlay app
 comes with Constellation (Phase 7).
+
+## Nebula: the web
+
+Nebula runs on the server with no browser. It searches, reads pages as text
+and downloads files; results show as panels, and links open in a new tab on
+the device you're using (opening on a chosen screen comes with Constellation).
+
+| Say | Does |
+| --- | --- |
+| `look up who Ada Lovelace was` | Aurelia searches, reads the best results, answers and names her sources |
+| `search for best ramen in dallas` | A results panel (title, site, snippet, link) |
+| `search youtube for frieren ost` | Videos with length, views and date; click to watch |
+| `read https://…` | The page's main text, without menus or ads |
+| `download https://…` | Saves to `data/downloads/` on the server, with progress in MB |
+| `open https://…` | A link to open here |
+
+**Setup (once, on the server's `.env`):**
+
+- `BRAVE_API_KEY`: sign up at [api-dashboard.search.brave.com](https://api-dashboard.search.brave.com),
+  choose the Search plan (about $5 per 1,000 searches, with $5 of free credit a
+  month; it needs a card), and create a key.
+- `YOUTUBE_API_KEY`: in the [Google Cloud console](https://console.cloud.google.com),
+  create a project, enable **YouTube Data API v3**, then Credentials → Create
+  credentials → API key (restrict it to that API). The free daily allowance
+  covers about 100 searches a day.
+
+Add both before pushing Nebula, or run `docker compose up -d nebula` after
+adding them later (keys are read when the container starts). Without a key,
+that search says it isn't set up yet; reading and downloading still work.
+
+**Safety.** Every request and every redirect is checked: Nebula only reaches
+the public web, never your router, this server or Aurelia's own services
+(exceptions: `network.allow_private` in its policy). Page text is data, never
+instructions. Files that can run programs (`.exe`, `.sh`, …) go to
+`data/downloads/quarantine/`, and nothing downloaded is opened or run
+automatically. Blocked and confirm-first domains, size limits and search
+settings (Brave or a self-hosted SearXNG) are in
+`config/governance/functions/nebula.yaml`.
 
 ## Mailbox and morning digest
 
@@ -441,6 +479,8 @@ services/orchestrator/       the brain (FastAPI)
 services/functions/probe/    reference function (tool: echo)
 services/functions/orbit/    smart home (SmartRent, Roku TV)
 services/functions/parallax/ analytics on task history → mailbox proposals, morning digest
+services/functions/nebula/   the web: search, YouTube, read, download, open
+data/downloads/              Nebula's downloads (not in git)
 services/core/chrysalis/     update system (protected core)
 config/chrysalis.yaml        Chrysalis settings: dry run, polling, held authors, checks
 ```

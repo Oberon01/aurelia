@@ -197,9 +197,15 @@ async def _run_tool_call(app, user: str, qualified: str | None, args: dict, out:
                   "result": result["result"], "error": result["error"]}), result["status"] == "failed"
 
 
+MAX_TOOL_OUTPUT = 40_000     # characters handed to the model per tool call; the panel shows everything
+
+
 def _data(payload: dict) -> str:
     """Tool output is wrapped so the model reads it as data, never as instructions."""
-    return "<tool_output>\n" + json.dumps(payload, default=str) + "\n</tool_output>"
+    text = json.dumps(payload, default=str)
+    if len(text) > MAX_TOOL_OUTPUT:
+        text = text[:MAX_TOOL_OUTPUT] + ' …(cut here; the full result is on the display)"'
+    return "<tool_output>\n" + text + "\n</tool_output>"
 
 
 async def _tool_defs(app, user: str) -> tuple[list[ToolDef], dict[str, str], list[dict]]:

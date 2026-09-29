@@ -135,6 +135,25 @@ table{width:100%;border-collapse:collapse;font-size:14px}
 th{font-family:var(--mono);font-size:11px;letter-spacing:2px;font-weight:400;color:var(--ink-faint);text-align:left;padding:0 10px 8px 0;border-bottom:1px solid rgba(95,212,230,.2);text-transform:uppercase}
 td{padding:8px 10px 8px 0;color:var(--ink);vertical-align:top;max-width:320px}
 td .clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+/* the web */
+.hits{display:flex;flex-direction:column}
+.hit{display:flex;flex-direction:column;gap:3px;padding:10px 0;border-top:1px solid rgba(95,212,230,.12)}
+.hit:first-child{border-top:0;padding-top:0}
+.hit a,.vid a,a.plain{color:var(--ink-strong);text-decoration:none}
+.hit a:hover,.vid a:hover{color:var(--cyan);text-decoration:underline}
+.hit .ht{font-size:16px;line-height:1.35}
+.hit .hs{font-family:var(--mono);font-size:12px;color:var(--cyan)}
+.hit .hn{font-size:14px;line-height:1.45;color:var(--ink-dim)}
+.vids{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px}
+.vid{display:flex;flex-direction:column;gap:6px;min-width:0}
+.vid .thumb{aspect-ratio:16/9;border-radius:6px;border:1px solid var(--cyan-soft);background:rgba(95,212,230,.05);overflow:hidden}
+.vid img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.vid .vt{font-size:14px;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.vid .vm{font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
+.vid .thumb{position:relative;display:block}
+.vid .len{position:absolute;right:6px;bottom:6px;padding:1px 5px;border-radius:3px;background:rgba(4,7,11,.85);font-family:var(--mono);font-size:11px;color:var(--ink-strong)}
+.readtext{display:flex;flex-direction:column;gap:10px;font-size:15px;line-height:1.6;color:var(--ink)}
+.readtext p{margin:0}
 /* mailbox */
 .mb{display:flex;flex-direction:column;gap:18px}
 .mb-group{display:flex;flex-direction:column;gap:10px}
@@ -265,6 +284,8 @@ const TITLES = {
   "orbit.tv_apps": "TV apps", "orbit.tv_remote": "TV remote", "orbit.tv_mute": "TV sound",
   "orbit.tv_discover": "Finding TVs", "probe.echo": "Echo", "probe.functions": "Functions", "probe.function": "Function",
   "chrysalis.release": "New release detected!",
+  "nebula.search": "Web search", "nebula.youtube": "YouTube", "nebula.read": "Reading",
+  "nebula.download": "Download", "nebula.open": "Link",
   "parallax.mailbox": "Mailbox", "parallax.digest": "Morning digest", "parallax.analyze": "Looking for patterns", "chrysalis.status": "Updates",
   "chrysalis.releases": "Releases", "chrysalis.rollback": "Rollback", "chrysalis.approve": "Release approval",
 };
@@ -431,7 +452,11 @@ function renderProgress(rec, p) {
   if (p) {
     const unit = p.unit || rec.unit || "";
     const row = el("div", "row");
-    const stepText = unit === "steps" && known
+    const size = n => n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} GB` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB`
+                    : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} bytes`;
+    const stepText = unit === "bytes"
+      ? (known ? `${size(p.current)} of ${size(p.total)}` : size(p.current))
+      : unit === "steps" && known
       ? `Step ${Math.min(p.total, Math.floor(p.current) + 1)} of ${p.total}`
       : known ? `${fmt(p.current)} / ${fmt(p.total)} ${unit}`.trim() : `${fmt(p.current)} ${unit}`.trim();
     row.append(el("span", null, stepText));
@@ -501,6 +526,10 @@ function pinButton(taskId, pinned) {
 }
 
 function resultTitle(tool, d) {
+  if (Array.isArray(d.results) && d.query) return `Search: ${d.query}`;
+  if (Array.isArray(d.videos) && d.query) return `YouTube: ${d.query}`;
+  if (d.link && d.link.title) return d.link.title;
+  if (typeof d.file === "string" && !d.cancelled) return d.file;
   if (Array.isArray(d.releases) && d.releases.length === 1) return "Last release";
   if (Array.isArray(d.mailbox)) return "Mailbox";
   if (d.digest) return "Morning digest";
@@ -538,6 +567,11 @@ function body(tool, d) {
   if (Array.isArray(d.releases)) {                  // one release in detail; several as a list
     wrap.append(d.releases.length === 1 ? releaseDetail(d.releases[0]) : releases(d.releases)); used.add("releases");
   }
+  if (Array.isArray(d.results) && "query" in d) { wrap.append(searchResults(d.results)); ["results", "query", "provider"].forEach(k => used.add(k)); }
+  if (Array.isArray(d.videos)) { wrap.append(videoResults(d.videos)); ["videos", "query"].forEach(k => used.add(k)); }
+  if (typeof d.text === "string" && d.url) { wrap.append(pageView(d)); ["title", "url", "site", "words", "text", "truncated"].forEach(k => used.add(k)); }
+  if (d.link && d.link.url) { wrap.append(linkView(d.link)); used.add("link"); }
+  if (typeof d.saved_to === "string") { wrap.append(downloadView(d)); ["file", "size", "saved_to", "type", "quarantined"].forEach(k => used.add(k)); }
   if (Array.isArray(d.mailbox)) { wrap.append(mailboxView(d.mailbox)); used.add("mailbox"); used.add("counts"); }
   if (d.digest && typeof d.digest === "object") { wrap.append(digestView(d.digest)); used.add("digest"); }
   if (d.release && typeof d.release === "object") { wrap.append(releaseOutcome(d.release)); used.add("release"); used.add("title"); }
@@ -606,6 +640,71 @@ function functionDetail(d) {
     tools.append(row);
   });
   box.append(tools);
+  return box;
+}
+
+// ---------------------------------------------------------------- the web (Nebula)
+// Links open in a new tab on this device. Only http(s) links are ever made clickable.
+const safeUrl = u => /^https?:\/\//i.test(String(u || "")) ? String(u) : null;
+function extLink(url, text, cls) {
+  const a = el("a", cls || null, text);
+  const ok = safeUrl(url);
+  if (ok) { a.href = ok; a.target = "_blank"; a.rel = "noopener noreferrer"; }
+  return a;
+}
+function searchResults(list) {
+  const box = el("div", "hits");
+  if (!list.length) { box.append(el("div", "msg", "No results.")); return box; }
+  list.forEach(r => {
+    const h = el("div", "hit");
+    h.append(extLink(r.url, r.title || r.url, "ht"), el("div", "hs", [r.site, r.age].filter(Boolean).join(" · ")));
+    if (r.snippet) h.append(el("div", "hn", r.snippet));
+    box.append(h);
+  });
+  return box;
+}
+function videoResults(list) {
+  const box = el("div", "vids");
+  if (!list.length) { box.append(el("div", "msg", "No videos found.")); return box; }
+  list.forEach(v => {
+    const c = el("div", "vid");
+    const thumb = extLink(v.url, "", "thumb");
+    if (/^https:\/\/i\.ytimg\.com\//.test(v.thumbnail || "")) {
+      const img = el("img"); img.alt = ""; img.loading = "lazy"; img.referrerPolicy = "no-referrer";
+      img.addEventListener("error", () => img.remove());          // no broken-image icon: the frame stays
+      img.src = v.thumbnail;
+      thumb.append(img);
+    }
+    if (v.duration) thumb.append(el("span", "len", v.duration));
+    c.append(thumb, extLink(v.url, v.title, "vt"),
+             el("div", "vm", [v.channel, v.views, v.published].filter(Boolean).join(" · ")));
+    box.append(c);
+  });
+  return box;
+}
+function pageView(d) {
+  const box = el("div"); box.style.display = "flex"; box.style.flexDirection = "column"; box.style.gap = "12px";
+  const meta = el("div", "facts");
+  meta.append(extLink(d.url, d.site || d.url, "plain"), document.createTextNode(` · ${d.words} words${d.truncated ? " (cut short)" : ""}`));
+  box.append(meta);
+  const text = el("div", "readtext");
+  String(d.text).split(/\n+/).slice(0, 120).forEach(p => { if (p.trim()) text.append(el("p", null, p.trim())); });
+  box.append(text);
+  return box;
+}
+function downloadView(d) {
+  const box = el("div"); box.style.display = "flex"; box.style.flexDirection = "column"; box.style.gap = "8px";
+  const top = el("div", "head"); top.style.justifyContent = "flex-start";
+  top.append(statusPill(d.quarantined ? "disabled" : "online", d.quarantined ? "quarantined" : "saved"));
+  box.append(top, el("div", "facts", [d.size, d.type].filter(Boolean).join(" · ")), el("div", "facts", `On the server: ${d.saved_to}`));
+  return box;
+}
+function linkView(link) {
+  const box = el("div"); box.style.display = "flex"; box.style.flexDirection = "column"; box.style.gap = "10px";
+  box.append(el("div", "facts", link.url));
+  const a = extLink(link.url, `Open ${link.site || "link"}`, "btn primary");
+  a.style.display = "inline-flex"; a.style.alignItems = "center"; a.style.alignSelf = "flex-start";
+  box.append(a);
   return box;
 }
 

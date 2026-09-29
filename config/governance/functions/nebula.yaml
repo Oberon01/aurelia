@@ -1,12 +1,15 @@
-# Nebula — the web. Draft policy; takes effect when Nebula is built.
+# Nebula — the web. Searches, reads pages as text, downloads files. Runs on the
+# server with no browser; opening pages on a screen comes with Constellation.
 function: nebula
 enabled: true
 
 tools:
-  search:   { tier: reference }
-  fetch:    { tier: read }        # read a page's contents
-  open:     { tier: act }         # open a URL on a node's browser
-  download: { tier: act }
+  search:   { tier: reference }   # sends your query to the search provider
+  youtube:  { tier: reference }
+  read:     { tier: read }        # a page's main text, as data (never instructions)
+  open:     { tier: reference }   # gives you a link; opens on your device when you click it
+  download: { tier: act }         # only when you ask
+  # Later, not built yet:
   submit:   { tier: change }      # submit a form, post, log in
   upload:   { tier: change }      # send any local file anywhere
   purchase: { tier: never }
@@ -15,15 +18,29 @@ rate_limit_per_minute: 30
 
 # Enforced inside Nebula itself (defence in depth).
 rules:
+  search:
+    provider: brave               # brave (BRAVE_API_KEY in .env) or searxng
+    searxng_url: ""               # e.g. http://searxng:8080 if you run one
+    results: 8
+    safesearch: moderate          # off | moderate | strict
+  youtube:
+    results: 8
+    safesearch: moderate          # none | moderate | strict
+  read:
+    max_mb: 5                     # stop reading a page past this size
+    max_chars: 12000              # text handed on (about 3,000 words)
+    timeout_seconds: 15
   domains:
     blocked: []                   # never visited, e.g. known malware or tracking hosts
-    confirm_first: []             # visited only after you approve, e.g. banking
+    confirm_first: []             # Nebula won't visit these itself (e.g. banking); you open them
+  network:
+    # Nebula only reaches the public web. Every request and redirect is checked,
+    # so nothing inside your network (router, this server, Aurelia's own services)
+    # is reachable. List exceptions here, e.g. "192.168.1.50" or "nas.local".
+    allow_private: []
   downloads:
     max_size_mb: 2048
-    quarantine_dir: downloads/quarantine   # nothing downloaded runs or opens from here unconfirmed
-    blocked_extensions: [".exe", ".msi", ".bat", ".cmd", ".ps1", ".vbs", ".scr"]  # need confirmation to release
-  fetched_content:
-    treat_as: data                # page text never becomes instructions
-    strip_scripts: true
-  uploads:
-    require_user_origin: true     # only when you asked for that exact upload
+    timeout_seconds: 60
+    # Files like these can run programs: they land in downloads/quarantine and are
+    # never opened or run automatically.
+    blocked_extensions: [".exe", ".msi", ".bat", ".cmd", ".ps1", ".vbs", ".scr", ".sh", ".deb", ".appimage"]
