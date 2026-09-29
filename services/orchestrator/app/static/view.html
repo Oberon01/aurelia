@@ -380,7 +380,8 @@ function makePanel(taskId, tool) {
 function autoClose(rec) {
   if (!rec.closeAfter || rec.autoArmed) return;
   rec.autoArmed = true;
-  const arm = () => { clearTimeout(rec.timer); rec.timer = setTimeout(() => { if (!rec.pinned) remove(rec); }, rec.closeAfter * 1000); };
+  const arm = () => { clearTimeout(rec.timer); if (!rec.closeAfter) return;
+                      rec.timer = setTimeout(() => { if (!rec.pinned && rec.closeAfter) remove(rec); }, rec.closeAfter * 1000); };
   rec.node.addEventListener("mouseenter", () => clearTimeout(rec.timer));
   rec.node.addEventListener("mouseleave", arm);
   rec.node.addEventListener("focusin", () => clearTimeout(rec.timer));
@@ -998,6 +999,11 @@ function onEvent(ev) {
       if (rec.taskId !== id && !rec.queued) rec.touched = Date.now();   // asked again: keep it in view
       rec.memo = null;                               // fresh data replaces a restored or older panel
       renderResult(rec, d);
+      if (Array.isArray(d.mailbox)) {                // an empty mailbox closes itself; a new item keeps it open
+        clearTimeout(rec.timer);
+        rec.closeAfter = d.mailbox.length ? null : 3;
+        if (!d.mailbox.length) { rec.autoArmed = false; autoClose(rec); }
+      }
       if (wasShowing) flash(rec);
       rec.merged = applyEntities(rec, entitiesOf(d));
       break;
