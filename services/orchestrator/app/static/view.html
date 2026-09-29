@@ -43,20 +43,41 @@ button{font:inherit;color:inherit;cursor:pointer}
 .reply.quiet{opacity:0;max-height:0;padding:0}
 
 /* ---- the stage ---- */
-.stage{position:relative;min-height:0;margin:0 40px;display:flex;flex-wrap:wrap;align-items:flex-start;align-content:safe center;justify-content:safe center;gap:24px;overflow-y:auto;padding:4px}
-.panel{position:relative;width:380px;padding:22px 24px;border:1px solid var(--cyan-soft);border-radius:10px;background:rgba(95,212,230,.04);display:flex;flex-direction:column;gap:14px;
+/* Up to 4 panels share the screen (1 large, 2 side by side, 3-4 in a 2x2 grid);
+   each scrolls inside itself. The rest wait as chips in the rail. */
+.floor{min-height:0;margin:0 40px;display:grid;grid-template-columns:minmax(0,1fr);gap:20px}
+.floor.has-queue{grid-template-columns:minmax(0,1fr) 220px}
+.stage{min-height:0;display:grid;gap:20px;padding:4px;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr))}
+.stage.n0,.stage.n1{grid-template-columns:minmax(0,880px);grid-template-rows:minmax(0,1fr);justify-content:center}
+.stage.n2{grid-template-rows:minmax(0,1fr)}
+.stage.n1 .panel,.stage.n2 .panel{align-self:center}
+.stage.n3 .panel,.stage.n4 .panel{align-self:start}
+.panel{position:relative;min-width:0;min-height:0;max-height:100%;overflow:hidden;padding:22px 24px;border:1px solid var(--cyan-soft);border-radius:10px;background:rgba(95,212,230,.04);display:flex;flex-direction:column;gap:14px;
   transition:opacity .5s, transform .5s, width .35s;animation:rise .35s ease-out}
-.panel.reading{order:0;width:600px;border-color:var(--cyan-line);background:var(--cyan-fill);box-shadow:0 0 40px rgba(95,212,230,.12)}
+.panel.reading{order:0;border-color:var(--cyan-line);background:var(--cyan-fill);box-shadow:0 0 40px rgba(95,212,230,.12)}
 .panel.working{order:1;opacity:.82}
 .panel.failed{border-color:var(--bad-line);background:var(--bad-fill)}
 .panel.asking{order:-1;border-color:var(--warn-line);background:var(--warn-fill)}
 .panel.leaving{opacity:0;transform:scale(.97)}
-.stage.solo .panel{width:min(880px,100%);padding:28px 32px}
-.stage.solo .panel .title{font-size:26px}
+.panel.queued{display:none}
+.stage.n1 .panel{padding:28px 32px}
+.stage.n1 .panel .title{font-size:26px}
+.scroll{min-height:0;flex:1 1 auto;overflow-y:auto;margin-right:-10px;padding-right:10px;scrollbar-width:thin;scrollbar-color:rgba(95,212,230,.35) transparent}
+.scroll::-webkit-scrollbar{width:6px}.scroll::-webkit-scrollbar-thumb{background:rgba(95,212,230,.35);border-radius:3px}
+.rail{min-height:0;display:flex;flex-direction:column;gap:8px;overflow-y:auto;padding:4px 0}
+.rail-head{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--ink-faint);padding:4px 2px}
+.qchip{display:flex;align-items:stretch;border:1px dashed var(--cyan-soft);border-radius:8px;background:rgba(95,212,230,.03);flex-shrink:0}
+.qchip:hover{border-color:var(--cyan-line);background:var(--cyan-track)}
+.qchip .open{flex:1;min-width:0;min-height:44px;padding:8px 12px;border:0;background:transparent;text-align:left;display:flex;flex-direction:column;gap:2px}
+.qchip .qt{font-size:14px;color:var(--ink-strong);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.qchip .qm{font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
+.qchip .qm.live{color:var(--cyan)}.qchip .qm.bad{color:var(--bad)}
+.qchip .x{width:36px;border:0;background:transparent;color:var(--ink-faint);font-size:16px}
+.qchip .x:hover{color:var(--ink-strong)}
 .head{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
 .title{font-family:var(--display);font-size:18px;font-weight:600;color:var(--ink-strong);letter-spacing:.3px}
 .working .title{font-size:13px;font-weight:500;letter-spacing:3px;text-transform:uppercase;color:var(--ink-faint)}
-.stage.solo .working .title{font-size:15px}
+.stage.n1 .working .title{font-size:15px}
 .meta{font-family:var(--mono);font-size:13px;color:var(--ink-dim);white-space:nowrap;display:flex;gap:10px;align-items:center}
 .close{position:absolute;top:8px;right:8px;width:32px;height:32px;border:0;border-radius:6px;background:transparent;color:var(--ink-faint);font-size:18px;line-height:1}
 .close:hover{background:var(--cyan-track);color:var(--ink-strong)}
@@ -155,10 +176,14 @@ td .clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;o
 @keyframes slide{0%{margin-left:-30%}100%{margin-left:100%}}
 @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 @media (max-width:640px){
-  .top{padding:16px}.said{display:none}.reply{font-size:15px}.stage{margin:0 16px}.bar-wrap{margin:12px 0 16px}.panel,.panel.reading{width:100%}.devices{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}
+  .top{padding:16px}.said{display:none}.reply{font-size:15px}.bar-wrap{margin:12px 0 16px}.panel,.panel.reading{width:100%}.devices{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}
   .tl{grid-template-columns:minmax(0,1fr) auto}.tl .desc,.tl .use{grid-column:1 / -1;text-align:left}
   .rel{grid-template-columns:auto minmax(0,1fr) auto;gap:4px 10px}.rel .sha{display:none}.rel .why,.rel .svc{grid-column:1 / -1}
-  .stage.solo .panel{padding:22px 20px}
+  .stage.n1 .panel{padding:22px 20px}
+  .floor,.floor.has-queue{margin:0 16px;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;gap:10px}
+  .stage,.stage.n1,.stage.n2{grid-template-columns:minmax(0,1fr);grid-template-rows:repeat(var(--rows,1),minmax(0,1fr))}
+  .stage.n2{--rows:2}
+  .rail{flex-direction:row;overflow-x:auto;overflow-y:hidden}.rail-head{display:none}.qchip{width:170px}
 }
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
@@ -170,7 +195,10 @@ td .clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;o
   <div class="conn" id="conn" role="status"><span class="dot"></span><span id="connText">Connecting…</span></div>
 </header>
 <div class="reply quiet" id="reply" aria-live="polite"></div>
-<main class="stage" id="stage" aria-label="Panels"></main>
+<div class="floor" id="floor">
+  <main class="stage n0" id="stage" aria-label="Panels"></main>
+  <aside class="rail" id="rail" aria-label="Waiting panels" hidden></aside>
+</div>
 <form class="bar-wrap" id="form" autocomplete="off">
   <label class="sr" for="cmd">Talk to Aurelia</label>
   <input class="cmd" id="cmd" placeholder="Press / to talk to Aurelia" spellcheck="false">
@@ -210,12 +238,70 @@ function el(tag, cls, text) {
 }
 
 // ---------------------------------------------------------------- layout
+const STICKY = ["running", "refreshing", "asking"];      // never sent to the queue
+const maxVisible = () => (matchMedia("(max-width:640px)").matches ? 2 : 4);
+let queueClock = 0;
+
+// Decide what's on screen: at most maxVisible() panels. Past that, the panel
+// looked at least recently waits in the rail; a freed slot takes back the most
+// recently queued one.
+function arrange() {
+  const all = recs().filter(p => !p.node.classList.contains("leaving"));
+  let visible = all.filter(p => !p.queued);
+  while (visible.length > maxVisible()) {
+    const byAge = [...visible].sort((a, b) => (a.touched || 0) - (b.touched || 0));
+    const victim = byAge.find(p => !STICKY.includes(p.state)) || byAge.find(p => p.state !== "asking");
+    if (!victim) break;
+    victim.queued = true; victim.queuedAt = ++queueClock;
+    visible = visible.filter(p => p !== victim);
+  }
+  const waiting = all.filter(p => p.queued).sort((a, b) => b.queuedAt - a.queuedAt);
+  while (visible.length < maxVisible() && waiting.length) {
+    const back = waiting.shift();
+    back.queued = false; back.touched = Date.now();
+    visible.push(back);
+  }
+  all.forEach(p => p.node.classList.toggle("queued", !!p.queued));
+  stage.className = "stage n" + Math.min(visible.length, 4);
+  renderRail(waiting);
+  return { visible: visible.length, waiting: waiting.length };
+}
+
+function renderRail(waiting) {
+  const rail = document.getElementById("rail");
+  document.getElementById("floor").classList.toggle("has-queue", waiting.length > 0);
+  rail.hidden = waiting.length === 0;
+  rail.replaceChildren(el("div", "rail-head", `WAITING · ${waiting.length}`));
+  waiting.forEach(p => {
+    const chip = el("div", "qchip");
+    const open = el("button", "open"); open.type = "button";
+    const meta = p.state === "running" || p.state === "refreshing" ? ["qm live", "running"]
+      : p.state === "failed" ? ["qm bad", "failed"] : ["qm", p.memo && p.memo.updated ? "updated" : "ready"];
+    open.append(el("span", "qt", p.node.querySelector(".title") ? p.node.querySelector(".title").textContent : titleFor(p.tool)),
+                el("span", meta[0], meta[1]));
+    open.addEventListener("click", () => { p.queued = false; p.touched = Date.now(); relayout(); });
+    const x = el("button", "x", "×"); x.type = "button"; x.setAttribute("aria-label", "Dismiss");
+    x.addEventListener("click", () => remove(p));
+    chip.append(open, x);
+    rail.append(chip);
+  });
+}
+
 function relayout() {
-  const live = [...stage.children].filter(p => !p.classList.contains("leaving"));
-  stage.classList.toggle("solo", live.length === 1);
+  const { visible, waiting } = arrange();
   const running = recs().filter(p => p.state === "running" || p.state === "refreshing").length;
+  const shown = `${visible} panel${visible === 1 ? "" : "s"}` + (waiting ? ` · ${waiting} waiting` : "");
   document.getElementById("connText").textContent =
-    ws && ws.readyState === 1 ? (running ? `${running} running` : `${live.length} panel${live.length === 1 ? "" : "s"}`) : connWord;
+    ws && ws.readyState === 1 ? (running ? `${running} running · ${shown}` : shown) : connWord;
+}
+addEventListener("resize", () => relayout());
+
+// Looking at or using a panel keeps it on screen longest.
+function track(rec) {
+  rec.touched = Date.now();
+  const touch = () => { rec.touched = Date.now(); };
+  rec.node.addEventListener("pointerdown", touch);
+  rec.node.addEventListener("focusin", touch);
 }
 
 // Each panel once, however many tasks point at it.
@@ -233,6 +319,7 @@ function makePanel(taskId, tool) {
   node.setAttribute("aria-label", titleFor(tool));
   const rec = { taskId, latestTask: taskId, tool, node, state: "running", unit: null, cancellable: true };
   panels.set(taskId, rec);
+  track(rec);
   stage.appendChild(node);
   renderProgress(rec, null);
   relayout();
@@ -328,7 +415,9 @@ function renderResult(rec, data, memo) {
   n.append(head);
   if (memo && memo.refreshing) { const r = el("div", "refresh"); r.append(el("div", "fill")); n.append(r); }
   if (memo && memo.note) n.append(el("div", "error", memo.note));
-  n.append(body(rec.tool, rest));
+  const sc = el("div", "scroll");
+  sc.append(body(rec.tool, rest));
+  n.append(sc);
 }
 
 function pinButton(taskId, pinned) {
@@ -643,6 +732,7 @@ function onEvent(ev) {
       if (existing) {
         panels.set(id, existing);
         existing.state = "refreshing";
+        existing.queued = false; existing.touched = Date.now();      // asked again: bring it back into view
         existing.memo = { ...(existing.memo || {}), refreshing: true, note: null };
         renderResult(existing, existing.data, existing.memo);
         break;
@@ -671,6 +761,7 @@ function onEvent(ev) {
       const wasShowing = !!rec.data && rec.taskId !== id;
       rec.state = "reading";
       rec.latestTask = id;
+      if (rec.taskId !== id && !rec.queued) rec.touched = Date.now();   // asked again: keep it in view
       rec.memo = null;                               // fresh data replaces a restored or older panel
       renderResult(rec, d);
       if (wasShowing) flash(rec);
@@ -785,6 +876,7 @@ function showConfirm(action) {
   const node = el("section", "panel asking");
   const rec = { taskId: "confirm-" + action.action_id, tool: action.tool, node, state: "asking" };
   panels.set(rec.taskId, rec);
+  track(rec);
   const head = el("div", "head"); head.append(el("div", "title", titleFor(action.tool)));
   const what = Object.entries(action.args || {}).map(([k, v]) => `${k.replace(/_/g, " ")}: ${v}`).join(" · ");
   const btns = el("div", "btns");

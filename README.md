@@ -107,6 +107,13 @@ ssh -L 8080:localhost:8080 atlas@atlas-ai      # leave this running
 # then browse to http://localhost:8080/view
 ```
 
+Up to four panels share the screen (one large, two side by side, three or
+four in a grid; two on a phone), and each scrolls inside itself, never the
+page. Past that, the panel you've looked at least recently waits as a chip in
+the rail on the right: click it to bring it back, or × to dismiss it. Running
+panels and confirmations are never queued, queued panels keep updating, and a
+freed slot takes back the most recently queued one.
+
 Panels stay live. Asking the same thing again refreshes the panel already on
 screen instead of opening another. When an action finishes, open panels it
 affects update in place: Orbit's actions return the device's confirmed state,
