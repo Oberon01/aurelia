@@ -195,9 +195,13 @@ async def maintain(config, embedder: Embedder | None = None, now: datetime | Non
     stats = {"to_warm": 0, "to_cold": 0, "days_rolled": 0, "embedded": 0}
 
     # hot → warm: keep a summary, drop the full payload (and the task row's copy of it).
+    # Per tool: approved longer retention, or critical tools' longer default.
     rows = await pool.fetch(
-        "SELECT task_id, panel FROM panel_snapshots WHERE tier='hot' AND NOT pinned "
-        "AND captured_at < $1::timestamptz - make_interval(days => $2)", now, hot)
+        "SELECT s.task_id, s.panel FROM panel_snapshots s "
+        "LEFT JOIN tool_retention r ON r.tool = s.tool LEFT JOIN tool_criticality c ON c.tool = s.tool "
+        "WHERE s.tier='hot' AND NOT s.pinned AND s.captured_at < $1::timestamptz - make_interval(days => "
+        "GREATEST($2, COALESCE(r.hot_days, 0), CASE WHEN c.level = 'critical' THEN $3 ELSE 0 END))",
+        now, hot, cfg.retention.critical_hot_days)
     for r in rows:
         panel = json.loads(r["panel"]) if isinstance(r["panel"], str) else r["panel"]
         async with pool.acquire() as conn, conn.transaction():

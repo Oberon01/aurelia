@@ -11,7 +11,8 @@ from redis.asyncio import Redis
 
 CHANNEL = "aurelia:events"
 
-EventType = Literal["panel.open", "panel.progress", "panel.result", "panel.close"]
+EventType = Literal["panel.open", "panel.progress", "panel.result", "panel.close",
+                    "mailbox.changed"]          # the "N for review" chip
 
 
 class PanelEvent(BaseModel):

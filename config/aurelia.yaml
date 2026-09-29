@@ -12,6 +12,14 @@ retention:
   # then only the task's metadata (timing, outcome) is kept. Pinned panels stay full.
   hot_days: 7
   warm_days: 90   # still an open decision
+  critical_hot_days: 30      # tools you approved as critical keep full panels this long
+
+# Morning digest: one panel on your first interaction after this hour (opening
+# the display or asking anything). Quiet days produce none.
+digest:
+  enabled: true
+  hour: 6
+  timezone: America/Chicago
 
 memory:
   restore: true              # a repeated look-up shows its last panel at once, with its age
@@ -69,6 +77,21 @@ fastpath:
       tool: probe.function
       args: { name: "{name}" }
       reply: "Here's the {name} function."
+    - name: mailbox
+      match: '^(?:(?:open|show(?: me)?|check|what(?:''s| is) in)\s+)?(?:the\s+|my\s+)?(?:mailbox|review(?:\s+(?:items|queue))?|proposals|suggestions)$'
+      tool: parallax.mailbox
+      args: {}
+      reply: "Here's the mailbox."
+    - name: digest
+      match: '^(?:(?:show(?: me)?|open|give me)\s+)?(?:the\s+|my\s+|today''s\s+)?(?:morning\s+)?(?:digest|briefing|summary of (?:today|the day))$'
+      tool: parallax.digest
+      args: {}
+      reply: "Here's your digest."
+    - name: analyze
+      match: '^(?:analy[sz]e|look for patterns|find patterns|any new (?:ideas|suggestions))(?:\s+now)?$'
+      tool: parallax.analyze
+      args: {}
+      reply: "Looking through my history now."
     - name: lock-up
       match: '^lock\s+(?:up|(?:the\s+)?doors?)$'
       tool: orbit.lock

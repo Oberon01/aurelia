@@ -23,6 +23,7 @@ class DisplayConfig(BaseModel):
 class RetentionConfig(BaseModel):
     hot_days: int = 7
     warm_days: int = 90
+    critical_hot_days: int = 30              # tools you approved as critical keep full panels this long
 
 
 class EmbeddingConfig(BaseModel):
@@ -32,6 +33,12 @@ class EmbeddingConfig(BaseModel):
     base_url: str | None = None              # None = llm.providers.ollama.base_url
     dimensions: int = 768                    # must match the vector(768) column
     timeout_seconds: float = 20
+
+
+class DigestConfig(BaseModel):
+    enabled: bool = True
+    hour: int = 6                            # shown on your first interaction after this hour
+    timezone: str = "America/Chicago"
 
 
 class MemoryConfig(BaseModel):
@@ -75,6 +82,7 @@ class RuntimeConfig(BaseModel):
     display: DisplayConfig = DisplayConfig()
     retention: RetentionConfig = RetentionConfig()
     memory: MemoryConfig = MemoryConfig()
+    digest: DigestConfig = DigestConfig()
     llm: LLMConfig = LLMConfig()
     session: SessionConfig = SessionConfig()
     fastpath: FastPathConfig = FastPathConfig()

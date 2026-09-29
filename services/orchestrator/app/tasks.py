@@ -13,7 +13,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from . import db, memory, registry
+from . import db, mailbox, memory, registry
 from .events import PanelEvent, publish
 
 log = logging.getLogger("aurelia.tasks")
@@ -82,6 +82,9 @@ async def start_task(body: StartTask, request: Request):
                                  # Same tool + same key = the same panel: a repeat refreshes it in place.
                                  "key": memory.args_key(body.args),
                                  "refreshes": resolved.tool.refreshes}
+    level = await mailbox.criticality(name)
+    if level != "normal":
+        open_data["critical"] = level          # its failures stand out on the display
     if decision.tier in ("act", "change"):
         # Actions confirm and get out of the way; look-ups stay until dismissed.
         open_data["close_after"] = request.app.state.config.current.display.action_panel_seconds

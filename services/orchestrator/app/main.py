@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
-from . import assistant, db, memory, registry, releases, tasks
+from . import assistant, db, digest, mailbox, memory, registry, releases, tasks
 from .config import ConfigStore
 from .events import CHANNEL
 from .governance import GovernanceStore
@@ -53,6 +53,8 @@ app.include_router(tasks.router)
 app.include_router(assistant.router)
 app.include_router(memory.router)
 app.include_router(releases.router)
+app.include_router(mailbox.router)
+app.include_router(digest.router)
 
 
 VIEW = Path(__file__).parent / "static" / "view.html"

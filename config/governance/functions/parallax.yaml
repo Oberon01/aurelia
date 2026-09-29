@@ -1,0 +1,30 @@
+# Parallax — analytics on Aurelia's task history. It only proposes: every idea
+# goes to the review mailbox and takes effect only when you approve it there.
+# It has no tool that approves or changes anything by itself.
+function: parallax
+enabled: true
+
+tools:
+  analyze: { tier: read }        # reads history, sends ideas to the mailbox
+  mailbox: { tier: reference }   # shows what's waiting (deciding is only on the display)
+  digest:  { tier: reference }
+
+rate_limit_per_minute: 30
+
+rules:
+  timezone: America/Chicago
+  analyze_minutes: 60            # how often it looks for new patterns on its own
+  recurrence:                    # "you do this at the same time most days" → automation idea
+    window_days: 14
+    min_days: 5
+    min_confidence: 0.5
+    slot_minutes: 30
+    lead_minutes: 5              # look-ups are pre-run this much earlier than usual
+  criticality:
+    min_runs: 5                  # judged only after this many runs in 30 days
+  retention:
+    lookups_per_day: 3           # look-ups used this often → keep full panels longer
+    hot_days: 30
+  drift:
+    ratio: 2.0                   # "twice as slow as usual" shows in the digest
+    min_runs: 8

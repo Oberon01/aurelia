@@ -26,7 +26,7 @@ space-themed name. Tools are addressed as `<function>.<tool>`.
 | `libra` | Bookkeeping: services and subscriptions | | Planned |
 | `kuiper` | Files and storage | | Planned |
 | `pulsar` | Scheduling and automations | | Planned |
-| `parallax` | Analytics on task history | | Planned |
+| `parallax` | Analytics on task history: habits, what matters most, timing; proposes to the mailbox | `parallax.analyze`, `parallax.mailbox`, `parallax.digest` | Built |
 | `quasar` | Media and entertainment | | Planned |
 
 Every function follows Probe's contract: register itself and its tools at
@@ -138,6 +138,36 @@ The orchestrator serves it at `/view`; it only renders the panel events from
 them (how they should leave is still an open decision). Chrysalis's own smoke
 tests are hidden. This is the Phase 2 minimum; the installable overlay app
 comes with Constellation (Phase 7).
+
+## Mailbox and morning digest
+
+Aurelia infers from her own history, but nothing she infers changes anything
+until you approve it. **Parallax** (a function) reads her task history about
+hourly and proposes ideas to the **review mailbox**:
+
+| Idea | When | If you approve |
+| --- | --- | --- |
+| Automation | You do the same thing at about the same time on at least 5 of the last 14 days (weekdays, or every day), at least half the days it could have happened | Saved; runs once Pulsar (Phase 10) exists. Look-ups run a few minutes early; physical actions keep their cancellable heads-up. Anything that needs confirmation (unlock) is never proposed |
+| What matters most | A tool you use often, wait on, chase when it fails, or that acts on the home | "High": its failures stand out. "Critical": also keeps full panels 30 days |
+| Keep longer | A look-up you use about 3+ times a day | Full panels kept 30 days instead of 7 |
+
+A "3 for review" chip appears in the top bar while anything's waiting; click
+it (or say "open the mailbox"). Each idea shows its evidence and exactly what
+approving does, with **Approve**, **Change** (edit the time/days, level or days
+first), **Not now** (back in 7 days) and **Decline** (with an optional reason; a
+declined idea only returns if its evidence grows by half or more). Similar
+ideas can be approved together. Deciding exists only on the display: Aurelia
+has no tool for it, so she can show you her ideas but never approve them.
+
+The **morning digest** appears once a day on your first interaction after 6 AM
+(opening the display or asking anything): what's waiting, what ran without you
+(releases, later automations), failures, anything unusual (e.g. "home status
+checks took 3× longer this week"), and one thing noticed. Quiet days produce
+none. Hour and timezone: `digest` in `config/aurelia.yaml`; Parallax's
+thresholds: `config/governance/functions/parallax.yaml`. Say "any new ideas" to
+have Parallax look now, "show my digest" to see today's again.
+
+Habits need history: with only a few days of it, the mailbox stays empty.
 
 ## Memory
 
@@ -409,7 +439,8 @@ services/orchestrator/       the brain (FastAPI)
   app/llm/                   provider interface: Claude, Ollama (+ scripted, tests only)
   app/  migrations/  tests/
 services/functions/probe/    reference function (tool: echo)
-services/functions/orbit/    smart home (SmartRent)
+services/functions/orbit/    smart home (SmartRent, Roku TV)
+services/functions/parallax/ analytics on task history → mailbox proposals, morning digest
 services/core/chrysalis/     update system (protected core)
 config/chrysalis.yaml        Chrysalis settings: dry run, polling, held authors, checks
 ```

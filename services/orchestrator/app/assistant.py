@@ -10,6 +10,7 @@
 Conversation state lives in Redis (stateless replicas), and every request and
 model call is logged for timing and cost analysis.
 """
+import asyncio
 import json
 import time
 import uuid
@@ -59,6 +60,9 @@ async def ask(body: Ask, request: Request):
     app = request.app
     cfg = app.state.config.current
     started = time.monotonic()
+    # First thing you ask after the digest hour brings up the morning digest (once a day).
+    from . import digest
+    asyncio.create_task(digest.maybe_show(app, body.user))
     request_id = str(uuid.uuid4())
     session_id = body.session_id or uuid.uuid4().hex
     history = await _load_session(app, session_id)

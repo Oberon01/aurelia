@@ -35,6 +35,11 @@ button{font:inherit;color:inherit;cursor:pointer}
 .top{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:24px 40px;z-index:5}
 .mark{font-family:var(--display);font-size:14px;letter-spacing:6px;color:var(--ink-faint)}
 .said{font-family:var(--mono);font-size:15px;color:var(--ink-dim);min-width:0;flex:1;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.right{display:flex;gap:16px;align-items:center}
+.mailchip{min-height:32px;padding:0 12px;border-radius:16px;border:1px solid var(--cyan-line);background:rgba(95,212,230,.08);color:var(--ink-strong);font-family:var(--mono);font-size:12px;letter-spacing:1px}
+.mailchip:hover{background:var(--cyan-track)}
+.mailchip.urgent{border-color:var(--warn-line);color:var(--warn)}
+.mailchip[hidden]{display:none}
 .conn{display:flex;gap:8px;align-items:center;font-family:var(--mono);font-size:12px;color:var(--ink-faint);white-space:nowrap}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--ink-faint)}
 .conn.live .dot{background:var(--cyan);animation:blink 1.6s ease-in-out infinite}
@@ -52,6 +57,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 .stage.n2{grid-template-rows:minmax(0,1fr)}
 .stage.n1 .panel,.stage.n2 .panel{align-self:center}
 .stage.n3 .panel,.stage.n4 .panel{align-self:start}
+.stage.n3 .panel.wide{grid-column:1 / -1}
 .panel{position:relative;min-width:0;min-height:0;max-height:100%;overflow:hidden;padding:22px 24px;border:1px solid var(--cyan-soft);border-radius:10px;background:rgba(95,212,230,.04);display:flex;flex-direction:column;gap:14px;
   transition:opacity .5s, transform .5s, width .35s;animation:rise .35s ease-out}
 .panel.reading{order:0;border-color:var(--cyan-line);background:var(--cyan-fill);box-shadow:0 0 40px rgba(95,212,230,.12)}
@@ -129,6 +135,39 @@ table{width:100%;border-collapse:collapse;font-size:14px}
 th{font-family:var(--mono);font-size:11px;letter-spacing:2px;font-weight:400;color:var(--ink-faint);text-align:left;padding:0 10px 8px 0;border-bottom:1px solid rgba(95,212,230,.2);text-transform:uppercase}
 td{padding:8px 10px 8px 0;color:var(--ink);vertical-align:top;max-width:320px}
 td .clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+/* mailbox */
+.mb{display:flex;flex-direction:column;gap:18px}
+.mb-group{display:flex;flex-direction:column;gap:10px}
+.mb-ghead{display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--ink-faint);text-transform:uppercase}
+.mb-item{padding:16px 18px;border:1px solid var(--cyan-soft);border-radius:8px;background:rgba(4,7,11,.5);display:flex;flex-direction:column;gap:8px;transition:opacity .5s}
+.mb-item.urgent{border-color:var(--warn-line)}
+.mb-item.done{opacity:.55}
+.mb-top{display:flex;justify-content:space-between;gap:12px;align-items:baseline}
+.mb-title{font-family:var(--display);font-size:18px;font-weight:600;color:var(--ink-strong)}
+.mb-conf{font-family:var(--mono);font-size:11px;color:var(--ink-faint);white-space:nowrap}
+.mb-sum{font-size:14px;line-height:1.45;color:var(--ink-dim)}
+.mb-effect{font-size:13px;line-height:1.45;color:var(--ink)}
+.mb-effect b{font-family:var(--mono);font-size:11px;letter-spacing:1px;font-weight:400;color:var(--cyan)}
+details.mb-ev summary{cursor:pointer;font-family:var(--mono);font-size:12px;color:var(--ink-faint)}
+details.mb-ev ul{margin:6px 0 0;padding-left:18px;font-family:var(--mono);font-size:12px;color:var(--ink-dim);line-height:1.6}
+.mb-form{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.mb-form[hidden]{display:none}
+.mb-form label{font-family:var(--mono);font-size:12px;color:var(--ink-faint)}
+.mb-form input,.mb-form select{min-height:36px;padding:0 10px;border-radius:6px;border:1px solid var(--cyan-soft);background:rgba(4,7,11,.8);color:var(--ink-strong);font:inherit;font-size:14px;color-scheme:dark}
+.mb-form input[type=text]{flex:1;min-width:180px}
+.day{min-height:32px;min-width:44px;padding:0 8px;border-radius:6px;border:1px solid var(--cyan-soft);background:transparent;color:var(--ink-faint);font-family:var(--mono);font-size:12px}
+.day[aria-pressed=true]{background:var(--cyan);border-color:var(--cyan);color:var(--ground)}
+.mb-item .btns .btn{min-height:36px;font-size:13px}
+.btn.quiet{border-color:var(--cyan-soft);color:var(--ink-dim)}
+.mb-result{font-size:14px;color:var(--cyan)}
+.mb-result.bad{color:var(--bad)}
+/* digest */
+.dg{display:flex;flex-direction:column;gap:16px}
+.dg-sec{display:flex;flex-direction:column;gap:6px}
+.dg-h{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--ink-faint);text-transform:uppercase}
+.dg-line{font-size:15px;line-height:1.45;color:var(--ink)}
+.dg-line .pill{margin-right:8px}
+.panel.failed.critical{border-color:var(--bad);box-shadow:0 0 40px rgba(255,143,143,.18)}
 /* functions */
 .fns{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
 .fn{padding:16px 18px;border:1px solid var(--cyan-soft);border-radius:8px;background:rgba(4,7,11,.5);display:flex;flex-direction:column;gap:6px;min-width:0}
@@ -193,7 +232,10 @@ td .clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;o
 <header class="top">
   <div class="mark">AURELIA</div>
   <div class="said" id="said"></div>
-  <div class="conn" id="conn" role="status"><span class="dot"></span><span id="connText">Connecting…</span></div>
+  <div class="right">
+    <button type="button" class="mailchip" id="mailchip" hidden>0 for review</button>
+    <div class="conn" id="conn" role="status"><span class="dot"></span><span id="connText">Connecting…</span></div>
+  </div>
 </header>
 <div class="reply quiet" id="reply" aria-live="polite"></div>
 <div class="floor" id="floor">
@@ -222,7 +264,8 @@ const TITLES = {
   "orbit.tv_power": "TV", "orbit.tv_input": "TV input", "orbit.tv_inputs": "TV inputs", "orbit.tv_app": "TV",
   "orbit.tv_apps": "TV apps", "orbit.tv_remote": "TV remote", "orbit.tv_mute": "TV sound",
   "orbit.tv_discover": "Finding TVs", "probe.echo": "Echo", "probe.functions": "Functions", "probe.function": "Function",
-  "chrysalis.release": "New release detected!", "chrysalis.status": "Updates",
+  "chrysalis.release": "New release detected!",
+  "parallax.mailbox": "Mailbox", "parallax.digest": "Morning digest", "parallax.analyze": "Looking for patterns", "chrysalis.status": "Updates",
   "chrysalis.releases": "Releases", "chrysalis.rollback": "Rollback", "chrysalis.approve": "Release approval",
 };
 function titleFor(tool) {
@@ -264,6 +307,11 @@ function arrange() {
     visible.push(back);
   }
   all.forEach(p => p.node.classList.toggle("queued", !!p.queued));
+  // Three panels: the last one gets the full bottom row instead of half of it.
+  const shown = [...stage.children].filter(n => all.some(p => p.node === n && !p.queued))
+    .map((n, i) => ({ n, i, o: Number(getComputedStyle(n).order) || 0 }))
+    .sort((a, b) => a.o - b.o || a.i - b.i).map(x => x.n);             // the order they appear on screen
+  shown.forEach((n, i) => n.classList.toggle("wide", shown.length === 3 && i === 2));
   stage.className = "stage n" + Math.min(visible.length, 4);
   renderRail(waiting);
   return { visible: visible.length, waiting: waiting.length };
@@ -449,6 +497,8 @@ function pinButton(taskId, pinned) {
 }
 
 function resultTitle(tool, d) {
+  if (Array.isArray(d.mailbox)) return "Mailbox";
+  if (d.digest) return "Morning digest";
   if (typeof d.title === "string") return d.title;
   if (typeof d.function === "string") return d.function;
   if (d.kind && d.name) return d.name;
@@ -481,6 +531,8 @@ function body(tool, d) {
     wrap.append(el("div", "msg", d.muted ? "Muted." : "Sound on.")); ["device", "muted"].forEach(k => used.add(k));
   }
   if (Array.isArray(d.releases)) { wrap.append(releases(d.releases)); used.add("releases"); }
+  if (Array.isArray(d.mailbox)) { wrap.append(mailboxView(d.mailbox)); used.add("mailbox"); used.add("counts"); }
+  if (d.digest && typeof d.digest === "object") { wrap.append(digestView(d.digest)); used.add("digest"); }
   if (d.release && typeof d.release === "object") { wrap.append(releaseOutcome(d.release)); used.add("release"); used.add("title"); }
   if (Array.isArray(d.functions)) { wrap.append(functionCards(d.functions)); used.add("functions"); }
   if (typeof d.function === "string") { wrap.append(functionDetail(d)); ["function", "state", "state_text", "purpose", "health", "rate_limit", "tools", "last_seen"].forEach(k => used.add(k)); }
@@ -548,6 +600,159 @@ function functionDetail(d) {
   });
   box.append(tools);
   return box;
+}
+
+// ---------------------------------------------------------------- mailbox
+// Deciding happens only here, from your click: there is no tool for it, so
+// Aurelia can show you her ideas but never approve them herself.
+const KIND_LABEL = { automation: "Automations", criticality: "What matters most", retention: "Keep longer" };
+const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+
+async function decide(id, body) {
+  const r = await fetch(`/mailbox/${id}/decide`, { method: "POST", headers: { "Content-Type": "application/json" },
+                                                   body: JSON.stringify(body) });
+  const out = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof out.detail === "string" ? out.detail : "That didn't work.");
+  return out;
+}
+
+function mailboxView(items) {
+  const box = el("div", "mb");
+  if (!items.length) { box.append(el("div", "msg", "Nothing waiting for review.")); return box; }
+  const groups = {};
+  items.forEach(i => (groups[i.kind] = groups[i.kind] || []).push(i));
+  const order = k => { const i = Object.keys(KIND_LABEL).indexOf(k); return i < 0 ? 99 : i; };
+  for (const [kind, list] of Object.entries(groups).sort((a, b) => order(a[0]) - order(b[0]))) {
+    const g = el("div", "mb-group");
+    const head = el("div", "mb-ghead"); head.append(el("span", null, `${KIND_LABEL[kind] || kind} · ${list.length}`));
+    if (list.length > 1) {
+      const all = el("button", "btn quiet", `Approve all ${list.length}`); all.type = "button";
+      all.addEventListener("click", async () => {
+        all.disabled = true;
+        try {
+          const r = await fetch("/mailbox/decide-batch", { method: "POST", headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ ids: list.map(i => i.id), action: "approve" }) });
+          if (!r.ok) throw new Error();
+          g.querySelectorAll(".mb-item").forEach(c => settle(c, "Approved."));
+        } catch (e) { all.disabled = false; say("Couldn't approve them all."); }
+      });
+      head.append(all);
+    }
+    g.append(head);
+    list.forEach(i => g.append(mailboxItem(i)));
+    box.append(g);
+  }
+  return box;
+}
+
+function settle(card, text, bad) {
+  card.querySelectorAll("button,input,select").forEach(x => { x.disabled = true; });
+  const res = card.querySelector(".mb-result") || card.appendChild(el("div", "mb-result"));
+  res.className = "mb-result" + (bad ? " bad" : ""); res.textContent = text;
+  if (!bad) { card.classList.add("done"); setTimeout(() => card.remove(), 2500); }
+}
+
+function mailboxItem(item) {
+  const c = el("div", "mb-item" + (item.urgent ? " urgent" : ""));
+  const top = el("div", "mb-top");
+  top.append(el("span", "mb-title", item.title), el("span", "mb-conf", `${Math.round(item.confidence * 100)}% sure · ${item.age}`));
+  c.append(top);
+  if (item.summary) c.append(el("div", "mb-sum", item.summary));
+  if ((item.evidence || []).length) {
+    const ev = el("details", "mb-ev"); ev.append(el("summary", null, `Evidence (${item.evidence.length})`));
+    const ul = el("ul"); item.evidence.forEach(e => ul.append(el("li", null, e))); ev.append(ul);
+    c.append(ev);
+  }
+  const eff = el("div", "mb-effect"); eff.append(el("b", null, "IF APPROVED  "), document.createTextNode(item.effect || ""));
+  c.append(eff);
+
+  // "Change": edit the parts that make sense for this kind, then approve with your changes.
+  const form = el("div", "mb-form"); form.hidden = true;
+  const p = item.proposal || {};
+  let changes = () => ({});
+  if (item.kind === "automation") {
+    const time = el("input"); time.type = "time"; time.value = (p.schedule || {}).time || "07:00";
+    time.setAttribute("aria-label", "Time");
+    const picked = new Set((p.schedule || {}).days || []);
+    const days = DAY_KEYS.map(k => { const b = el("button", "day", k); b.type = "button";
+      b.setAttribute("aria-pressed", String(picked.has(k)));
+      b.addEventListener("click", () => b.setAttribute("aria-pressed", String(b.getAttribute("aria-pressed") !== "true"))); return b; });
+    form.append(el("label", null, "At"), time, el("label", null, "on"), ...days);
+    changes = () => ({ schedule: { ...(p.schedule || {}), time: time.value,
+                                   days: days.filter(b => b.getAttribute("aria-pressed") === "true").map(b => b.textContent) } });
+  } else if (item.kind === "criticality") {
+    const sel = el("select"); ["normal", "high", "critical"].forEach(l => { const o = el("option", null, l); o.value = l; if (l === p.level) o.selected = true; sel.append(o); });
+    sel.setAttribute("aria-label", "Level");
+    form.append(el("label", null, "Level"), sel);
+    changes = () => ({ level: sel.value });
+  } else if (item.kind === "retention") {
+    const n = el("input"); n.type = "number"; n.min = "1"; n.max = "365"; n.value = p.hot_days || 30; n.style.width = "90px";
+    n.setAttribute("aria-label", "Days");
+    form.append(el("label", null, "Keep full panels for"), n, el("label", null, "days"));
+    changes = () => ({ hot_days: Number(n.value) });
+  }
+  const reasonForm = el("div", "mb-form"); reasonForm.hidden = true;
+  const reason = el("input"); reason.type = "text"; reason.placeholder = "Why not? (optional; helps me not ask again)";
+  reason.setAttribute("aria-label", "Reason");
+  reasonForm.append(reason);
+  c.append(form, reasonForm);
+
+  const btns = el("div", "btns");
+  const mk = (text, cls) => { const b = el("button", "btn " + (cls || ""), text); b.type = "button"; return b; };
+  const approve = mk("Approve", "primary"), change = mk("Change"), later = mk("Not now", "quiet"), no = mk("Decline", "quiet");
+  btns.append(approve, change, later, no);
+  c.append(btns);
+
+  const act = async (body, ok) => {
+    try { const out = await decide(item.id, body); settle(c, ok || out.done || "Done."); say(out.done || "Done."); }
+    catch (e) { settle(c, e.message, true); setTimeout(() => c.querySelectorAll("button,input,select").forEach(x => { x.disabled = false; }), 1500); }
+  };
+  approve.addEventListener("click", () => form.hidden ? act({ action: "approve" }) : act({ action: "modify", changes: changes() }));
+  change.addEventListener("click", () => {
+    form.hidden = !form.hidden; reasonForm.hidden = true;
+    approve.textContent = form.hidden ? "Approve" : "Approve with changes";
+  });
+  later.addEventListener("click", () => act({ action: "defer", days: 7 }));
+  no.addEventListener("click", () => {
+    if (reasonForm.hidden) { reasonForm.hidden = false; form.hidden = true; no.textContent = "Decline for good"; reason.focus(); return; }
+    act({ action: "reject", reason: reason.value });
+  });
+  return c;
+}
+
+// ---------------------------------------------------------------- digest
+function digestView(d) {
+  const box = el("div", "dg");
+  box.append(el("div", "facts", d.date || ""));
+  if (d.quiet) box.append(el("div", "msg", "A quiet day. Nothing needs you."));
+  const section = (title, lines) => { if (!lines.length) return; const sec = el("div", "dg-sec"); sec.append(el("div", "dg-h", title)); lines.forEach(l => sec.append(l)); box.append(sec); };
+  if (d.waiting_count) {
+    const lines = (d.waiting || []).map(w => el("div", "dg-line", w.title));
+    const open = el("button", "btn", "Open the mailbox"); open.type = "button";
+    open.addEventListener("click", openMailbox);
+    section(`Waiting for you · ${d.waiting_count}`, [...lines, open]);
+  }
+  section("Ran without you", (d.automatic || []).map(a => {
+    const line = el("div", "dg-line");
+    const tone = a.outcome === "live" || a.outcome === "completed" ? "online" : ["rolled_back", "failed"].includes(a.outcome) ? "offline" : "disabled";
+    line.append(statusPill(tone, String(a.outcome).replace(/_/g, " ")), document.createTextNode(a.what)); return line; }));
+  section("Failed", (d.failures || []).map(f => el("div", "dg-line", `${f.what}: ${f.count} time${f.count === 1 ? "" : "s"}${f.last_error ? ` (last: ${f.last_error})` : ""}`)));
+  section("Unusual", (d.anomalies || []).map(a => el("div", "dg-line", a)));
+  if (d.pattern) section("Noticed", [el("div", "dg-line", d.pattern)]);
+  return box;
+}
+
+function openMailbox() {
+  fetch("/tasks", { method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ tool: "parallax.mailbox", args: {} }) }).catch(() => say("I can't reach Aurelia right now."));
+}
+
+function updateChip(c) {
+  const chip = document.getElementById("mailchip");
+  const n = (c && c.waiting) || 0;
+  chip.hidden = n === 0;
+  chip.textContent = `${n} for review`;
+  chip.classList.toggle("urgent", !!(c && c.urgent));
 }
 
 // One release, as it finished: what it was, and what happened.
@@ -745,6 +950,11 @@ function flash(rec) {
 // ---------------------------------------------------------------- events
 function onEvent(ev) {
   const id = ev.task_id, d = ev.data || {};
+  if (ev.type === "mailbox.changed") {               // the chip, and an open mailbox panel, stay current
+    updateChip(d);
+    refreshOpen(["parallax.mailbox"], new Set());
+    return;
+  }
   if (ev.type === "panel.open" && SYSTEM_USERS.has(d.user)) { hidden.add(id); return; }
   if (hidden.has(id)) { if (ev.type === "panel.close") hidden.delete(id); return; }
   let rec = panels.get(id);
@@ -764,7 +974,7 @@ function onEvent(ev) {
       rec = rec || makePanel(id, ev.tool);
       Object.assign(rec, { unit: d.unit || null, cancellable: d.cancellable !== false, closeAfter: d.close_after || null,
                            key: d.key, args: d.args || {}, refreshes: d.refreshes || [], tier: d.tier,
-                           subtitle: d.subtitle || null });
+                           subtitle: d.subtitle || null, critical: d.critical || null });
       if (d.snapshot) {                              // memory: show the last panel now, refresh behind it
         const sn = d.snapshot;
         rec.state = "refreshing";
@@ -802,9 +1012,10 @@ function onEvent(ev) {
         renderResult(rec, rec.data, rec.memo);
       } else if (d.status === "failed" && !d.has_result) {
         rec.state = "failed";
-        rec.node.className = "panel failed";
+        rec.node.className = "panel failed" + (rec.critical ? " critical" : "");
         rec.node.replaceChildren(closeButton(rec));
         const head = el("div", "head"); head.append(el("div", "title", titleFor(rec.tool)));
+        if (rec.critical) { head.append(el("span", "tag", rec.critical.toUpperCase())); flash(rec); }
         rec.node.append(head, el("div", "error", d.error || "That didn't work."));
       } else if (!d.has_result) {
         rec.state = "done";
@@ -832,7 +1043,7 @@ function onEvent(ev) {
 // ---------------------------------------------------------------- connection
 // This page's version, filled in by the orchestrator when it serves the page.
 const VIEW_VERSION = "__VIEW_VERSION__";
-let ws = null, backoff = 1000, connWord = "Connecting…", connectedBefore = false;
+let ws = null, backoff = 1000, connWord = "Connecting…", connectedBefore = false, digestChecked = false;
 
 // After an update, reload into the new page and re-open the look-ups that were on
 // screen; memory shows each one at once while it refreshes.
@@ -874,6 +1085,8 @@ function connect() {
     if (connectedBefore) reloadIfUpdated(); else reopenAfterReload();
     connectedBefore = true;
     catchUpOnRelease();
+    fetch("/mailbox/count").then(r => r.json()).then(updateChip).catch(() => {});
+    if (!digestChecked) { digestChecked = true; fetch("/digest/check", { method: "POST" }).catch(() => {}); }
   };
   ws.onmessage = m => { try { onEvent(JSON.parse(m.data)); } catch (e) { console.warn("bad event", e); } };
   ws.onclose = () => {
@@ -939,6 +1152,7 @@ function showConfirm(action) {
   no.addEventListener("click", () => answer(false));
 }
 
+document.getElementById("mailchip").addEventListener("click", openMailbox);
 document.getElementById("form").addEventListener("submit", e => {
   e.preventDefault();
   const text = cmd.value.trim().replace(/^\/+\s*/, "");      // a "/" typed out of habit isn't part of it
