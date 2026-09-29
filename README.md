@@ -101,7 +101,41 @@ A dark page where panels appear only while something is relevant: progress
 bars while a task runs, results when it finishes, a "Complete" flash that
 fades when there's nothing to read, and a confirmation panel for anything that
 needs your go-ahead (unlock). Type into it like `ask.sh`: press `/`, type,
-Enter. Esc clears finished panels.
+Enter (Shift+Enter for a new line). Esc clears finished panels.
+
+The top of the screen is the conversation, and it has a fixed height, so
+nothing she says moves or resizes the panels. Her name has the time and date
+under it, your last question sits across the top, and her reply sits just
+below. A long reply fades out at the bottom with MORE, which opens it over the
+panels; LESS, Esc or a click elsewhere closes it. The layout uses the full
+width: one panel spans up to 1100 px, and so does the command bar.
+
+**An interface that answers, not software to operate.**
+
+- *She picks the size of the answer.* Every tool call carries a `_display`
+  choice: "brief" for one fact ("is the back door locked?"), which she answers
+  in her reply with no panel, or "panel" when there's more to see. With a
+  panel, her reply adds only what matters.
+- *Answer-first panels.* Each panel leads with its headline in large type
+  ("Front Door unlocked · 71° · 1 light on"), in amber when something's off;
+  the title becomes a small label and the details sit below.
+- *Sized to their content.* One fact or device is a small card, a set of cards
+  is medium, and results, pages, lists and the mailbox are large. Panels share
+  each row by size (a 12-column grid), and three panels put the largest on its
+  own row.
+- *Next steps.* Under a result, up to three likely follow-ups ("Lock Front
+  Door", "Read #1"), one of them what you usually ask next (from your own
+  requests: a follow-up made at least twice within 3 minutes, `GET /suggest`).
+  Tapping one focuses that panel and sends it as an ordinary request.
+- *Linked replies.* Names in her reply (devices, results, functions, "panel
+  2") are dotted; pointing at one lights up that panel and the card it means.
+- *Worth a glance.* The bottom corners show only what's off or in motion (a
+  door unlocked, a leak, low battery, a device offline, an important action
+  that failed, a download at 64%), from `GET /glance`; empty when all's well.
+  Tap an item to act on it or bring its panel forward.
+- *Tuck away.* A panel you've read and left alone for 3 minutes moves to the
+  rail as its headline; click it to bring it back. Pinned, focused and
+  running panels stay.
 
 From another computer, tunnel to the server and open it:
 

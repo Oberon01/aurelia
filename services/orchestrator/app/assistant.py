@@ -96,6 +96,16 @@ async def ask(body: Ask, request: Request):
     return {"request_id": request_id, "session_id": session_id, "latency_ms": latency, **outcome}
 
 
+@router.get("/history")
+async def history(session_id: str, request: Request):
+    """The conversation so far (what the display shows after a reload): what you said, what she said."""
+    if not context.valid_session(session_id):
+        return {"turns": []}
+    turns = await context.load(request.app.state.redis, session_id)
+    return {"turns": [{"role": t.get("role"), "text": t.get("text") or "", "about": t.get("about")}
+                      for t in turns if t.get("role") in ("user", "assistant")]}
+
+
 @router.post("/confirm")
 async def confirm(body: Confirm, request: Request):
     app = request.app
@@ -233,8 +243,10 @@ async def _read_panel(screen: context.Screen | None, args: dict) -> tuple[str, b
 async def _run_tool_call(app, user: str, qualified: str | None, args: dict, out: dict) -> tuple[str, bool]:
     if qualified is None:
         return _data({"status": "error", "error": "no such tool"}), True
+    args = dict(args or {})
+    display = "brief" if args.pop(DISPLAY_ARG, None) == "brief" else "panel"
     try:
-        task_id = await launch(app, StartTask(tool=qualified, args=args, user=user))
+        task_id = await launch(app, StartTask(tool=qualified, args=args, user=user, display=display))
     except HTTPException as exc:
         if exc.status_code == 409:
             action = await _hold(app, qualified, args, user, _reason(exc))
@@ -276,12 +288,27 @@ async def _tool_defs(app, user: str) -> tuple[list[ToolDef], dict[str, str], lis
             q = f"{fn.name}.{tool.name}"
             note = " Requires the user's confirmation." if gov.decide(fn.name, tool.name, user, False).needs_confirmation else ""
             defs.append(ToolDef(name=api_name(q), description=f"[{fn.name.capitalize()}] {tool.description}{note}",
-                                input_schema=tool.input_schema))
+                                input_schema=_with_display(tool.input_schema)))
             by_api[api_name(q)] = q
             visible.append(tool.name)
         if visible:
             functions.append({"name": fn.name, "description": fn.description, "tools": visible})
     return sorted(defs, key=lambda d: d.name), by_api, functions
+
+
+# Every tool call says how much screen its answer deserves. The model decides from the
+# question, not the tool: "is the door locked?" is brief, "how's the house?" is a panel.
+DISPLAY_ARG = "_display"
+DISPLAY_SCHEMA = {"type": "string", "enum": ["panel", "brief"],
+                  "description": "How to show the result. 'brief': he asked for one fact, so answer in your reply "
+                                 "and open no panel. 'panel' (default): open the result panel; your reply then adds "
+                                 "only what matters, never repeats the panel."}
+
+
+def _with_display(schema: dict) -> dict:
+    s = dict(schema or {"type": "object"})
+    s["properties"] = {**(s.get("properties") or {}), DISPLAY_ARG: DISPLAY_SCHEMA}
+    return s
 
 
 def _system_prompt(app, functions: list[dict], core: str = "") -> str:

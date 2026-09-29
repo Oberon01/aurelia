@@ -27,6 +27,7 @@ class StartTask(BaseModel):
     trigger: str = "user"
     user: str = "owner"
     confirmed: bool = False        # set by the display after you approve a "change"-tier action
+    display: str = "panel"         # "brief": the answer is in her reply, so no panel opens
 
 
 class Progress(BaseModel):
@@ -82,6 +83,8 @@ async def start_task(body: StartTask, request: Request):
                                  # Same tool + same key = the same panel: a repeat refreshes it in place.
                                  "key": memory.args_key(body.args),
                                  "refreshes": resolved.tool.refreshes}
+    if body.display == "brief":
+        open_data["display"] = "brief"
     level = await mailbox.criticality(name)
     if level != "normal":
         open_data["critical"] = level          # its failures stand out on the display

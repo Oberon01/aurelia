@@ -28,15 +28,20 @@
 }
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;background:var(--ground);color:var(--ink);font-family:var(--sans)}
-body{overflow:hidden;display:grid;grid-template-rows:auto auto minmax(0,1fr) auto}
+body{overflow:hidden;display:grid;grid-template-rows:auto 96px minmax(0,1fr) auto}
 button{font:inherit;color:inherit;cursor:pointer}
 
 /* ---- top line ---- */
-.top{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:24px 40px;z-index:5}
+/* The top of the screen is the conversation: who you're talking to and when, what you asked, what she said.
+   It has a fixed height, so nothing she says (however long) moves the panels. */
+.top{display:grid;grid-template-columns:minmax(200px,1fr) minmax(0,2.5fr) minmax(max-content,1fr);align-items:center;gap:24px;padding:22px 40px 10px;z-index:5}
+.brand{display:flex;flex-direction:column;gap:4px;min-width:0}
 .mark{font-family:var(--display);font-size:14px;letter-spacing:6px;color:var(--ink-faint)}
-.said{font-family:var(--mono);font-size:15px;color:var(--ink-dim);min-width:0;flex:1;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.right{display:flex;gap:16px;align-items:center}
-.mailchip{min-height:32px;padding:0 12px;border-radius:16px;border:1px solid var(--cyan-line);background:rgba(95,212,230,.08);color:var(--ink-strong);font-family:var(--mono);font-size:12px;letter-spacing:1px}
+.clock{font-family:var(--mono);font-size:12px;letter-spacing:1px;color:var(--ink-dim);white-space:nowrap}
+.clock b{font-weight:500;color:var(--ink-strong)}
+.said{font-family:var(--mono);font-size:15px;color:var(--ink-dim);min-width:0;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.right{display:flex;gap:16px;align-items:center;justify-content:flex-end}
+.mailchip{white-space:nowrap;min-height:32px;padding:0 12px;border-radius:16px;border:1px solid var(--cyan-line);background:rgba(95,212,230,.08);color:var(--ink-strong);font-family:var(--mono);font-size:12px;letter-spacing:1px}
 .mailchip:hover{background:var(--cyan-track)}
 .mailchip.urgent{border-color:var(--warn-line);color:var(--warn)}
 .mailchip[hidden]{display:none}
@@ -44,8 +49,15 @@ button{font:inherit;color:inherit;cursor:pointer}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--ink-faint)}
 .conn.live .dot{background:var(--cyan);animation:blink 1.6s ease-in-out infinite}
 .conn.down .dot{background:var(--warn)}
-.reply{justify-self:center;width:min(900px,90vw);max-height:26vh;overflow-y:auto;padding:0 0 16px;text-align:center;font-size:17px;line-height:1.5;color:var(--ink-strong);white-space:pre-line;transition:opacity .6s}
-.reply.quiet{opacity:0;max-height:0;padding:0}
+.slot{position:relative;min-height:0;margin:0 40px}
+.reply{position:absolute;top:0;left:50%;transform:translateX(-50%);width:min(1100px,100%);max-height:100%;overflow:hidden;z-index:15;
+  padding:4px 16px 8px;border-radius:10px;text-align:center;font-size:17px;line-height:1.5;color:var(--ink-strong);white-space:pre-line;transition:opacity .6s}
+.reply.quiet{opacity:0;pointer-events:none}
+.reply.long{-webkit-mask-image:linear-gradient(#000 60%,transparent);mask-image:linear-gradient(#000 60%,transparent)}
+.reply.open{max-height:55vh;overflow-y:auto;-webkit-mask-image:none;mask-image:none;background:rgba(4,7,11,.94);border:1px solid var(--cyan-soft);box-shadow:0 18px 60px rgba(0,0,0,.6)}
+.more{position:absolute;right:0;top:6px;z-index:16;min-height:24px;padding:0 10px;border:1px solid var(--cyan-soft);border-radius:12px;background:var(--ground);color:var(--cyan);font-family:var(--mono);font-size:11px;letter-spacing:1px}
+.more[hidden]{display:none}
+.more:hover{background:var(--cyan-track)}
 /* several requests at once: each keeps its own line */
 .reply .ex{padding:8px 0;border-top:1px solid rgba(95,212,230,.12);text-align:left}
 .reply .ex:first-child{border-top:0;padding-top:0}
@@ -58,12 +70,10 @@ button{font:inherit;color:inherit;cursor:pointer}
    each scrolls inside itself. The rest wait as chips in the rail. */
 .floor{min-height:0;margin:0 40px;display:grid;grid-template-columns:minmax(0,1fr);gap:20px}
 .floor.has-queue{grid-template-columns:minmax(0,1fr) 220px}
-.stage{min-height:0;display:grid;gap:20px;padding:4px;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr))}
-.stage.n0,.stage.n1{grid-template-columns:minmax(0,880px);grid-template-rows:minmax(0,1fr);justify-content:center}
-.stage.n2{grid-template-rows:minmax(0,1fr)}
+/* A 12-column grid; each panel is placed by how much it has to show (see place()). */
+.stage{min-height:0;display:grid;gap:20px;padding:4px;grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:minmax(0,1fr)}
 .stage.n1 .panel,.stage.n2 .panel{align-self:center}
 .stage.n3 .panel,.stage.n4 .panel{align-self:start}
-.stage.n3 .panel.wide{grid-column:1 / -1}
 .panel{position:relative;min-width:0;min-height:0;max-height:100%;overflow:hidden;padding:22px 24px;border:1px solid var(--cyan-soft);border-radius:10px;background:rgba(95,212,230,.04);display:flex;flex-direction:column;gap:14px;
   transition:opacity .5s, transform .5s, width .35s;animation:rise .35s ease-out}
 .panel.reading{order:0;border-color:var(--cyan-line);background:var(--cyan-fill);box-shadow:0 0 40px rgba(95,212,230,.12)}
@@ -78,6 +88,26 @@ button{font:inherit;color:inherit;cursor:pointer}
 .panel.focused::before{background:var(--cyan);color:var(--ground)}
 .stage.n1 .panel{padding:28px 32px}
 .stage.n1 .panel .title{font-size:26px}
+/* answer-first: the headline is the answer, big enough to read across the room; the title becomes its label */
+.panel.hl .title,.stage.n1 .panel.hl .title{font-family:var(--mono);font-size:11px;font-weight:400;letter-spacing:2px;text-transform:uppercase;color:var(--ink-faint)}
+.headline{font-family:var(--display);font-size:24px;font-weight:600;line-height:1.25;color:var(--ink-strong);margin-top:-6px}
+.stage.n1 .headline{font-size:30px}
+.headline.warn{color:var(--warn)}.headline.bad{color:var(--bad)}
+.panel.hl .scroll{color:var(--ink-dim)}
+/* next steps: likely follow-ups, sent as ordinary requests */
+.next{display:flex;flex-wrap:wrap;gap:8px;flex-shrink:0}
+.next:empty{display:none}
+.step{min-height:32px;padding:0 12px;border-radius:16px;border:1px solid var(--cyan-soft);background:transparent;color:var(--ink);font-size:13px}
+.step:hover{border-color:var(--cyan);background:var(--cyan-track);color:var(--ink-strong)}
+.step.usual{border-style:dashed}
+.step .why{margin-left:6px;font-family:var(--mono);font-size:10px;color:var(--ink-faint)}
+/* words in her reply that point at something on screen */
+.ref{border-bottom:1px dotted var(--cyan-line);cursor:default}
+.ref:hover{color:var(--cyan)}
+.panel.lit{border-color:var(--cyan);box-shadow:0 0 0 1px var(--cyan),0 0 48px rgba(95,212,230,.25)}
+.lit .name,.hit.lit .ht,.vid.lit .vt,.fn.lit .fname{color:var(--cyan)}
+.dev.lit,.fn.lit{border-color:var(--cyan)}
+.hit.lit,.vid.lit{outline:1px solid var(--cyan-line);outline-offset:4px;border-radius:4px}
 .scroll{min-height:0;flex:1 1 auto;overflow-y:auto;margin-right:-10px;padding-right:10px;scrollbar-width:thin;scrollbar-color:rgba(95,212,230,.35) transparent}
 .scroll::-webkit-scrollbar{width:6px}.scroll::-webkit-scrollbar-thumb{background:rgba(95,212,230,.35);border-radius:3px}
 .rail[hidden]{display:none}
@@ -89,6 +119,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 .qchip .qt{font-size:14px;color:var(--ink-strong);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .qchip .qm{font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
 .qchip .qm.live{color:var(--cyan)}.qchip .qm.bad{color:var(--bad)}
+.qchip .qh{font-size:12px;color:var(--ink-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .qchip .x{width:36px;border:0;background:transparent;color:var(--ink-faint);font-size:16px}
 .qchip .x:hover{color:var(--ink-strong)}
 .head{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
@@ -252,7 +283,20 @@ details.mb-ev ul{margin:6px 0 0;padding-left:18px;font-family:var(--mono);font-s
 .rel .svc{grid-column:3 / -1;font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
 
 /* ---- command bar ---- */
-.bar-wrap{justify-self:center;width:min(720px,90vw);margin:16px 0 28px;display:flex;gap:10px;align-items:center}
+/* the bottom row: what's worth a glance on the left, the command bar, what's running on the right */
+.bottom{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,900px) minmax(0,1fr);align-items:end;gap:28px;padding:14px 40px 24px}
+.bar-wrap{width:100%;display:flex;gap:10px;align-items:center}
+.glance{min-width:0;display:flex;flex-direction:column;gap:6px;font-family:var(--mono);font-size:12px;line-height:1.35}
+.glance.right{align-items:flex-end;text-align:right}
+.gl{display:flex;gap:8px;align-items:baseline;max-width:100%;padding:2px 0;border:0;background:transparent;color:var(--ink-dim);font:inherit;text-align:inherit}
+button.gl:hover{color:var(--ink-strong)}
+.gl::before{content:"";flex-shrink:0;width:7px;height:7px;border-radius:50%;background:var(--ink-faint);transform:translateY(-1px)}
+.gl.warn{color:var(--warn)}.gl.warn::before{background:var(--warn)}
+.gl.bad{color:var(--bad)}.gl.bad::before{background:var(--bad)}
+.gl.live::before{background:var(--cyan);animation:blink 1.6s ease-in-out infinite}
+.gl .t{overflow-wrap:anywhere}
+.gl .s{color:var(--ink-faint);white-space:nowrap}
+.glance.right .gl{flex-direction:row-reverse}
 .focuschip{flex-shrink:0;max-width:45%;min-height:36px;padding:0 10px 0 12px;border-radius:18px;border:1px solid var(--cyan);background:rgba(95,212,230,.12);color:var(--ink-strong);font-family:var(--mono);font-size:12px;display:flex;gap:8px;align-items:center}
 .focuschip[hidden]{display:none}
 .focuschip .ft{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -272,13 +316,18 @@ details.mb-ev ul{margin:6px 0 0;padding-left:18px;font-family:var(--mono);font-s
 @keyframes slide{0%{margin-left:-30%}100%{margin-left:100%}}
 @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 @media (max-width:640px){
-  .top{padding:16px}.said{display:none}.reply{font-size:15px}.bar-wrap{margin:12px 0 16px}.panel,.panel.reading{width:100%}.devices{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}
+  body{grid-template-rows:auto 84px minmax(0,1fr) auto}
+  .top{grid-template-columns:auto 1fr;padding:16px 16px 6px}.said{display:none}.slot{margin:0 16px}.reply{font-size:15px}
+  .bottom{grid-template-columns:minmax(0,1fr);padding:8px 16px 14px;gap:8px}
+  .glance.right{display:none}
+  .glance{flex-direction:row;flex-wrap:wrap;gap:4px 14px;order:-1}
+  .reply{width:calc(100% - 56px);left:0;transform:none}
+  .fact .fd{display:none}.mailchip{white-space:nowrap}.right{gap:10px}.clock .date{display:none}#connText{display:none}.panel,.panel.reading{width:100%}.devices{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}
   .tl{grid-template-columns:minmax(0,1fr) auto}.tl .desc,.tl .use{grid-column:1 / -1;text-align:left}
   .rel{grid-template-columns:auto minmax(0,1fr) auto;gap:4px 10px}.rel .sha{display:none}.rel .why,.rel .svc{grid-column:1 / -1}
   .stage.n1 .panel{padding:22px 20px}
   .floor,.floor.has-queue{margin:0 16px;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;gap:10px}
-  .stage,.stage.n1,.stage.n2{grid-template-columns:minmax(0,1fr);grid-template-rows:repeat(var(--rows,1),minmax(0,1fr))}
-  .stage.n2{--rows:2}
+  .headline,.stage.n1 .headline{font-size:21px}
   .rail{flex-direction:row;overflow-x:auto;overflow-y:hidden}.rail-head{display:none}.qchip{width:170px}
 }
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
@@ -286,23 +335,27 @@ details.mb-ev ul{margin:6px 0 0;padding-left:18px;font-family:var(--mono);font-s
 </head>
 <body>
 <header class="top">
-  <div class="mark">AURELIA</div>
+  <div class="brand"><div class="mark">AURELIA</div><div class="clock" id="clock"></div></div>
   <div class="said" id="said"></div>
   <div class="right">
     <button type="button" class="mailchip" id="mailchip" hidden>0 for review</button>
     <div class="conn" id="conn" role="status"><span class="dot"></span><span id="connText">Connecting…</span></div>
   </div>
 </header>
-<div class="reply quiet" id="reply" aria-live="polite"></div>
+<div class="slot"><div class="reply quiet" id="reply" aria-live="polite"></div><button type="button" class="more" id="more" hidden>MORE</button></div>
 <div class="floor" id="floor">
   <main class="stage n0" id="stage" aria-label="Panels"></main>
   <aside class="rail" id="rail" aria-label="Waiting panels" hidden></aside>
 </div>
+<div class="bottom">
+<aside class="glance" id="glanceL" aria-label="Worth a glance"></aside>
 <form class="bar-wrap" id="form" autocomplete="off">
   <label class="sr" for="cmd">Talk to Aurelia</label>
   <button type="button" class="focuschip" id="focuschip" hidden title="Stop focusing this panel"></button>
   <input class="cmd" id="cmd" placeholder="Press / to talk to Aurelia" spellcheck="false">
 </form>
+<aside class="glance right" id="glanceR" aria-label="Running"></aside>
+</div>
 
 <script>
 "use strict";
@@ -369,20 +422,67 @@ function arrange() {
     visible = visible.filter(p => p !== victim);
   }
   const waiting = all.filter(p => p.queued).sort((a, b) => b.queuedAt - a.queuedAt);
-  while (visible.length < maxVisible() && waiting.length) {
-    const back = waiting.shift();
+  const returning = waiting.filter(p => !p.tucked);               // tucked-away panels come back only when you ask
+  while (visible.length < maxVisible() && returning.length) {
+    const back = returning.shift();
     back.queued = false; back.touched = Date.now();
     visible.push(back);
   }
   all.forEach(p => { p.node.classList.toggle("queued", !!p.queued); p.node.classList.toggle("focused", p === focused); });
-  // Three panels: the last one gets the full bottom row instead of half of it.
-  const shown = [...stage.children].filter(n => all.some(p => p.node === n && !p.queued))
-    .map((n, i) => ({ n, i, o: Number(getComputedStyle(n).order) || 0 }))
-    .sort((a, b) => a.o - b.o || a.i - b.i).map(x => x.n);             // the order they appear on screen
-  shown.forEach((n, i) => n.classList.toggle("wide", shown.length === 3 && i === 2));
   stage.className = "stage n" + Math.min(visible.length, 4);
-  renderRail(waiting);
-  return { visible: visible.length, waiting: waiting.length };
+  place(visible);
+  const still = all.filter(p => p.queued).sort((a, b) => b.queuedAt - a.queuedAt);
+  renderRail(still);
+  return { visible: visible.length, waiting: still.length };
+}
+
+// ---- sizing: each panel gets the room its content needs --------------------------------
+// small: one fact or one device; medium: a set of cards; large: something to read or scan.
+function sizeClass(tool, d) {
+  if (!d) return "m";
+  if (Array.isArray(d.results) || Array.isArray(d.videos) || (typeof d.text === "string" && d.url) || Array.isArray(d.recall)
+      || Array.isArray(d.mailbox) || Array.isArray(d.functions) || (Array.isArray(d.releases) && d.releases.length > 1)) return "l";
+  if ((d.kind && d.name) || typeof d.locked === "boolean" || typeof d.muted === "boolean" || typeof d.remembered_fact === "string"
+      || typeof d.forgot === "string" || (d.link && d.link.url) || typeof d.saved_to === "string" || Array.isArray(d.inputs)
+      || (d.cancelled && !Array.isArray(d.results))) return "s";
+  return "m";
+}
+function weight(p) {
+  if (["asking", "running", "done", "failed"].includes(p.state)) return 1;
+  return { s: 1, m: 2, l: 3 }[sizeClass(p.tool, p.data)] || 2;
+}
+const STATE_ORDER = { asking: -1, reading: 0, refreshing: 0 };
+function place(visible) {
+  const dom = [...stage.children];
+  const list = [...visible].sort((a, b) => (STATE_ORDER[a.state] ?? 1) - (STATE_ORDER[b.state] ?? 1)
+                                           || dom.indexOf(a.node) - dom.indexOf(b.node));
+  recs().filter(p => p.queued).forEach(p => { p.node.style.gridRow = p.node.style.gridColumn = ""; });
+  let rows;
+  if (matchMedia("(max-width:640px)").matches) rows = list.map(p => [p]);
+  else if (list.length <= 2) rows = [list];
+  else if (list.length === 3) {
+    const big = list.find(p => weight(p) === 3);
+    rows = big ? [[big], list.filter(p => p !== big)] : [list.slice(0, 2), [list[2]]];
+  } else rows = [list.slice(0, 2), list.slice(2)];
+  rows = rows.filter(r => r.length);
+  stage.style.gridTemplateRows = `repeat(${Math.max(rows.length, 1)}, minmax(0,1fr))`;
+  rows.forEach((row, ri) => {
+    if (row.length === 1) {
+      const w = weight(row[0]);
+      row[0].node.style.gridColumn = rows.length > 1 || matchMedia("(max-width:640px)").matches ? "1 / -1"
+        : w === 1 ? "4 / span 6" : w === 2 ? "2 / span 10" : "1 / -1";
+      row[0].node.style.gridRow = String(ri + 1);
+      return;
+    }
+    const ws = row.map(weight), total = ws.reduce((a, b) => a + b, 0);
+    let start = 1;
+    row.forEach((p, i) => {
+      const span = i === row.length - 1 ? 13 - start : Math.max(3, Math.round(12 * ws[i] / total));
+      p.node.style.gridColumn = `${start} / span ${span}`;
+      p.node.style.gridRow = String(ri + 1);
+      start += span;
+    });
+  });
 }
 
 function renderRail(waiting) {
@@ -396,8 +496,8 @@ function renderRail(waiting) {
     const meta = p.state === "running" || p.state === "refreshing" ? ["qm live", "running"]
       : p.state === "failed" ? ["qm bad", "failed"] : ["qm", p.memo && p.memo.updated ? "updated" : "ready"];
     open.append(el("span", "qt", (p.num ? p.num + " · " : "") + panelTitle(p)),
-                el("span", meta[0], meta[1]));
-    open.addEventListener("click", () => { p.queued = false; p.touched = Date.now(); relayout(); });
+                p.tucked && p.headline && p.state === "reading" ? el("span", "qh", p.headline) : el("span", meta[0], meta[1]));
+    open.addEventListener("click", () => { p.queued = false; p.tucked = false; p.touched = Date.now(); relayout(); });
     const x = el("button", "x", "×"); x.type = "button"; x.setAttribute("aria-label", "Dismiss");
     x.addEventListener("click", () => remove(p));
     chip.append(open, x);
@@ -420,6 +520,7 @@ function track(rec) {
   const touch = () => { rec.touched = Date.now(); };
   rec.node.addEventListener("pointerdown", touch);
   rec.node.addEventListener("focusin", touch);
+  rec.node.addEventListener("pointermove", touch, { passive: true });
   // Clicking a panel (not one of its buttons or links, and not selecting text) focuses it.
   rec.node.addEventListener("click", e => {
     if (!rec.num || e.target.closest("a,button,input,select,textarea,summary,label")) return;
@@ -597,11 +698,109 @@ function renderResult(rec, data, memo) {
   if (pinId && !/^(confirm|release)-/.test(String(pinId))) meta.append(pinButton(pinId, rec.pinned || (memo && memo.tier === "pinned")));
   head.append(meta);
   n.append(head);
+  const hl = headlineFor(rec.tool, rest);
+  rec.headline = hl ? hl.text : null;
+  if (hl) { n.classList.add("hl"); n.append(el("div", "headline" + (hl.level ? " " + hl.level : ""), hl.text)); }
   if (memo && memo.refreshing) { const r = el("div", "refresh"); r.append(el("div", "fill")); n.append(r); }
   if (memo && memo.note) n.append(el("div", "error", memo.note));
   const sc = el("div", "scroll");
   sc.append(body(rec.tool, rest));
   n.append(sc);
+  const next = el("div", "next");
+  n.append(next);
+  renderSteps(rec, next, nextSteps(rec.tool, rest));
+  usualAfter(rec.tool).then(usual => { if (next.isConnected) renderSteps(rec, next, nextSteps(rec.tool, rest), usual); });
+}
+
+// ---- answer-first: the one line that answers the question -----------------------------
+function headlineFor(tool, d) {
+  if (typeof d.headline === "string" && d.headline) return { text: d.headline };
+  const count = (n, one, many) => `${n} ${n === 1 ? one : many || one + "s"}`;
+  const devs = [...(d.devices || []), ...(d.tvs || [])];
+  if (devs.length) {
+    const bad = [], parts = [];
+    devs.filter(x => x.kind === "leak_sensor" && x.active).forEach(x => bad.push(`Leak: ${x.name}`));
+    const locks = devs.filter(x => x.kind === "lock");
+    const open = locks.filter(x => x.locked === false);
+    if (open.length) bad.push(`${open.map(x => x.name).join(", ")} unlocked`);
+    else if (locks.length) parts.push(locks.length === 1 ? `${locks[0].name} locked` : "All locked");
+    const t = devs.find(x => x.kind === "thermostat" && x.current_temp != null);
+    if (t) parts.push(`${t.current_temp}°`);
+    const lights = devs.filter(x => x.kind === "light");
+    if (lights.length) parts.push(lights.some(x => x.on) ? `${count(lights.filter(x => x.on).length, "light")} on` : "Lights off");
+    const tv = devs.find(x => x.kind === "tv" && x.on);
+    if (tv) parts.push(tv.app ? `TV on · ${tv.app}` : "TV on");
+    const off = devs.filter(x => x.online === false).length;
+    if (off) parts.push(`${off} offline`);
+    return { text: [...bad, ...parts].join(" · "), level: bad.some(b => b.startsWith("Leak")) ? "bad" : bad.length ? "warn" : null };
+  }
+  if (d.kind && d.name) { const c = deviceCard(d); return { text: `${d.name}: ${c.querySelector(".state").textContent}`, level: c.classList.contains("alert") ? "warn" : null }; }
+  if (typeof d.device === "string" && typeof d.locked === "boolean") return { text: `${d.device} ${d.locked ? "locked" : "unlocked"}`, level: d.locked ? null : "warn" };
+  if (typeof d.muted === "boolean") return { text: d.muted ? "Muted" : "Sound on" };
+  if (Array.isArray(d.results) && "query" in d) {
+    const top = d.results[0];
+    return { text: d.results.length ? `${count(d.results.length, "result")}${top && top.site ? ` · top: ${top.site}` : ""}` : "No results" };
+  }
+  if (Array.isArray(d.videos)) return { text: d.videos.length ? count(d.videos.length, "video") : "No videos found" };
+  if (typeof d.text === "string" && d.url) return { text: `${d.site || ""}${d.words ? ` · ${Math.max(1, Math.round(d.words / 230))} min read` : ""}`.replace(/^ · /, "") };
+  if (typeof d.saved_to === "string") return { text: d.quarantined ? `${d.size} · in quarantine` : `${d.size} saved`, level: d.quarantined ? "warn" : null };
+  if (d.cancelled) return { text: "Stopped" };
+  if (Array.isArray(d.mailbox)) return { text: d.mailbox.length ? `${count(d.mailbox.length, "item")} waiting for you` : "Nothing waiting" };
+  if (d.digest && typeof d.digest === "object") return { text: d.digest.quiet ? "All quiet" : `${d.digest.waiting_count || 0} waiting · ${(d.digest.failures || []).length} to look at` };
+  if (Array.isArray(d.functions)) {
+    const on = d.functions.filter(f => f.state === "online").length, badF = d.functions.filter(f => ["unhealthy", "offline"].includes(f.state)).length;
+    return { text: `${on} running${badF ? ` · ${badF} need${badF === 1 ? "s" : ""} attention` : ""}`, level: badF ? "warn" : null };
+  }
+  if (typeof d.function === "string" && d.state_text) return { text: d.state_text, level: d.state === "online" ? null : "warn" };
+  if (Array.isArray(d.recall)) return { text: d.recall.length ? count(d.recall.length, "conversation") : "Nothing found" };
+  if (d.remembered === true && Array.isArray(d.facts)) return { text: `${count(d.facts.length, "thing")} · ${d.facts.filter(f => f.core).length} core` };
+  if (Array.isArray(d.inputs)) { const on = d.inputs.find(i => i.showing); return { text: on ? `Showing ${on.name}` : count(d.inputs.length, "input") }; }
+  if (Array.isArray(d.releases) && d.releases.length) { const r = d.releases[0]; return { text: `${String(r.status || "").replace(/_/g, " ")}${r.sha ? " · " + String(r.sha).slice(0, 8) : ""}` }; }
+  return null;
+}
+
+// ---- next steps: likely follow-ups, sent as ordinary requests (same rules as typing them) ----
+function nextSteps(tool, d) {
+  const out = [];
+  const devs = [...(d.devices || []), ...(d.tvs || [])];
+  devs.filter(x => x.kind === "lock" && x.locked === false).forEach(x => out.push({ label: `Lock ${x.name}`, say: `lock the ${x.name.toLowerCase()}` }));
+  devs.filter(x => x.kind === "light" && x.on).slice(0, 2).forEach(x => out.push({ label: `Turn off ${x.name}`, say: `turn off the ${x.name.toLowerCase()}` }));
+  devs.filter(x => x.kind === "tv" && x.on).slice(0, 1).forEach(x => out.push({ label: "Turn off the TV", say: "turn off the tv" }));
+  if (d.kind === "light" && d.name) out.push(d.on ? { label: "Turn it off", say: `turn off the ${d.name.toLowerCase()}` } : { label: "Turn it on", say: `turn on the ${d.name.toLowerCase()}` });
+  if ((d.kind === "lock" && d.locked === false) || (typeof d.device === "string" && d.locked === false))
+    out.push({ label: "Lock it", say: `lock the ${String(d.name || d.device).toLowerCase()}` });
+  if (Array.isArray(d.results) && d.results.length) {
+    out.push({ label: "Read #1", say: "read result #1" });
+    if (d.results.length > 1) out.push({ label: "Read #2", say: "read result #2" });
+  }
+  if (Array.isArray(d.videos) && d.videos.length) out.push({ label: "Open #1", say: "open video #1" });
+  if (typeof d.text === "string" && d.url) out.push({ label: "Summarize it", say: "summarize this page" });
+  return out;
+}
+const usualCache = new Map();
+async function usualAfter(tool) {                // what you usually ask next after this tool
+  const hit = usualCache.get(tool);
+  if (hit && Date.now() - hit.at < 300000) return hit.list;
+  try {
+    const r = await fetch(`/suggest?tool=${encodeURIComponent(tool)}`, { cache: "no-store" });
+    const list = r.ok ? (await r.json()).usual || [] : [];
+    usualCache.set(tool, { at: Date.now(), list });
+    return list;
+  } catch (e) { return []; }
+}
+function renderSteps(rec, box, steps, usual) {
+  if (["parallax.mailbox", "parallax.digest", "chrysalis.release"].includes(rec.tool)) { box.replaceChildren(); return; }
+  // Up to three: what this result suggests, with one place kept for what you usually do next.
+  const seen = new Set(steps.map(s => s.say.toLowerCase()));
+  const habits = (usual || []).filter(u => !seen.has(u.say)).slice(0, 1)
+    .map(u => ({ label: u.say.charAt(0).toUpperCase() + u.say.slice(1), say: u.say, usual: true }));
+  const all = [...steps.slice(0, 3 - habits.length).map(s => ({ ...s, usual: false })), ...habits];
+  box.replaceChildren(...all.map(s => {
+    const b = el("button", "step" + (s.usual ? " usual" : ""), s.label); b.type = "button";
+    if (s.usual) { b.append(el("span", "why", "usual")); b.title = "You often ask this next"; }
+    b.addEventListener("click", () => { setFocus(rec); ask(s.say); });
+    return b;
+  }));
 }
 
 function pinButton(taskId, pinned) {
@@ -833,6 +1032,7 @@ function searchResults(list) {
   if (!list.length) { box.append(el("div", "msg", "No results.")); return box; }
   list.forEach(r => {
     const h = el("div", "hit");
+    h.dataset.k = norm(r.title);
     h.append(extLink(r.url, r.title || r.url, "ht"), el("div", "hs", [r.site, r.age].filter(Boolean).join(" · ")));
     if (r.snippet) h.append(el("div", "hn", r.snippet));
     box.append(h);
@@ -844,6 +1044,7 @@ function videoResults(list) {
   if (!list.length) { box.append(el("div", "msg", "No videos found.")); return box; }
   list.forEach(v => {
     const c = el("div", "vid");
+    c.dataset.k = norm(v.title);
     const thumb = extLink(v.url, "", "thumb");
     if (/^https:\/\/i\.ytimg\.com\//.test(v.thumbnail || "")) {
       const img = el("img"); img.alt = ""; img.loading = "lazy"; img.referrerPolicy = "no-referrer";
@@ -1110,6 +1311,7 @@ function when(stamp) {
 // A device as Orbit describes it.
 function deviceCard(d) {
   const c = el("div", "dev");
+  c.dataset.k = norm(d.name);
   let state = "", sub = [];
   if (d.online === false) { state = "Offline"; c.classList.add("off"); }
   else switch (d.kind) {
@@ -1268,6 +1470,7 @@ function onEvent(ev) {
     return;
   }
   if (ev.type === "panel.open" && SYSTEM_USERS.has(d.user)) { hidden.add(id); return; }
+  if (ev.type === "panel.open" && d.display === "brief") { hidden.add(id); glanceSoon(); return; }   // answered in her reply
   if (hidden.has(id)) { if (ev.type === "panel.close") hidden.delete(id); return; }
   let rec = panels.get(id);
   switch (ev.type) {
@@ -1277,7 +1480,7 @@ function onEvent(ev) {
       if (existing) {
         panels.set(id, existing);
         existing.state = "refreshing";
-        existing.queued = false; existing.touched = Date.now();      // asked again: bring it back into view
+        existing.queued = false; existing.tucked = false; existing.touched = Date.now();   // asked again: bring it back into view
         existing.memo = { ...(existing.memo || {}), refreshing: true, note: null };
         renderResult(existing, existing.data, existing.memo);
         break;
@@ -1320,6 +1523,7 @@ function onEvent(ev) {
       break;
     }
     case "panel.close":
+      glanceSoon();
       if (!rec) return;
       if (rec.state === "refreshing" && !d.has_result) {
         // The refresh brought nothing new: keep what's shown and say what happened.
@@ -1403,6 +1607,7 @@ function connect() {
     connectedBefore = true;
     catchUpOnRelease();
     fetch("/mailbox/count").then(r => r.json()).then(updateChip).catch(() => {});
+    loadGlance();
     if (!digestChecked) { digestChecked = true; fetch("/digest/check", { method: "POST" }).catch(() => {}); }
   };
   ws.onmessage = m => { try { onEvent(JSON.parse(m.data)); } catch (e) { console.warn("bad event", e); } };
@@ -1425,17 +1630,140 @@ function showExchanges() {
   const now = Date.now();
   const live = exchanges.filter(e => e.pending || now - e.at < SHOW_MS).slice(-3);
   clearTimeout(replyTimer);
-  if (!live.length) { reply.classList.add("quiet"); return; }
+  if (!live.length) { reply.classList.add("quiet"); reply.dataset.sig = ""; openReply(false); return; }
+  if (reply.classList.contains("quiet")) openReply(false);             // a new reply starts closed
   reply.classList.remove("quiet");
-  if (live.length === 1) reply.replaceChildren(document.createTextNode(live[0].pending ? "…" : live[0].reply));
+  // Redrawn only when something changed, so an opened reply keeps its scroll position while you read.
+  const sig = JSON.stringify(live.map(e => [e.text, e.about, e.pending, e.reply]));
+  if (sig === reply.dataset.sig) { if (!live.every(e => e.pending)) replyTimer = setTimeout(showExchanges, 1000); fitReply(); return; }
+  reply.dataset.sig = sig;
+  if (live.length === 1) reply.replaceChildren(live[0].pending ? document.createTextNode("…") : linkify(live[0].reply));
   else reply.replaceChildren(...live.map(e => {
     const d = el("div", "ex" + (e.pending ? " pending" : ""));
     if (e.text) d.append(el("div", "q", "› " + e.text + (e.about ? `  · panel ${e.about}` : "")));
-    d.append(el("div", "a", e.pending ? "…" : e.reply));
+    const a = el("div", "a"); a.append(e.pending ? document.createTextNode("…") : linkify(e.reply)); d.append(a);
     return d;
   }));
   if (!live.every(e => e.pending)) replyTimer = setTimeout(showExchanges, 1000);
+  fitReply();
 }
+// Words in her reply that name something on screen (a device, a result, a function, "panel 2")
+// light it up when you point at them, so the reply and the panels read as one answer.
+function screenTerms() {
+  const terms = [];
+  recs().filter(p => p.num && p.data && !p.queued).forEach(p => {
+    terms.push({ word: `panel ${p.num}`, rec: p });
+    const d = p.data;
+    [...(d.devices || []), ...(d.tvs || [])].forEach(x => x.name && terms.push({ word: x.name, rec: p, key: norm(x.name) }));
+    (d.results || []).forEach(x => x.title && x.title.length >= 6 && terms.push({ word: x.title, rec: p, key: norm(x.title) }));
+    (d.videos || []).forEach(x => x.title && x.title.length >= 6 && terms.push({ word: x.title, rec: p, key: norm(x.title) }));
+    (d.functions || []).forEach(x => x.name && terms.push({ word: x.name, rec: p, key: norm(x.name) }));
+    if (d.kind && d.name) terms.push({ word: d.name, rec: p, key: norm(d.name) });
+  });
+  return terms.sort((a, b) => b.word.length - a.word.length);
+}
+function linkify(text) {
+  const frag = document.createDocumentFragment();
+  const terms = screenTerms();
+  const low = String(text || "").toLowerCase();
+  const hits = [];
+  terms.forEach(t => {
+    const w = t.word.toLowerCase();
+    let i = low.indexOf(w);
+    while (i >= 0) {
+      const edgeOk = (i === 0 || !/\w/.test(low[i - 1])) && (i + w.length >= low.length || !/\w/.test(low[i + w.length]));
+      if (edgeOk && !hits.some(h => i < h.end && i + w.length > h.start)) hits.push({ start: i, end: i + w.length, t });
+      i = low.indexOf(w, i + 1);
+    }
+  });
+  hits.sort((a, b) => a.start - b.start);
+  let at = 0;
+  hits.forEach(h => {
+    frag.append(document.createTextNode(text.slice(at, h.start)));
+    const span = el("span", "ref", text.slice(h.start, h.end));
+    const light = on => {
+      if (!recs().includes(h.t.rec)) return;
+      h.t.rec.node.classList.toggle("lit", on);
+      if (h.t.key) h.t.rec.node.querySelectorAll("[data-k]").forEach(n => { if (n.dataset.k === h.t.key) n.classList.toggle("lit", on); });
+      if (on && h.t.rec.queued) { h.t.rec.queued = false; h.t.rec.tucked = false; h.t.rec.touched = Date.now(); relayout(); }
+    };
+    span.addEventListener("pointerenter", () => light(true));
+    span.addEventListener("pointerleave", () => light(false));
+    frag.append(span);
+    at = h.end;
+  });
+  frag.append(document.createTextNode(text.slice(at)));
+  return frag;
+}
+
+// The reply has a fixed place and height. A long one fades at the bottom with MORE, which opens it
+// over the panels (they never move); it closes again with Esc, a click elsewhere, or the next reply.
+const more = document.getElementById("more");
+function fitReply() {
+  const long = !reply.classList.contains("quiet") && reply.scrollHeight > reply.clientHeight + 4;
+  reply.classList.toggle("long", long && !reply.classList.contains("open"));
+  more.hidden = !(long || reply.classList.contains("open")) || reply.classList.contains("quiet");
+  more.textContent = reply.classList.contains("open") ? "LESS" : "MORE";
+}
+function openReply(on) {
+  reply.classList.toggle("open", on);
+  if (!on) reply.scrollTop = 0;
+  fitReply();
+}
+more.addEventListener("click", () => openReply(!reply.classList.contains("open")));
+reply.addEventListener("pointerenter", () => { clearTimeout(replyTimer); });                  // reading it: keep it
+reply.addEventListener("pointerleave", () => { exchanges.forEach(e => { if (!e.pending) e.at = Date.now(); }); showExchanges(); });
+document.addEventListener("pointerdown", e => {
+  if (reply.classList.contains("open") && !reply.contains(e.target) && e.target !== more) openReply(false);
+});
+addEventListener("resize", fitReply);
+
+// ---- worth a glance: only what's off or in motion, at the edges of the screen ------------
+let glanceTimer = null;
+function glanceSoon() { clearTimeout(glanceTimer); glanceTimer = setTimeout(loadGlance, 1500); }
+async function loadGlance() {
+  clearTimeout(glanceTimer); glanceTimer = setTimeout(loadGlance, 60000);
+  let items = [];
+  try { const r = await fetch("/glance", { cache: "no-store" }); if (r.ok) items = (await r.json()).items || []; } catch (e) { return; }
+  const left = document.getElementById("glanceL"), right = document.getElementById("glanceR");
+  const line = (cls, text, since, onClick) => {
+    const g = el(onClick ? "button" : "div", "gl " + cls);
+    if (onClick) { g.type = "button"; g.addEventListener("click", onClick); }
+    g.append(el("span", "t", text)); if (since) g.append(el("span", "s", since));
+    return g;
+  };
+  left.replaceChildren(...items.filter(i => i.level !== "live").slice(0, 4).map(i => {
+    const text = i.text || (i.failed ? `${titleFor(i.tool)} failed${i.failed > 1 ? ` ×${i.failed}` : ""}` : titleFor(i.tool));
+    return line(i.level, text, i.since, i.say ? () => ask(i.say) : null);
+  }));
+  right.replaceChildren(...items.filter(i => i.level === "live").slice(0, 3).map(i => {
+    const p = panels.get(i.task_id);
+    return line("live", titleFor(i.tool) + (i.percent != null ? ` ${i.percent}%` : ""), null,
+                p ? () => { p.queued = false; p.tucked = false; p.touched = Date.now(); relayout(); flash(p); } : null);
+  }));
+}
+
+// ---- tuck away: a panel you've read and left alone goes to the rail as its headline -------
+const TUCK_MS = 180000;
+setInterval(() => {
+  const now = Date.now();
+  let moved = false;
+  recs().forEach(p => {
+    if (p.queued || p.pinned || p === focused || p.state !== "reading" || !p.headline) return;
+    if (p.node.matches(":hover") || now - (p.touched || 0) < TUCK_MS) return;
+    p.queued = true; p.tucked = true; p.queuedAt = ++queueClock; moved = true;
+  });
+  if (moved) relayout();
+}, 15000);
+
+// Her name, then the time and date, kept current.
+function tick() {
+  const now = new Date();
+  const c = document.getElementById("clock");
+  c.replaceChildren(el("b", null, now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })),
+                    el("span", "date", "  ·  " + now.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })));
+}
+tick(); setInterval(tick, 10000);
 function say(text) {                            // a reply that isn't to something you typed (a confirmation)
   exchanges.push({ text: null, reply: text, pending: false, at: Date.now() });
   showExchanges();
@@ -1502,7 +1830,8 @@ document.getElementById("form").addEventListener("submit", e => {
 document.addEventListener("keydown", e => {
   if (e.key === "/" && document.activeElement !== cmd) { e.preventDefault(); cmd.focus(); }
   else if (e.key === "Escape") {
-    if (focused) setFocus(null);                 // first Esc lets go of the panel; the next one clears the screen
+    if (reply.classList.contains("open")) openReply(false);        // a long reply first, then focus, then the screen
+    else if (focused) setFocus(null);                 // first Esc lets go of the panel; the next one clears the screen
     else if (document.activeElement === cmd) cmd.blur();
     else panels.forEach(rec => { if (rec.state !== "running") remove(rec); });
   }

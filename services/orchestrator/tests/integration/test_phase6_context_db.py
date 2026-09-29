@@ -134,6 +134,16 @@ def test_two_requests_at_once_are_both_remembered(stack, model):
     assert roles == ["user", "assistant", "user", "assistant", "user"]   # each turn stored whole: never interleaved
 
 
+def test_the_conversation_comes_back_after_a_reload(stack, model):
+    session = uuid.uuid4().hex
+    model.steps = [{"text": "Hi there."}]
+    ask(stack, "hello", session, {"panels": [{"n": 2, "task_id": str(uuid.uuid4()), "tool": "t.x", "title": "Page"}], "focus": 2})
+    turns = httpx.get(f"{stack['orch']}/ask/history", params={"session_id": session}).json()["turns"]
+    assert turns == [{"role": "user", "text": "hello", "about": "2 · Page"},
+                     {"role": "assistant", "text": "Hi there.", "about": None}]
+    assert httpx.get(f"{stack['orch']}/ask/history", params={"session_id": "../x"}).json() == {"turns": []}
+
+
 def test_a_made_up_session_id_is_replaced(stack, model):
     out = ask(stack, "hello", "../../etc/passwd")
     assert out["session_id"] != "../../etc/passwd" and len(out["session_id"]) == 32
