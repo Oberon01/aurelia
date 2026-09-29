@@ -376,15 +376,18 @@ function makePanel(taskId, tool) {
   return rec;
 }
 
-// Finished actions fade after close_after seconds. Hovering holds them; pinned or failed ones stay.
+// Finished actions fade after close_after seconds; using a panel holds it; pinned or failed ones stay.
 function autoClose(rec) {
   if (!rec.closeAfter || rec.autoArmed) return;
   rec.autoArmed = true;
   const arm = () => { clearTimeout(rec.timer); if (!rec.closeAfter) return;
                       rec.timer = setTimeout(() => { if (!rec.pinned && rec.closeAfter) remove(rec); }, rec.closeAfter * 1000); };
-  rec.node.addEventListener("mouseenter", () => clearTimeout(rec.timer));
-  rec.node.addEventListener("mouseleave", arm);
+  // Using the panel holds it: moving the pointer over it restarts the countdown, and
+  // keyboard focus inside pauses it. A pointer merely resting where the panel
+  // appeared doesn't count, or a panel under a still mouse would never close.
+  rec.node.addEventListener("pointermove", arm);
   rec.node.addEventListener("focusin", () => clearTimeout(rec.timer));
+  rec.node.addEventListener("focusout", arm);
   arm();
 }
 
