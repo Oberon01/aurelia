@@ -266,10 +266,18 @@ learn in a library that grows by topic.
 overwritten the next time the topic grows, and nothing comes back yet (two-way
 comes later, once the rules for it are settled). To connect it, in Trilium open
 Options → ETAPI → Create new token, then in the server's `.env` set
-`TRILIUM_URL` (as the Kepler container reaches it, e.g. `http://trilium:8080`
-or `http://<host>:<port>`) and `TRILIUM_TOKEN`, and run
+`TRILIUM_TOKEN` and `TRILIUM_URL=http://lazytainer-a:8080`, and run
 `docker compose up -d kepler`. Without them the library still works; Kepler's
 health shows Trilium as not set up.
+
+How Kepler reaches it: Trilium runs in the home-lab stack (`docker-home`) and
+sleeps behind Lazytainer (`lazytainer-a`), which starts it when traffic arrives.
+Kepler, and only Kepler, joins that stack's `docker-home_proxy` network
+(`HOMELAB_NETWORK` in `.env` to change it), so the token never leaves the
+machine and no port is published. It talks to `lazytainer-a` rather than
+Trilium itself, so its traffic wakes Trilium; while Trilium starts, Kepler
+retries for up to a minute (`trilium.wake_seconds`). The home-lab network
+must exist before Kepler starts.
 
 Source counts, per-site limit, how close a topic must be to join it, quiz
 length and Trilium settings are in `config/governance/functions/kepler.yaml`.

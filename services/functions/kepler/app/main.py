@@ -90,7 +90,7 @@ REGISTRATION = {"name": "kepler", "description": "Research and learning: cited a
 
 POLICY: dict = {}
 DEFAULT_RULES = {"quick_sources": 3, "thorough_sources": 8, "topic_join": 0.78, "max_per_site": 2,
-                 "read_timeout_seconds": 45, "quiz_questions": 5, "trilium": {"enabled": True, "parent_note": "root"}}
+                 "read_timeout_seconds": 45, "quiz_questions": 5, "trilium": {"enabled": True, "parent_note": "root", "wake_seconds": 60}}
 _cancelled: set[str] = set()
 
 
@@ -171,7 +171,7 @@ class TaskContext:
 
 
 def trilium() -> Trilium:
-    return Trilium(settings.trilium_url, settings.trilium_token)
+    return Trilium(settings.trilium_url, settings.trilium_token, wake_seconds=float(rules()["trilium"]["wake_seconds"]))
 
 
 async def research(ctx: TaskContext) -> dict:

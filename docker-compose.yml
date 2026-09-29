@@ -154,6 +154,9 @@ services:
       DOWNLOADS_DIR: /downloads
     volumes:
       - ./data/downloads:/downloads:ro    # read_pdf reads PDFs you've downloaded; never writes there
+    networks:
+      - default
+      - homelab                           # only Kepler joins it, to reach Trilium; nothing else in Aurelia does
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -227,3 +230,9 @@ services:
 volumes:
   pgdata:
   redisdata:
+
+networks:
+  homelab:
+    # Your home-lab stack's proxy network (docker-home), where Trilium is reached.
+    external: true
+    name: ${HOMELAB_NETWORK:-docker-home_proxy}

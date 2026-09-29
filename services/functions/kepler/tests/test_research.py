@@ -80,3 +80,57 @@ def test_citations_to_missing_sources_leave_no_gap():
     a = R.read_answer('{"headline": "Yes [1]", "answer": "Start small [3]. Policy first [1]."}', {1})
     assert a["answer"] == "Start small. Policy first [1]."
     assert R.plain(a["headline"]) == "Yes"
+
+
+def test_trilium_waits_for_lazytainer_to_wake_it():
+    import asyncio
+    import httpx
+    from app.trilium import Trilium
+    calls = []
+
+    def handler(req):
+        calls.append(req.method)
+        if len(calls) < 3:
+            raise httpx.ConnectError("refused", request=req)   # asleep: Lazytainer is starting it
+        return httpx.Response(200, json={"results": [{"noteId": "abc"}]})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+            t = Trilium("http://trilium:8080", "tok", c, wake_seconds=5, retry_every=0.01)
+            return await t.folder()
+    assert asyncio.run(run()) == "abc" and len(calls) == 3
+
+
+def test_trilium_gives_up_after_wake_seconds():
+    import asyncio
+    import httpx
+    import pytest as _pytest
+    from app.trilium import Trilium
+
+    def handler(req):
+        raise httpx.ConnectError("refused", request=req)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+            await Trilium("http://trilium:8080", "tok", c, wake_seconds=0.05, retry_every=0.01).folder()
+    with _pytest.raises(httpx.ConnectError):
+        asyncio.run(run())
+
+
+def test_trilium_never_retries_an_answered_request():
+    import asyncio
+    import httpx
+    import pytest as _pytest
+    from app.trilium import Trilium
+    calls = []
+
+    def handler(req):
+        calls.append(1)
+        return httpx.Response(500)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+            await Trilium("http://trilium:8080", "tok", c, wake_seconds=5, retry_every=0.01).folder()
+    with _pytest.raises(httpx.HTTPStatusError):
+        asyncio.run(run())
+    assert len(calls) == 1
