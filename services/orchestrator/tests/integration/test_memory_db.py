@@ -118,7 +118,12 @@ def test_recall_falls_back_to_words_without_embeddings(stack):
     import httpx
     sql(stack, "UPDATE panel_snapshots SET embedding = NULL")
     cfg = Path(os.environ["CONFIG_PATH"])
-    cfg.write_text(cfg.read_text().replace("memory:\n", "memory:\n  embeddings: {enabled: false}\n"))
-    time.sleep(2.5)                                                     # hot reload
-    hits = httpx.get(f"{stack['orch']}/memory/recall", params={"q": "thermostat"}).json()
-    assert hits["matched_by"] == "words" and hits["results"]
+    before = cfg.read_text()
+    cfg.write_text(before.replace("memory:\n", "memory:\n  embeddings: {enabled: false}\n"))
+    try:
+        time.sleep(2.5)                                                 # hot reload
+        hits = httpx.get(f"{stack['orch']}/memory/recall", params={"q": "thermostat"}).json()
+        assert hits["matched_by"] == "words" and hits["results"]
+    finally:
+        cfg.write_text(before)                                          # later tests expect embeddings on
+        time.sleep(2.5)

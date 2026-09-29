@@ -197,6 +197,24 @@ details.mb-ev ul{margin:6px 0 0;padding-left:18px;font-family:var(--mono);font-s
 .dg-line{font-size:15px;line-height:1.45;color:var(--ink)}
 .dg-line .pill{margin-right:8px}
 .panel.failed.critical{border-color:var(--bad);box-shadow:0 0 40px rgba(255,143,143,.18)}
+/* the record (Mnemosyne) */
+.recs{display:flex;flex-direction:column}
+.rec{display:flex;flex-direction:column;gap:6px;padding:12px 0;border-top:1px solid rgba(95,212,230,.12)}
+.rec:first-child{border-top:0;padding-top:0}
+.rec .rw{font-family:var(--mono);font-size:12px;color:var(--cyan)}
+.rec .rw span{color:var(--ink-faint)}
+.rec .rs{font-size:15px;line-height:1.5;color:var(--ink)}
+.rl{font-family:var(--mono);font-size:11px;letter-spacing:1px;color:var(--ink-faint);text-transform:uppercase;margin-top:2px}
+.rec ul{margin:0;padding-left:18px;font-size:14px;line-height:1.5;color:var(--ink-dim)}
+.facts{display:flex;flex-direction:column}
+.fact{display:flex;gap:12px;align-items:center;padding:8px 0;border-top:1px solid rgba(95,212,230,.12);transition:opacity .4s}
+.fact:first-child{border-top:0}
+.fact .ftx{flex:1;min-width:0;font-size:15px;line-height:1.45;color:var(--ink);overflow-wrap:anywhere}
+.fact .fd{font-family:var(--mono);font-size:11px;color:var(--ink-faint);white-space:nowrap}
+.fact .fx{flex-shrink:0;width:36px;height:36px;border:0;border-radius:6px;background:transparent;color:var(--ink-faint);font-size:16px}
+.fact .fx:hover{background:var(--cyan-track);color:var(--ink-strong)}
+.fact.gone{opacity:.35}
+.quote{padding:10px 14px;border-left:2px solid var(--cyan);font-size:16px;line-height:1.45;color:var(--ink-strong)}
 /* functions */
 .fns{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
 .fn{padding:16px 18px;border:1px solid var(--cyan-soft);border-radius:8px;background:rgba(4,7,11,.5);display:flex;flex-direction:column;gap:6px;min-width:0}
@@ -311,6 +329,8 @@ const TITLES = {
   "nebula.download": "Download", "nebula.open": "Link",
   "parallax.mailbox": "Mailbox", "parallax.digest": "Morning digest", "parallax.analyze": "Looking for patterns", "chrysalis.status": "Updates",
   "chrysalis.releases": "Releases", "chrysalis.rollback": "Rollback", "chrysalis.approve": "Release approval",
+  "mnemosyne.recall": "Recall", "mnemosyne.facts": "Remembered", "mnemosyne.remember": "Remember",
+  "mnemosyne.forget": "Forget",
 };
 function titleFor(tool) {
   if (TITLES[tool]) return TITLES[tool];
@@ -608,6 +628,10 @@ function resultTitle(tool, d) {
   if (Array.isArray(d.releases) && d.releases.length === 1) return "Last release";
   if (Array.isArray(d.mailbox)) return "Mailbox";
   if (d.digest) return "Morning digest";
+  if (Array.isArray(d.recall)) return d.query ? `Recall: ${d.query}` : d.date ? `Conversations · ${d.date}` : "Recent conversations";
+  if (d.remembered === true) return "What you asked me to remember";
+  if (typeof d.remembered_fact === "string") return "Remembered";
+  if (typeof d.forgot === "string") return "Forgotten";
   if (typeof d.title === "string") return d.title;
   if (typeof d.function === "string") return d.function;
   if (d.kind && d.name) return d.name;
@@ -651,6 +675,18 @@ function body(tool, d) {
   if (d.digest && typeof d.digest === "object") { wrap.append(digestView(d.digest)); used.add("digest"); }
   if (d.release && typeof d.release === "object") { wrap.append(releaseOutcome(d.release)); used.add("release"); used.add("title"); }
   if (Array.isArray(d.functions)) { wrap.append(functionCards(d.functions)); used.add("functions"); }
+  if (Array.isArray(d.recall)) {
+    wrap.append(d.recall.length ? recallView(d.recall) : el("div", "more", "No conversations match."));
+    ["recall", "query", "date", "matched_by"].forEach(k => used.add(k));
+  }
+  if (Array.isArray(d.facts)) {
+    if (Array.isArray(d.recall) && d.facts.length) wrap.append(el("div", "rl", "Facts you gave me"));
+    wrap.append(d.facts.length ? factsView(d.facts)
+                : el("div", "more", 'Nothing yet. Say "remember that…" and I\'ll keep it here.'));
+    used.add("facts"); used.add("remembered");
+  }
+  if (typeof d.remembered_fact === "string") { wrap.append(el("div", "quote", d.remembered_fact)); used.add("remembered_fact"); }
+  if (typeof d.forgot === "string") { wrap.append(el("div", "quote", d.forgot)); used.add("forgot"); }
   if (typeof d.function === "string") { wrap.append(functionDetail(d)); ["function", "state", "state_text", "purpose", "health", "rate_limit", "tools", "last_seen"].forEach(k => used.add(k)); }
   if (Array.isArray(d.inputs)) {
     const chips = el("div", "chips");
@@ -670,6 +706,46 @@ function body(tool, d) {
   }
   if (!wrap.children.length) wrap.append(el("div", "msg", "Done."));
   return wrap;
+}
+
+// Mnemosyne: past conversations, and the facts you asked her to keep.
+function recallView(list) {
+  const box = el("div", "recs");
+  list.forEach(r => {
+    const c = el("div", "rec");
+    const w = el("div", "rw", r.when); w.append(el("span", null, `  ·  ${r.requests} request${r.requests === 1 ? "" : "s"}  ·  #${r.id}`));
+    c.append(w, el("div", "rs", r.summary || ""));
+    if (r.plain) c.append(el("div", "more", "No summary could be written, so this is what was asked."));
+    [["Decided", r.decisions], ["Left open", r.open]].forEach(([label, items]) => {
+      if (!items || !items.length) return;
+      const ul = el("ul"); items.forEach(x => ul.append(el("li", null, x)));
+      c.append(el("div", "rl", label), ul);
+    });
+    if (r.topics && r.topics.length) {
+      const chips = el("div", "chips"); r.topics.forEach(t => chips.append(el("span", "chip", t))); c.append(chips);
+    }
+    box.append(c);
+  });
+  return box;
+}
+function factsView(list) {
+  const box = el("div", "facts");
+  list.forEach(f => {
+    const row = el("div", "fact");
+    const x = el("button", "fx", "×"); x.type = "button"; x.setAttribute("aria-label", "Forget this");
+    x.title = "Forget this";
+    x.addEventListener("click", async () => {
+      x.disabled = true;
+      try {
+        const r = await fetch(`/mnemosyne/facts/${f.id}`, { method: "DELETE" });
+        if (r.ok || r.status === 404) { row.classList.add("gone"); setTimeout(() => row.remove(), 400); }
+        else x.disabled = false;
+      } catch (e) { x.disabled = false; }
+    });
+    row.append(el("div", "ftx", f.fact), el("span", "fd", f.saved), x);
+    box.append(row);
+  });
+  return box;
 }
 
 // Probe: every function at a glance, and one in detail.

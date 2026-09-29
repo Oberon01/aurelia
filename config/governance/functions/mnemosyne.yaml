@@ -1,0 +1,24 @@
+# Mnemosyne ("Mnemo") — the record, part of Aurelia herself (not a separate service).
+# This file decides what is recorded, kept and left out. It's protected: Aurelia
+# can read it but never change it, even through her own proposed code changes.
+function: mnemosyne
+enabled: true
+
+tools:
+  recall:   { tier: reference }   # past conversations and remembered facts
+  facts:    { tier: reference }   # everything you asked her to remember
+  remember: { tier: act }         # only when you ask; shown on screen as it's saved
+  forget:   { tier: change }      # always asks you first: forgetting can't be undone
+
+rate_limit_per_minute: 30
+
+rules:
+  timezone: America/Chicago
+  quiet_minutes: 30        # a stretch of conversation gets its record after this long without a request
+  every_minutes: 10        # how often she checks for quiet conversations
+  keep_days: 365           # records older than this are deleted (facts stay until you remove them)
+  min_requests: 2          # a lone fast-path command ("lock the door") isn't worth a record
+  exclude_tools:           # requests that ran these are left out of records entirely
+    - orbit.login          #   (SmartRent sign-in codes)
+  max_facts: 200
+  max_transcript_chars: 24000

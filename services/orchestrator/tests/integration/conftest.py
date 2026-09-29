@@ -60,6 +60,10 @@ def stack(tmp_path_factory):
         "function: testfn\ntools:\n  status: {tier: reference}\n  switch: {tier: act}\n  look: {tier: reference}\n")
     (tmp / "gov" / "functions" / "parallax.yaml").write_text(
         "function: parallax\ntools:\n  digest: {tier: reference}\n  mailbox: {tier: reference}\n")
+    (tmp / "gov" / "functions" / "mnemosyne.yaml").write_text(
+        "function: mnemosyne\ntools:\n  recall: {tier: reference}\n  facts: {tier: reference}\n"
+        "  remember: {tier: act}\n  forget: {tier: change}\n"
+        "rules:\n  quiet_minutes: 30\n  every_minutes: 600\n  exclude_tools: [testfn.switch]\n  max_facts: 3\n")
     (tmp / "aurelia.yaml").write_text(
         f"llm:\n  providers:\n    ollama: {{base_url: 'http://127.0.0.1:{fn_port}'}}\n"
         "memory:\n  maintenance_minutes: 60\n"
@@ -82,6 +86,7 @@ def stack(tmp_path_factory):
     from app.settings import settings
     settings.database_url, settings.redis_url = DB, REDIS
     settings.config_path, settings.governance_path = str(tmp / "aurelia.yaml"), str(tmp / "gov")
+    settings.self_url = orch                          # Mnemosyne registers at the orchestrator's own address
 
     # a fake function (+ a fake Ollama embedding endpoint)
     fn = FastAPI()

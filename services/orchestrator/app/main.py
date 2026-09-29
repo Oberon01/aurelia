@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
-from . import assistant, db, digest, mailbox, memory, registry, releases, tasks
+from . import assistant, db, digest, mailbox, memory, mnemosyne, registry, releases, tasks
 from .config import ConfigStore
 from .events import CHANNEL
 from .governance import GovernanceStore
@@ -33,6 +33,8 @@ async def lifespan(app: FastAPI):
     await db.connect(settings.database_url)
     app.state.draining = False
     maintenance = asyncio.create_task(memory.maintenance_loop(app))
+    record = asyncio.create_task(mnemosyne.record_loop(app))
+    mnemo = asyncio.create_task(mnemosyne.register_loop(app))
     log.info("orchestrator ready")
     try:
         yield
@@ -43,6 +45,8 @@ async def lifespan(app: FastAPI):
         watcher.cancel()
         gov_watcher.cancel()
         maintenance.cancel()
+        record.cancel()
+        mnemo.cancel()
         await db.close()
         await app.state.redis.aclose()
         log.info("orchestrator stopped")
@@ -55,6 +59,7 @@ app.include_router(memory.router)
 app.include_router(releases.router)
 app.include_router(mailbox.router)
 app.include_router(digest.router)
+app.include_router(mnemosyne.router)
 
 
 VIEW = Path(__file__).parent / "static" / "view.html"

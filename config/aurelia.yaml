@@ -35,6 +35,7 @@ llm:
   # Add ollama after claude for a local fallback, or put it first to prefer local.
   routes:
     chat: [claude]
+    summarize: [claude]    # Mnemosyne's conversation records (counted toward the monthly cap)
   providers:
     claude:
       model: claude-haiku-4-5-20251001   # cheapest tier by default; escalate per route later
@@ -124,6 +125,11 @@ fastpath:
       tool: parallax.mailbox
       args: {}
       reply: "Here's the mailbox."
+    - name: remembered-facts
+      match: '^(?:what\s+do\s+you\s+remember(?:\s+about\s+me)?|(?:show(?: me)?\s+)?(?:what\s+you(?:''ve| have)\s+remembered|(?:my|the|your)\s+(?:remembered\s+)?facts))\??$'
+      tool: mnemosyne.facts
+      args: {}
+      reply: "Here's what you've asked me to remember."
     - name: digest
       match: '^(?:(?:show(?: me)?|open|give me)\s+)?(?:the\s+|my\s+|today''s\s+)?(?:morning\s+)?(?:digest|briefing|summary of (?:today|the day))$'
       tool: parallax.digest
@@ -211,10 +217,17 @@ fastpath:
       args: { name: "{light}", level: "{level}" }
       reply: "Set to {level}%."
     - name: remember-alias
-      match: '^remember\s+(?:that\s+)?(?P<alias>.+?)\s+(?:is|means)\s+(?:the\s+|my\s+)?(?P<device>.+)$'
+      # Only when the second half names a device; any other "remember that X is Y" is a fact (below).
+      match: '^remember\s+(?:that\s+)?(?P<alias>.+?)\s+(?:is|means)\s+(?:the\s+|my\s+)?(?P<device>(?:[\w'' ]+\s)?(?:lights?|lamp|lock|door|thermostat|tv|television|roku|sensor|switch|fan|outlet|plug))$'
       tool: orbit.alias
       args: { alias: "{alias}", device: "{device}" }
       reply: "Got it: {alias} means {device}."
+    # Mnemosyne: facts are saved only when you say "remember" (not "remember to…", which is a reminder).
+    - name: remember
+      match: '^(?:please\s+)?remember(?:\s+that)?\s+(?!to\b)(?P<fact>[^?]+?)\.?$'
+      tool: mnemosyne.remember
+      args: { fact: "{fact}" }
+      reply: "I'll remember that."
     - name: smartrent-code
       match: '^(?:smart\s*rent|2fa|two[- ]factor)\s+code\s+(?P<code>[0-9a-z]{4,10})$'
       tool: orbit.login

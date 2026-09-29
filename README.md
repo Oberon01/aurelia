@@ -16,6 +16,7 @@ space-themed name. Tools are addressed as `<function>.<tool>`.
 
 | Function | Domain | Example tools | Status |
 | --- | --- | --- | --- |
+| `mnemosyne` | The record: past conversations and facts you asked her to keep (part of Aurelia, served by the orchestrator) | `mnemosyne.recall`, `mnemosyne.facts`, `mnemosyne.remember`, `mnemosyne.forget` | Built |
 | `probe` | Diagnostics, testing Aurelia herself | `probe.echo`, `probe.functions`, `probe.function` | Built (reference) |
 | `nebula` | The web: search (web and YouTube), read pages, download files, open links | `nebula.search`, `nebula.youtube`, `nebula.read`, `nebula.download`, `nebula.open` | Built |
 | `constellation` | Devices and shared computer access | `constellation.search_files`, `constellation.open` | Planned, policy drafted |
@@ -265,6 +266,35 @@ Keep port 11434 closed to the rest of the network (it has no login).
 The end-to-end memory test needs a real Postgres with pgvector and Redis, so
 the deploy test stage skips it. Run it locally with `TEST_DATABASE_URL` and
 `TEST_REDIS_URL` set: `uv run python -m pytest -q tests/integration`.
+
+## Mnemosyne: the record
+
+Mnemosyne ("Mnemo") is part of Aurelia, not a separate service. It keeps the
+record of your conversations and the facts you ask her to keep.
+
+- **Conversations.** Every request is logged as it's answered. When a
+  conversation has been quiet for 30 minutes, a background round writes its
+  record: what you asked, what was decided, what was left open, and a few
+  topics. Records are embedded locally (Ollama) and found by meaning: "what did
+  we decide about the thermostat?", "what were we talking about Tuesday night?"
+  open a Recall panel. Claude writes the summaries (`llm.routes.summarize`,
+  counted toward the monthly cap); if no model can, or the budget is spent, a
+  plain list of what you asked is kept instead, so nothing goes unrecorded.
+  A lone command ("lock the door") isn't worth a record, and requests that ran
+  `orbit.login` (SmartRent codes) are left out entirely.
+- **Facts.** "Remember that…" saves a fact, only when you say so; she never
+  files things about you on her own. "What do you remember" shows them all,
+  each with a × to delete it. The facts go to the model with every request.
+  "Remember to…" is a reminder, which comes with Pulsar.
+- **Forgetting.** "Forget that conversation" or "forget the wifi fact" always
+  asks you first. Forgetting a conversation empties its record and blanks what
+  was said in its requests (timing and which tools ran stay, for Parallax).
+
+What gets recorded, how long records are kept (365 days), what's left out and
+the fact limit are in `config/governance/functions/mnemosyne.yaml`, which is
+protected: Aurelia can't change it. Run a round now with
+`POST /mnemosyne/record` (`?quiet_minutes=0` records everything, even the
+conversation you're in). Code: `services/orchestrator/app/mnemosyne.py`.
 
 ## Run it
 
