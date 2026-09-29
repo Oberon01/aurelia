@@ -36,6 +36,7 @@ llm:
   routes:
     chat: [claude]
     summarize: [claude]    # Mnemosyne's conversation records (counted toward the monthly cap)
+    research: [claude]     # Kepler: planning, cited answers, topics, explanations, quizzes
   providers:
     claude:
       model: claude-haiku-4-5-20251001   # cheapest tier by default; escalate per route later
@@ -130,6 +131,32 @@ fastpath:
       tool: mnemosyne.facts
       args: {}
       reply: "Here's what I know about you."
+    # Kepler: research and learning
+    - name: research-thorough
+      match: '^research\s+(?P<question>.+?)\s+(?:thoroughly|in depth|properly)\.?$'
+      tool: kepler.research
+      args: { question: "{question}", depth: thorough }
+      reply: "Researching that thoroughly."
+    - name: research
+      match: '^(?:research|look into)\s+(?P<question>.+?)\.?$'
+      tool: kepler.research
+      args: { question: "{question}" }
+      reply: "Researching that now. The panel shows how it's going."
+    - name: quiz-me
+      match: '^quiz me(?:\s+(?:on|about))?\s+(?P<subject>.+?)\??$'
+      tool: kepler.quiz
+      args: { subject: "{subject}" }
+      reply: "Here's your quiz. Answers are hidden until you pick."
+    - name: what-did-i-learn
+      match: '^what (?:did|have) I (?:learn(?:ed|t)?|read|researched?) (?:about|on)\s+(?P<query>.+?)\??$'
+      tool: kepler.recall
+      args: { query: "{query}" }
+      reply: "Here's what's in your library."
+    - name: show-topic
+      match: '^(?:show|open)(?: me)? the topic\s+(?P<name>.+?)$'
+      tool: kepler.topic
+      args: { name: "{name}" }
+      reply: "Here's the topic."
     - name: digest
       match: '^(?:(?:show(?: me)?|open|give me)\s+)?(?:the\s+|my\s+|today''s\s+)?(?:morning\s+)?(?:digest|briefing|summary of (?:today|the day))$'
       tool: parallax.digest

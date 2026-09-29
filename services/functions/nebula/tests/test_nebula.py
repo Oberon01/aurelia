@@ -214,3 +214,30 @@ def test_youtube_quota_message():
             await providers.youtube(c, "k", "q", 8)
     with pytest.raises(WebError, match="allowance is used up"):
         run(go())
+
+
+def tiny_pdf(text: str) -> bytes:
+    """A one-page PDF with a line of text, built by hand (no PDF library needed to make it)."""
+    stream = f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode()
+    objs = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+            b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    out, offsets = b"%PDF-1.4\n", []
+    for i, o in enumerate(objs, 1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % i + o + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs) + 1) + b"".join(b"%010d 00000 n \n" % o for o in offsets)
+    return out + b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objs) + 1, xref)
+
+
+def test_pdfs_are_read_as_text():
+    body = tiny_pdf("Azure landing zones organize subscriptions")
+
+    async def go():
+        async with site(lambda r: httpx.Response(200, headers={"content-type": "application/pdf"}, content=body)) as c:
+            return readable(await fetch(c, Guard(resolver=fake_dns), "https://example.org/guide.pdf", 5_000_000), 2000)
+    out = run(go())
+    assert "Azure landing zones organize subscriptions" in out["text"]
+    assert out["pages"] == 1 and out["title"] == "guide.pdf" and out["site"] == "example.org"

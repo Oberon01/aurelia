@@ -21,7 +21,7 @@ space-themed name. Tools are addressed as `<function>.<tool>`.
 | `nebula` | The web: search (web and YouTube), read pages, download files, open links | `nebula.search`, `nebula.youtube`, `nebula.read`, `nebula.download`, `nebula.open` | Built |
 | `constellation` | Devices and shared computer access | `constellation.search_files`, `constellation.open` | Planned, policy drafted |
 | `orbit` | Smart home: SmartRent (locks, lights, thermostat, sensors) and Roku TVs | `orbit.status`, `orbit.lock`, `orbit.unlock`, `orbit.light`, `orbit.thermostat`, `orbit.login`, `orbit.alias`, `orbit.tv_power`, `orbit.tv_input`, `orbit.tv_inputs`, `orbit.tv_app`, `orbit.tv_remote`, `orbit.tv_mute` | Built |
-| `kepler` | Scholar: research, summaries, knowledge base | | Planned |
+| `kepler` | Research and learning: cited answers from several sources, a library of topics that grows, explanations at your level, quizzes; written to Trilium | `kepler.research`, `kepler.recall`, `kepler.topic`, `kepler.explain`, `kepler.quiz`, `kepler.read_pdf`, `kepler.forget` | Built |
 | `nova` | Developer: code in a sandbox | | Planned |
 | `beacon` | Communication: messages, calls, calendar | | Planned |
 | `libra` | Bookkeeping: services and subscriptions | | Planned |
@@ -230,6 +230,51 @@ automatically. Blocked and confirm-first domains, size limits and search
 settings (Brave or a self-hosted SearXNG) are in
 `config/governance/functions/nebula.yaml`.
 
+## Kepler: research and learning
+
+Kepler reads several sources, answers with citations, and keeps what you
+learn in a library that grows by topic.
+
+| Say | Does |
+| --- | --- |
+| `research how do azure landing zones work` | Quick: reads 3 sources. A panel shows progress, then the answer with numbered citations, key points, where sources disagree, and the sources it read |
+| `research … thoroughly` (or `in depth`, `properly`) | Plans 2 or 3 searches from different angles and reads 8 sources |
+| `what did I learn about landing zones?` | Your library: matching topics and the research in them |
+| `show the topic Azure landing zones` | The topic: combined understanding, what's new, open questions, every piece of research and its sources |
+| `explain landing zones` | An explanation at your level, built on your research when there is some, with one analogy and two check questions |
+| `quiz me on landing zones` | 5 multiple-choice questions; answers stay hidden until you pick |
+
+- **Topics grow.** New research on something you've looked into before joins
+  that topic (found by name, then by meaning), and the topic's summary is
+  rewritten to fold it in: "Added to Azure landing zones (2 pieces)".
+- **At your level.** Answers, explanations and quizzes use what your profile
+  says you're learning. Scoring 80% or more on a quiz of at least 4
+  questions proposes "Solid on …" to the mailbox as something you know; you
+  approve it like any other About you card.
+- **Web access is Nebula's.** Kepler searches and reads through Nebula as
+  hidden tasks, so Nebula's safety rules apply (public web only, pages are
+  data). PDFs are read as text. Video and social pages are skipped, and at
+  most 2 sources come from one site.
+- **Models.** Claude writes answers, merges topics and writes quizzes, through
+  the orchestrator (`llm.routes.research`, counted toward the monthly cap);
+  Ollama embeds research for finding it by meaning (words are used without it).
+- **Forgetting** research or a whole topic always asks you first.
+
+**Trilium (one-way).** Each topic is written to Trilium as a note under
+"Aurelia · Library" (a note labelled `#aureliaLibrary`, created under
+`trilium.parent_note`). She writes, you read: edits you make there are
+overwritten the next time the topic grows, and nothing comes back yet (two-way
+comes later, once the rules for it are settled). To connect it, in Trilium open
+Options → ETAPI → Create new token, then in the server's `.env` set
+`TRILIUM_URL` (as the Kepler container reaches it, e.g. `http://trilium:8080`
+or `http://<host>:<port>`) and `TRILIUM_TOKEN`, and run
+`docker compose up -d kepler`. Without them the library still works; Kepler's
+health shows Trilium as not set up.
+
+Source counts, per-site limit, how close a topic must be to join it, quiz
+length and Trilium settings are in `config/governance/functions/kepler.yaml`.
+Code: `services/functions/kepler/`.
+
 ## Mailbox and morning digest
 
 Aurelia infers from her own history, but nothing she infers changes anything
@@ -319,7 +364,7 @@ record of your conversations and the facts you ask her to keep.
 - **What she knows about you.** Three layers: a core profile (up to 50
   facts) that goes with every request; everything else (up to 5,000), recalled
   by meaning when it fits what you're asking; and experience, the conversation
-  records (and Kepler's research, next). Facts come from you ("remember
+  records and Kepler's research. Facts come from you ("remember
   that…") or from what she noticed: every recorded conversation is also read
   for what it shows about you (how you like to be talked to, interests, goals,
   what's going on, people, what you're learning, rhythms, mood patterns), in
@@ -575,6 +620,7 @@ services/functions/probe/    reference function (tool: echo)
 services/functions/orbit/    smart home (SmartRent, Roku TV)
 services/functions/parallax/ analytics on task history → mailbox proposals, morning digest
 services/functions/nebula/   the web: search, YouTube, read, download, open
+services/functions/kepler/   research and learning: library, topics, explain, quiz, Trilium
 data/downloads/              Nebula's downloads (not in git)
 services/core/chrysalis/     update system (protected core)
 config/chrysalis.yaml        Chrysalis settings: dry run, polling, held authors, checks

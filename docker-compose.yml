@@ -144,6 +144,30 @@ services:
     stop_grace_period: 30s
     restart: unless-stopped
 
+  kepler:
+    build: ./services/functions/kepler
+    env_file: .env                 # TRILIUM_URL, TRILIUM_TOKEN (optional: Trilium notes)
+    environment:
+      FUNCTION_URL: http://kepler:9000
+      # Its research library (tables made by the orchestrator's migrations); reads the "learning" part of your profile.
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DOWNLOADS_DIR: /downloads
+    volumes:
+      - ./data/downloads:/downloads:ro    # read_pdf reads PDFs you've downloaded; never writes there
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9000/health', timeout=3).status == 200 else 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    stop_grace_period: 30s
+    restart: unless-stopped
+
   parallax:
     build: ./services/functions/parallax
     env_file: .env

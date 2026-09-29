@@ -142,7 +142,7 @@ def readable(f: Fetched, max_chars: int) -> dict[str, Any]:
     ctype = (f.content_type or "").split(";")[0].strip().lower()
     site = urlsplit(f.url).hostname or ""
     if ctype in ("application/pdf",) or f.body[:5] == b"%PDF-":
-        raise WebError("That's a PDF. I can download it for you; reading PDFs comes with Kepler.")
+        return pdf_text(f.body, f.url, site, max_chars, f.truncated)
     raw = _decode(f)
     title = ""
     if "html" in ctype or raw.lstrip()[:15].lower().startswith(("<!doctype", "<html")):
@@ -161,6 +161,28 @@ def readable(f: Fetched, max_chars: int) -> dict[str, Any]:
     truncated = len(text) > max_chars or f.truncated
     return {"title": title or site, "url": f.url, "site": site, "words": len(text.split()),
             "text": text[:max_chars].rstrip() + ("…" if len(text) > max_chars else ""), "truncated": truncated}
+
+
+def pdf_text(body: bytes, url: str, site: str, max_chars: int, cut: bool = False) -> dict[str, Any]:
+    """A PDF's text, page by page (no OCR: a scanned PDF has no text to give)."""
+    import io
+    from pypdf import PdfReader
+    from pypdf.errors import PdfReadError
+    if cut:
+        raise WebError("That PDF is larger than I read in one go; I can download it instead.")
+    try:
+        reader = PdfReader(io.BytesIO(body))
+        pages = [(p.extract_text() or "").strip() for p in reader.pages[:200]]
+        title = ((reader.metadata or {}).get("/Title") or "").strip() if reader.metadata else ""
+    except (PdfReadError, ValueError, KeyError) as exc:
+        raise WebError(f"I couldn't read that PDF ({exc.__class__.__name__}).")
+    text = "\n\n".join(p for p in pages if p)
+    text = re.sub(r"[ \t]+", " ", re.sub(r"\n{3,}", "\n\n", text)).strip()
+    if not text:
+        raise WebError("That PDF is only images (scanned), so there's no text to read.")
+    name = unquote(urlsplit(url).path.rsplit("/", 1)[-1]) or site
+    return {"title": title or name, "url": url, "site": site, "words": len(text.split()), "pages": len(reader.pages),
+            "text": text[:max_chars].rstrip() + ("…" if len(text) > max_chars else ""), "truncated": len(text) > max_chars}
 
 
 def _title(raw: str) -> str:

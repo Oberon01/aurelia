@@ -1,0 +1,28 @@
+# Kepler — research and learning. Answers questions from the web with citations,
+# keeps a library of what Kentrell learns (grouped into topics by meaning),
+# explains at his level, and quizzes him. It reaches the web only through Nebula
+# (hidden tasks, same guard and rules) and models only through the orchestrator.
+function: kepler
+enabled: true
+
+tools:
+  research: { tier: read }        # reads the public web through Nebula; saves to his library
+  recall:   { tier: reference }
+  topic:    { tier: reference }
+  explain:  { tier: reference }
+  quiz:     { tier: reference }
+  read_pdf: { tier: read }        # a PDF link (through Nebula) or a file in his downloads (read-only)
+  forget:   { tier: change }      # always asks: deleting research can't be undone
+
+rate_limit_per_minute: 20
+
+rules:
+  quick_sources: 3                # sources read for a normal question
+  thorough_sources: 8             # when he asks to research something properly
+  max_per_site: 2                 # so one site can't dominate an answer
+  topic_join: 0.78                # how close in meaning research must be to join an existing topic (0-1)
+  read_timeout_seconds: 45
+  quiz_questions: 5
+  trilium:
+    enabled: true                 # one-way: topics are written to his Trilium; his edits don't flow back (yet)
+    parent_note: root             # where the "Aurelia · Library" folder note is made
