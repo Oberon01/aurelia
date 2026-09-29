@@ -77,7 +77,11 @@ async def start_task(body: StartTask, request: Request):
         body.user, decision.tier, body.confirmed,
     )
     open_data: dict[str, Any] = {"args": body.args, "user": body.user, "trigger": body.trigger,
-                                 "cancellable": resolved.tool.cancellable, "unit": resolved.tool.progress_unit}
+                                 "cancellable": resolved.tool.cancellable, "unit": resolved.tool.progress_unit,
+                                 "tier": decision.tier}
+    if decision.tier in ("act", "change"):
+        # Actions confirm and get out of the way; look-ups stay until dismissed.
+        open_data["close_after"] = request.app.state.config.current.display.action_panel_seconds
     # Memory: a repeated look-up shows its last panel at once (labelled with its
     # age) while this run refreshes it. Actions never restore an old result.
     if (decision.tier in memory.RESTORE_TIERS and request.app.state.config.current.memory.restore

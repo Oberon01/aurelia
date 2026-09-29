@@ -3,6 +3,9 @@
 display:
   # Tasks estimated longer than this stream results live; shorter ones batch.
   live_mode_threshold_seconds: 30
+  # Finished actions (lock, lights, TV...) fade after this many seconds; hovering
+  # holds them. Look-ups (home status, releases) stay until you dismiss them.
+  action_panel_seconds: 12
 
 retention:
   # Saved result panels: full for hot_days, then a summary until warm_days,
@@ -51,6 +54,11 @@ fastpath:
       args: { message: "{message}", steps: "{steps|3}" }
       reply: 'Echoing "{message}".'
     # Orbit (smart home). Unlock is governed as a "change": it always asks you first.
+    - name: home-status
+      match: '^(?:(?:what(?:''s|s| is)|how(?:''s|s| is)|show(?: me)?|check)\s+)?(?:the\s+)?(?:(?:status|state)\s+of\s+)?(?:(?:my|the)\s+)?(?:home|house|apartment|place)(?:\s+(?:status|state))?$'
+      tool: orbit.status
+      args: {}
+      reply: "Here's the home."
     - name: lock-up
       match: '^lock\s+(?:up|(?:the\s+)?doors?)$'
       tool: orbit.lock

@@ -17,6 +17,7 @@ log = logging.getLogger("aurelia.config")
 
 class DisplayConfig(BaseModel):
     live_mode_threshold_seconds: float = 30
+    action_panel_seconds: float = 12         # finished actions (lock, lights...) fade after this; look-ups stay
 
 
 class RetentionConfig(BaseModel):
