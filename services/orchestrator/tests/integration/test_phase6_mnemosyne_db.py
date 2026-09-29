@@ -21,8 +21,17 @@ class Model:
     def summary(self, transcript):
         """Summarizes by quoting: what Kentrell said, the last thing as the decision."""
         said = [l.split(": ", 1)[1] for l in transcript.splitlines() if "] Kentrell" in l]
+        noticed = []
+        if "short answers" in transcript:
+            noticed.append({"fact": "Prefers short answers", "category": "communication", "core": False,
+                            "why": "asked for short answers", "confidence": 0.9})
+        if "tired" in transcript:                                  # health: never proposed, whatever the model says
+            noticed.append({"fact": "Often tired in the evening", "category": "health", "confidence": 0.9})
+        if "jazz" in transcript:
+            noticed.append({"fact": "Dislikes jazz", "category": "preferences", "why": "said so", "confidence": 0.8})
         return json.dumps({"summary": "Talked about: " + " / ".join(said), "decisions": said[-1:],
-                           "open": ["follow up"], "topics": ["frieren"] if "frieren" in transcript else ["misc"]})
+                           "open": ["follow up"], "topics": ["frieren"] if "frieren" in transcript else ["misc"],
+                           "about_kentrell": noticed})
 
     async def complete(self, route, system, messages, tools):
         from app.llm.base import Completion, ToolCall, Usage
@@ -94,17 +103,26 @@ def test_facts_are_kept_shown_given_to_her_and_removable(stack, model):
     assert again["result"]["message"] == "I already had that."
     run_tool(stack, "mnemosyne.remember", {"fact": "Guest wifi is called Solace"})
     run_tool(stack, "mnemosyne.remember", {"fact": "Watches anime on Fridays"})
-    full = run_tool(stack, "mnemosyne.remember", {"fact": "A fourth thing"})       # max_facts: 3 in the test policy
-    assert full["status"] == "failed" and "holding 3 facts" in full["error"]
+    for extra in ["A fourth thing", "A fifth thing", "A sixth thing"]:
+        run_tool(stack, "mnemosyne.remember", {"fact": extra})
+    full = run_tool(stack, "mnemosyne.remember", {"fact": "A seventh thing"})       # max_facts: 6 in the test policy
+    assert full["status"] == "failed" and "holding 6 facts" in full["error"]
+    for extra in ["A fourth thing", "A fifth thing", "A sixth thing"]:
+        sql("DELETE FROM remembered_facts WHERE fact=$1", extra)
 
     listed = run_tool(stack, "mnemosyne.facts", {})["result"]["facts"]
     assert [f["fact"] for f in listed] == ["Prefers the thermostat at 70°F at night", "Guest wifi is called Solace",
                                            "Watches anime on Fridays"]
 
-    model.chat = [{"text": "Sure."}]
-    httpx.post(f"{stack['orch']}/ask", json={"text": "hi", "session_id": uuid.uuid4().hex}, timeout=30)
-    system = model.seen[-1]["system"]
-    assert "Things Kentrell asked you to remember" in system and "- Guest wifi is called Solace" in system
+    # Core facts go with every request (system prompt); the rest only when they fit the request.
+    httpx.patch(f"{stack['orch']}/mnemosyne/facts/{listed[0]['id']}", json={"core": True}).raise_for_status()
+    model.chat = [{"text": "Sure."}, {"text": "Sure."}]
+    httpx.post(f"{stack['orch']}/ask", json={"text": "what is the guest wifi called", "session_id": uuid.uuid4().hex}, timeout=30)
+    seen = model.seen[-1]
+    assert "shapes every conversation" in seen["system"] and "- [Other] Prefers the thermostat at 70°F at night" in seen["system"]
+    assert "What you know about Kentrell that may matter here" in seen["text"] and "Guest wifi is called Solace" in seen["text"]
+    httpx.post(f"{stack['orch']}/ask", json={"text": "lock the front door", "session_id": uuid.uuid4().hex}, timeout=30)
+    assert "Guest wifi" not in model.seen[-1]["text"]            # unrelated: not brought up
 
     # The × on the facts panel, and forgetting (which always asks first).
     assert httpx.delete(f"{stack['orch']}/mnemosyne/facts/{listed[2]['id']}").is_success
@@ -189,3 +207,45 @@ def test_recall_by_day_and_forgetting_a_conversation(stack, model):
     assert rec["id"] not in [r["id"] for r in run_tool(stack, "mnemosyne.recall", {"date": day, "limit": 20})["result"]["recall"]]
     assert {r["text"] for r in sql("SELECT text, reply FROM ask_requests WHERE session_id=$1", session)} == {"(forgotten)"}
     assert record(stack, quiet=30)["recorded"] == 0                # forgotten words aren't recorded again
+
+
+def test_each_conversation_teaches_her_but_only_what_he_approves(stack, model):
+    session = uuid.uuid4().hex
+    add_request(session, 90, "can you keep to short answers from now on")
+    add_request(session, 89, "i'm tired, and honestly i can't stand jazz")
+    record(stack, quiet=30)
+    [rec] = sql("SELECT id, observations FROM conversation_records WHERE session_id=$1", session)
+    assert rec["observations"] == 2                                # the health one never made it
+    summarizer = next(s for s in reversed(model.seen) if s["route"] == "summarize")
+    assert "about_kentrell" in summarizer["system"] and "Never propose anything about: health" in summarizer["system"]
+
+    items = {i["title"]: i for i in httpx.get(f"{stack['orch']}/mailbox").json()["items"] if i["kind"] == "about_you"}
+    assert set(items) == {"Prefers short answers", "Dislikes jazz"}
+    short, jazz = items["Prefers short answers"], items["Dislikes jazz"]
+    assert short["proposal"]["category"] == "communication" and short["evidence"] == ["asked for short answers"]
+    assert not sql("SELECT 1 FROM remembered_facts WHERE fact IN ('Prefers short answers', 'Dislikes jazz')")  # nothing kept yet
+
+    # Approve with a change (make it core), decline the other.
+    out = httpx.post(f"{stack['orch']}/mailbox/{short['id']}/decide",
+                     json={"action": "modify", "changes": {"fact": "Prefers short, direct answers", "core": True}}).json()
+    assert out["status"] == "modified" and "core profile" in out["done"]
+    httpx.post(f"{stack['orch']}/mailbox/{jazz['id']}/decide", json={"action": "reject", "reason": "just a mood"}).raise_for_status()
+    [kept] = sql("SELECT category, core, source, from_item, from_record FROM remembered_facts WHERE fact=$1",
+                 "Prefers short, direct answers")
+    assert (kept["category"], kept["core"], kept["source"], kept["from_item"], kept["from_record"]) == \
+        ("communication", True, "learned", short["id"], rec["id"])
+
+    model.chat = [{"text": "Sure."}]
+    httpx.post(f"{stack['orch']}/ask", json={"text": "hello", "session_id": uuid.uuid4().hex}, timeout=30)
+    assert "[How to talk to him] Prefers short, direct answers" in model.seen[-1]["system"]
+
+    # A later conversation shows the same things again: the approved one is known, the declined one stays declined.
+    again = uuid.uuid4().hex
+    add_request(again, 80, "short answers please, and no jazz")
+    add_request(again, 79, "thanks")
+    record(stack, quiet=30)
+    summarizer = next(s for s in reversed(model.seen) if s["route"] == "summarize")
+    assert "Prefers short, direct answers" in summarizer["system"]           # told what she already knows
+    assert "- Dislikes jazz" in summarizer["system"]                        # and what he declined
+    waiting = [i["title"] for i in httpx.get(f"{stack['orch']}/mailbox").json()["items"] if i["kind"] == "about_you"]
+    assert "Dislikes jazz" not in waiting                                   # never asked again as-is

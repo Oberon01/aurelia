@@ -41,7 +41,7 @@ def test_the_models_summary_is_read_carefully():
     ok = mnemosyne.parse_summary('Sure! {"summary": "Looked up Frieren.", "decisions": ["watch it Friday", ""],'
                                  ' "open": ["find the OST"], "topics": ["Anime", "Frieren"]} Hope that helps')
     assert ok == {"summary": "Looked up Frieren.", "decisions": ["watch it Friday"], "open": ["find the OST"],
-                  "topics": ["anime", "frieren"]}
+                  "topics": ["anime", "frieren"], "about_kentrell": []}
     assert mnemosyne.parse_summary("no json here") is None
     assert mnemosyne.parse_summary('{"summary": ""}') is None
     assert mnemosyne.parse_summary('{"decisions": ["x"]}') is None

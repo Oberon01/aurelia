@@ -126,10 +126,10 @@ fastpath:
       args: {}
       reply: "Here's the mailbox."
     - name: remembered-facts
-      match: '^(?:what\s+do\s+you\s+remember(?:\s+about\s+me)?|(?:show(?: me)?\s+)?(?:what\s+you(?:''ve| have)\s+remembered|(?:my|the|your)\s+(?:remembered\s+)?facts))\??$'
+      match: '^(?:what\s+do\s+you\s+(?:remember|know)(?:\s+about\s+me)?|(?:show(?: me)?\s+)?(?:what\s+you(?:''ve| have)\s+remembered|what\s+you\s+know\s+about\s+me|(?:my|the|your)\s+(?:remembered\s+)?facts|my\s+profile))\??$'
       tool: mnemosyne.facts
       args: {}
-      reply: "Here's what you've asked me to remember."
+      reply: "Here's what I know about you."
     - name: digest
       match: '^(?:(?:show(?: me)?|open|give me)\s+)?(?:the\s+|my\s+|today''s\s+)?(?:morning\s+)?(?:digest|briefing|summary of (?:today|the day))$'
       tool: parallax.digest

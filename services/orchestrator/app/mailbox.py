@@ -27,6 +27,7 @@ from .events import PanelEvent, publish
 log = logging.getLogger("aurelia.mailbox")
 router = APIRouter(prefix="/mailbox", tags=["mailbox"])
 
+_profile_rules = {"max_facts": 5000, "max_core": 50}    # kept current by Mnemosyne from its policy
 REOPEN_FACTOR = 1.5          # a rejected idea returns only with this much more evidence
 DEFER_DAYS = 7
 EXPIRE_AFTER_DAYS = 60       # deferred ideas nobody came back to
@@ -67,6 +68,16 @@ class Batch(BaseModel):
 def validate(kind: str, proposal: dict[str, Any]) -> dict[str, Any]:
     """The proposal as it will be applied, or HTTP 400 in plain words."""
     p = dict(proposal)
+    if kind == "about_you":                  # something Mnemosyne noticed about you
+        from .profile import category
+        fact = " ".join(str(p.get("fact") or "").split())
+        if not fact:
+            raise HTTPException(400, "Say what I should remember.")
+        if len(fact) > 500:
+            raise HTTPException(400, "Keep it to a sentence or two.")
+        p.update(fact=fact, category=category(p.get("category")), core=bool(p.get("core")))
+        p["replaces"] = int(p["replaces"]) if p.get("replaces") not in (None, "") else None
+        return p
     if not p.get("tool"):
         raise HTTPException(400, "The proposal doesn't say which tool it's about.")
     if kind == "criticality":
@@ -96,6 +107,16 @@ def validate(kind: str, proposal: dict[str, Any]) -> dict[str, Any]:
 
 async def apply(conn, item_id: int, kind: str, p: dict[str, Any]) -> str:
     """Make an approved proposal real. Returns what happened, in plain words."""
+    if kind == "about_you":
+        from . import profile
+        user = "owner"
+        if p.get("replaces") and await profile.update(conn, p["replaces"], user, p["fact"], p["category"], p["core"]):
+            await conn.execute("UPDATE remembered_facts SET source='learned', from_item=$2 WHERE id=$1", p["replaces"], item_id)
+            return "Updated what I knew."
+        rules = _profile_rules
+        await profile.add(conn, user, p["fact"], p["category"], p["core"], "learned", rules["max_facts"], rules["max_core"],
+                          from_item=item_id, from_record=p.get("record_id"))
+        return "I'll remember that." + (" It's part of your core profile now." if p["core"] else "")
     if kind == "criticality":
         await conn.execute(
             "INSERT INTO tool_criticality (tool, level, reason, from_item) VALUES ($1, $2, $3, $4) "
@@ -246,6 +267,10 @@ async def _decide(item_id: int, d: Decision) -> dict[str, Any]:
 async def decide(item_id: int, d: Decision, request: Request):
     out = await _decide(item_id, d)
     await notify(request.app.state.redis)
+    if out.get("status") in ("approved", "modified"):
+        import asyncio
+        from . import profile
+        asyncio.create_task(profile.embed_backlog(request.app))    # recallable by meaning right away
     return out
 
 

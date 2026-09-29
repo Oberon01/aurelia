@@ -63,7 +63,8 @@ def stack(tmp_path_factory):
     (tmp / "gov" / "functions" / "mnemosyne.yaml").write_text(
         "function: mnemosyne\ntools:\n  recall: {tier: reference}\n  facts: {tier: reference}\n"
         "  remember: {tier: act}\n  forget: {tier: change}\n"
-        "rules:\n  quiet_minutes: 30\n  every_minutes: 600\n  exclude_tools: [testfn.switch]\n  max_facts: 3\n")
+        "rules:\n  quiet_minutes: 30\n  every_minutes: 600\n  exclude_tools: [testfn.switch]\n  max_facts: 6\n"
+        "  max_core: 2\n  recall_min_score: 0.1\n")
     (tmp / "aurelia.yaml").write_text(
         f"llm:\n  providers:\n    ollama: {{base_url: 'http://127.0.0.1:{fn_port}'}}\n"
         "memory:\n  maintenance_minutes: 60\n"

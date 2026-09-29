@@ -7,7 +7,7 @@ enabled: true
 tools:
   recall:   { tier: reference }   # past conversations and remembered facts
   facts:    { tier: reference }   # everything you asked her to remember
-  remember: { tier: act }         # only when you ask; shown on screen as it's saved
+  remember: { tier: act }         # only when you ask; what she notices on her own goes to the mailbox
   forget:   { tier: change }      # always asks you first: forgetting can't be undone
 
 rate_limit_per_minute: 30
@@ -20,5 +20,26 @@ rules:
   min_requests: 2          # a lone fast-path command ("lock the door") isn't worth a record
   exclude_tools:           # requests that ran these are left out of records entirely
     - orbit.login          #   (SmartRent sign-in codes)
-  max_facts: 200
   max_transcript_chars: 24000
+
+  # What she knows about you
+  max_facts: 5000          # everything she knows about you; recalled by meaning when it fits
+  max_core: 50             # the core profile: goes with every request
+  recall_facts: 8          # facts recalled per request, beyond the core
+  recall_min_score: 0.35   # how close in meaning a fact must be to come up (0-1)
+  learn: true              # read each recorded conversation for what it shows about you
+  learn_categories:        # what she may notice and propose (you approve each one in the mailbox)
+    - communication        #   how you like to be talked to
+    - mood                 #   patterns only (e.g. what helps when you're stressed), never one-off moods
+    - interests
+    - goals
+    - life                 #   what's going on in your life
+    - people               #   who they are to you
+    - learning             #   what you know and are learning
+    - rhythms
+    - work
+    - preferences
+  never_infer:             # never proposed from conversations; you can still tell her directly
+    - health               #   comes later, from the ring and biometrics, under its own rules
+  min_confidence: 0.6
+  max_observations: 5      # per conversation

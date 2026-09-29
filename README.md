@@ -282,16 +282,29 @@ record of your conversations and the facts you ask her to keep.
   plain list of what you asked is kept instead, so nothing goes unrecorded.
   A lone command ("lock the door") isn't worth a record, and requests that ran
   `orbit.login` (SmartRent codes) are left out entirely.
-- **Facts.** "Remember that…" saves a fact, only when you say so; she never
-  files things about you on her own. "What do you remember" shows them all,
-  each with a × to delete it. The facts go to the model with every request.
-  "Remember to…" is a reminder, which comes with Pulsar.
+- **What she knows about you.** Three layers: a core profile (up to 50
+  facts) that goes with every request; everything else (up to 5,000), recalled
+  by meaning when it fits what you're asking; and experience, the conversation
+  records (and Kepler's research, next). Facts come from you ("remember
+  that…") or from what she noticed: every recorded conversation is also read
+  for what it shows about you (how you like to be talked to, interests, goals,
+  what's going on, people, what you're learning, rhythms, mood patterns), in
+  the same model call as its summary. Each observation goes to the mailbox as
+  an "About you" card with the moment it came from; nothing is kept until you
+  approve it (or change it first). Declined ones aren't asked again. "What do
+  you know about me" shows it all, grouped by kind: ☆/★ moves a fact in or
+  out of the core, × deletes it. "Remember to…" is a reminder, which comes
+  with Pulsar.
+- **Mood.** She reads your mood from how you write and adjusts how she talks,
+  in the moment. Only patterns you approve are kept ("prefers short answers
+  when tired"), never a one-off mood. Health is never inferred from
+  conversations (it comes later with biometrics, under its own rules).
 - **Forgetting.** "Forget that conversation" or "forget the wifi fact" always
   asks you first. Forgetting a conversation empties its record and blanks what
   was said in its requests (timing and which tools ran stay, for Parallax).
 
-What gets recorded, how long records are kept (365 days), what's left out and
-the fact limit are in `config/governance/functions/mnemosyne.yaml`, which is
+What gets recorded, how long records are kept (365 days), what's left out, what
+she may and may never infer, and the limits are in `config/governance/functions/mnemosyne.yaml`, which is
 protected: Aurelia can't change it. Run a round now with
 `POST /mnemosyne/record` (`?quiet_minutes=0` records everything, even the
 conversation you're in). Code: `services/orchestrator/app/mnemosyne.py`.

@@ -184,6 +184,7 @@ details.mb-ev ul{margin:6px 0 0;padding-left:18px;font-family:var(--mono);font-s
 .mb-form label{font-family:var(--mono);font-size:12px;color:var(--ink-faint)}
 .mb-form input,.mb-form select{min-height:36px;padding:0 10px;border-radius:6px;border:1px solid var(--cyan-soft);background:rgba(4,7,11,.8);color:var(--ink-strong);font:inherit;font-size:14px;color-scheme:dark}
 .mb-form input[type=text]{flex:1;min-width:180px}
+.mb-form input[type=checkbox]{min-height:0;width:18px;height:18px;padding:0;accent-color:var(--cyan)}
 .day{min-height:32px;min-width:44px;padding:0 8px;border-radius:6px;border:1px solid var(--cyan-soft);background:transparent;color:var(--ink-faint);font-family:var(--mono);font-size:12px}
 .day[aria-pressed=true]{background:var(--cyan);border-color:var(--cyan);color:var(--ground)}
 .mb-item .btns .btn{min-height:36px;font-size:13px}
@@ -214,6 +215,9 @@ details.mb-ev ul{margin:6px 0 0;padding-left:18px;font-family:var(--mono);font-s
 .fact .fx{flex-shrink:0;width:36px;height:36px;border:0;border-radius:6px;background:transparent;color:var(--ink-faint);font-size:16px}
 .fact .fx:hover{background:var(--cyan-track);color:var(--ink-strong)}
 .fact.gone{opacity:.35}
+.fact .star{font-size:17px}.fact .star.on{color:var(--cyan)}
+.fgroup{padding-top:12px}.fgroup:first-child{padding-top:0}
+.fgroup + .fact{border-top:0}
 .quote{padding:10px 14px;border-left:2px solid var(--cyan);font-size:16px;line-height:1.45;color:var(--ink-strong)}
 /* functions */
 .fns{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
@@ -629,7 +633,7 @@ function resultTitle(tool, d) {
   if (Array.isArray(d.mailbox)) return "Mailbox";
   if (d.digest) return "Morning digest";
   if (Array.isArray(d.recall)) return d.query ? `Recall: ${d.query}` : d.date ? `Conversations · ${d.date}` : "Recent conversations";
-  if (d.remembered === true) return "What you asked me to remember";
+  if (d.remembered === true) return "What I know about you";
   if (typeof d.remembered_fact === "string") return "Remembered";
   if (typeof d.forgot === "string") return "Forgotten";
   if (typeof d.title === "string") return d.title;
@@ -682,8 +686,8 @@ function body(tool, d) {
   if (Array.isArray(d.facts)) {
     if (Array.isArray(d.recall) && d.facts.length) wrap.append(el("div", "rl", "Facts you gave me"));
     wrap.append(d.facts.length ? factsView(d.facts)
-                : el("div", "more", 'Nothing yet. Say "remember that…" and I\'ll keep it here.'));
-    used.add("facts"); used.add("remembered");
+                : el("div", "more", 'Nothing yet. Say "remember that…", or approve what I notice in the mailbox.'));
+    used.add("facts"); used.add("remembered"); used.add("categories");
   }
   if (typeof d.remembered_fact === "string") { wrap.append(el("div", "quote", d.remembered_fact)); used.add("remembered_fact"); }
   if (typeof d.forgot === "string") { wrap.append(el("div", "quote", d.forgot)); used.add("forgot"); }
@@ -730,7 +734,11 @@ function recallView(list) {
 }
 function factsView(list) {
   const box = el("div", "facts");
+  const grouped = list.length && list[0].category !== undefined;
+  let last = null;
   list.forEach(f => {
+    const group = grouped ? (f.core ? "Core · always on my mind" : CATEGORY_LABEL[f.category] || "Other") : null;
+    if (group && group !== last) { box.append(el("div", "rl fgroup", group)); last = group; }
     const row = el("div", "fact");
     const x = el("button", "fx", "×"); x.type = "button"; x.setAttribute("aria-label", "Forget this");
     x.title = "Forget this";
@@ -742,7 +750,24 @@ function factsView(list) {
         else x.disabled = false;
       } catch (e) { x.disabled = false; }
     });
-    row.append(el("div", "ftx", f.fact), el("span", "fd", f.saved), x);
+    if (grouped) {
+      const star = el("button", "fx star" + (f.core ? " on" : ""), f.core ? "★" : "☆"); star.type = "button";
+      const label = () => (f.core ? "Remove from core" : "Keep always on my mind (core)");
+      star.title = label(); star.setAttribute("aria-label", label());
+      star.addEventListener("click", async () => {
+        star.disabled = true;
+        try {
+          const r = await fetch(`/mnemosyne/facts/${f.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" },
+                                                           body: JSON.stringify({ core: !f.core }) });
+          const out = await r.json().catch(() => ({}));
+          if (!r.ok) { say(out.detail || "Couldn't change that."); }
+          else { f.core = !f.core; star.textContent = f.core ? "★" : "☆"; star.classList.toggle("on", f.core); star.title = label(); }
+        } catch (e) { say("I can't reach Aurelia right now."); }
+        star.disabled = false;
+      });
+      row.append(star);
+    }
+    row.append(el("div", "ftx", f.fact), el("span", "fd", (f.source === "learned" ? "learned " : f.source ? "told " : "") + f.saved), x);
     box.append(row);
   });
   return box;
@@ -862,7 +887,10 @@ function linkView(link) {
 // ---------------------------------------------------------------- mailbox
 // Deciding happens only here, from your click: there is no tool for it, so
 // Aurelia can show you her ideas but never approve them herself.
-const KIND_LABEL = { automation: "Automations", criticality: "What matters most", retention: "Keep longer" };
+const KIND_LABEL = { about_you: "About you", automation: "Automations", criticality: "What matters most", retention: "Keep longer" };
+const CATEGORY_LABEL = { communication: "How to talk to you", mood: "Mood patterns", interests: "Interests", goals: "Goals",
+  life: "What's going on", people: "People", learning: "What you know and are learning", rhythms: "Rhythms",
+  work: "Work", preferences: "Preferences", general: "Other" };
 const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
 async function decide(id, body) {
@@ -914,7 +942,10 @@ function mailboxItem(item) {
   const top = el("div", "mb-top");
   top.append(el("span", "mb-title", item.title), el("span", "mb-conf", `${Math.round(item.confidence * 100)}% sure · ${item.age}`));
   c.append(top);
-  if (item.summary) c.append(el("div", "mb-sum", item.summary));
+  if (item.kind === "about_you") {
+    const pp = item.proposal || {};
+    c.append(el("div", "mb-sum", `${CATEGORY_LABEL[pp.category] || "Other"}${pp.core ? " · core profile" : ""} · ${item.summary}`));
+  } else if (item.summary) c.append(el("div", "mb-sum", item.summary));
   if ((item.evidence || []).length) {
     const ev = el("details", "mb-ev"); ev.append(el("summary", null, `Evidence (${item.evidence.length})`));
     const ul = el("ul"); item.evidence.forEach(e => ul.append(el("li", null, e))); ev.append(ul);
@@ -942,6 +973,14 @@ function mailboxItem(item) {
     sel.setAttribute("aria-label", "Level");
     form.append(el("label", null, "Level"), sel);
     changes = () => ({ level: sel.value });
+  } else if (item.kind === "about_you") {
+    const text = el("input"); text.type = "text"; text.value = p.fact || ""; text.setAttribute("aria-label", "What to remember");
+    const sel = el("select"); sel.setAttribute("aria-label", "Kind");
+    Object.entries(CATEGORY_LABEL).forEach(([k, v]) => { const o = el("option", null, v); o.value = k; if (k === p.category) o.selected = true; sel.append(o); });
+    const core = el("input"); core.type = "checkbox"; core.checked = !!p.core; core.id = `core-${item.id}`;
+    const coreLabel = el("label", null, "Core (always on my mind)"); coreLabel.htmlFor = core.id;
+    form.append(text, sel, core, coreLabel);
+    changes = () => ({ fact: text.value, category: sel.value, core: core.checked });
   } else if (item.kind === "retention") {
     const n = el("input"); n.type = "number"; n.min = "1"; n.max = "365"; n.value = p.hot_days || 30; n.style.width = "90px";
     n.setAttribute("aria-label", "Days");
