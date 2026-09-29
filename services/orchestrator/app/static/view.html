@@ -498,6 +498,7 @@ function pinButton(taskId, pinned) {
 }
 
 function resultTitle(tool, d) {
+  if (Array.isArray(d.releases) && d.releases.length === 1) return "Last release";
   if (Array.isArray(d.mailbox)) return "Mailbox";
   if (d.digest) return "Morning digest";
   if (typeof d.title === "string") return d.title;
@@ -531,7 +532,9 @@ function body(tool, d) {
   } else if (typeof d.muted === "boolean") {
     wrap.append(el("div", "msg", d.muted ? "Muted." : "Sound on.")); ["device", "muted"].forEach(k => used.add(k));
   }
-  if (Array.isArray(d.releases)) { wrap.append(releases(d.releases)); used.add("releases"); }
+  if (Array.isArray(d.releases)) {                  // one release in detail; several as a list
+    wrap.append(d.releases.length === 1 ? releaseDetail(d.releases[0]) : releases(d.releases)); used.add("releases");
+  }
   if (Array.isArray(d.mailbox)) { wrap.append(mailboxView(d.mailbox)); used.add("mailbox"); used.add("counts"); }
   if (d.digest && typeof d.digest === "object") { wrap.append(digestView(d.digest)); used.add("digest"); }
   if (d.release && typeof d.release === "object") { wrap.append(releaseOutcome(d.release)); used.add("release"); used.add("title"); }
@@ -754,6 +757,22 @@ function updateChip(c) {
   chip.hidden = n === 0;
   chip.textContent = `${n} for review`;
   chip.classList.toggle("urgent", !!(c && c.urgent));
+}
+
+// One release from history, in detail.
+function releaseDetail(r) {
+  const box = releaseOutcome({ sha: r.sha, message: r.message, author: r.author, services: r.services,
+                               outcome: r.status, detail: r.detail });
+  const finished = r.finished_at && r.finished_at !== "None" ? r.finished_at : null;
+  const started = r.started_at && r.started_at !== "None" ? r.started_at : null;
+  const bits = [];
+  if (finished) bits.push(`finished ${when(finished)}`);
+  if (started && finished) {
+    const secs = Math.round((Date.parse(finished.replace(" ", "T")) - Date.parse(started.replace(" ", "T"))) / 1000);
+    if (secs > 0) bits.push(`took ${secs >= 60 ? `${Math.floor(secs / 60)} min ${secs % 60} s` : `${secs} s`}`);
+  } else if (started) bits.push(`started ${when(started)}`);
+  if (bits.length) box.insertBefore(el("div", "facts", bits.join(" · ")), box.children[2] || null);
+  return box;
 }
 
 // One release, as it finished: what it was, and what happened.

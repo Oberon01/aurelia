@@ -77,6 +77,22 @@ fastpath:
       tool: probe.function
       args: { name: "{name}" }
       reply: "Here's the {name} function."
+    # Aurelia's own releases (Chrysalis).
+    - name: last-release
+      match: '^(?:(?:what|which)(?:''s| was| is)\s+|show(?: me)?\s+|tell me about\s+)?(?:the\s+|your\s+|my\s+)?(?:last|latest|newest|most recent|current)\s+(?:release|update|deploy(?:ment)?|version)$'
+      tool: chrysalis.releases
+      args: { limit: "1" }
+      reply: "Here's the last release."
+    - name: releases
+      match: '^(?:(?:show(?: me)?|list|what are)\s+)?(?:the\s+|your\s+|my\s+)?(?:recent\s+|latest\s+|last few\s+)?(?:releases|updates|deploys|deployments|release history)$'
+      tool: chrysalis.releases
+      args: { limit: "10" }
+      reply: "Here are the recent releases."
+    - name: update-status
+      match: '^(?:(?:are there|any)\s+(?:new\s+)?updates|update status|(?:what(?:''s| is)\s+)?(?:your|the)\s+update status|is (?:an|a) update (?:running|in progress))$'
+      tool: chrysalis.status
+      args: {}
+      reply: "Here's my update status."
     - name: mailbox
       match: '^(?:(?:open|show(?: me)?|check|what(?:''s| is) in)\s+)?(?:the\s+|my\s+)?(?:mailbox|review(?:\s+(?:items|queue))?|proposals|suggestions)$'
       tool: parallax.mailbox
