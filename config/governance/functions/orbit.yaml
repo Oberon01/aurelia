@@ -45,7 +45,7 @@ rules:
   tv:
     # Where to look. Empty = the ranges most home routers use. Listing yours
     # (e.g. "192.168.1.0/24"; run `ip route` on the server) makes a search ~1s instead of ~10s.
-    subnets: ["192.186.1.0/24"]
+    subnets: ["192.168.1.0/24"]
     # Inputs are read from the TV, so names you give them on the TV itself
     # ("PC" for HDMI 2) work automatically and follow any rename. These are
     # extra names on top of that, if you'd rather not rename on the TV.

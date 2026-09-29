@@ -55,9 +55,9 @@ button{font:inherit;color:inherit;cursor:pointer}
 .reply.quiet{opacity:0;pointer-events:none}
 .reply.long{-webkit-mask-image:linear-gradient(#000 60%,transparent);mask-image:linear-gradient(#000 60%,transparent)}
 .reply.open{max-height:55vh;overflow-y:auto;-webkit-mask-image:none;mask-image:none;background:rgba(4,7,11,.94);border:1px solid var(--cyan-soft);box-shadow:0 18px 60px rgba(0,0,0,.6)}
-.more{position:absolute;right:0;top:6px;z-index:16;min-height:24px;padding:0 10px;border:1px solid var(--cyan-soft);border-radius:12px;background:var(--ground);color:var(--cyan);font-family:var(--mono);font-size:11px;letter-spacing:1px}
-.more[hidden]{display:none}
-.more:hover{background:var(--cyan-track)}
+.morebtn{position:absolute;right:0;top:6px;z-index:16;min-height:24px;padding:0 10px;border:1px solid var(--cyan-soft);border-radius:12px;background:var(--ground);color:var(--cyan);font-family:var(--mono);font-size:11px;letter-spacing:1px}
+.morebtn[hidden]{display:none}
+.morebtn:hover{background:var(--cyan-track)}
 /* several requests at once: each keeps its own line */
 .reply .ex{padding:8px 0;border-top:1px solid rgba(95,212,230,.12);text-align:left}
 .reply .ex:first-child{border-top:0;padding-top:0}
@@ -250,6 +250,43 @@ details.mb-ev ul{margin:6px 0 0;padding-left:18px;font-family:var(--mono);font-s
 .fgroup{padding-top:12px}.fgroup:first-child{padding-top:0}
 .fgroup + .fact{border-top:0}
 .quote{padding:10px 14px;border-left:2px solid var(--cyan);font-size:16px;line-height:1.45;color:var(--ink-strong)}
+/* Kepler: research, library, teaching */
+.ans{display:flex;flex-direction:column;gap:10px;font-size:16px;line-height:1.6;color:var(--ink)}
+.ans p{margin:0}
+.cite{display:inline-block;min-width:18px;margin:0 1px;padding:0 4px;border-radius:4px;background:var(--cyan-track);color:var(--cyan);font-family:var(--mono);font-size:11px;line-height:1.6;text-align:center;text-decoration:none;vertical-align:1px}
+.cite:hover{background:var(--cyan);color:var(--ground)}
+.kl{margin:4px 0 0;padding-left:18px;font-size:14px;line-height:1.55;color:var(--ink-dim)}
+.srcs{display:flex;flex-direction:column;gap:4px;font-size:13px}
+.src{display:flex;gap:8px;align-items:baseline;min-width:0}
+.src .sn{font-family:var(--mono);font-size:11px;color:var(--cyan);min-width:22px}
+.src a{color:var(--ink-strong);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.src a:hover{color:var(--cyan);text-decoration:underline}
+.src .ss{font-family:var(--mono);font-size:11px;color:var(--ink-faint);white-space:nowrap}
+.src.unused{opacity:.55}
+.lib-note{padding:10px 12px;border-left:2px solid var(--cyan-line);font-size:13px;line-height:1.5;color:var(--ink-dim)}
+.lib-note b{font-weight:500;color:var(--ink-strong)}
+.tcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
+.tcard{padding:14px 16px;border:1px solid var(--cyan-soft);border-radius:8px;background:rgba(4,7,11,.5);display:flex;flex-direction:column;gap:6px;text-align:left;color:inherit}
+.tcard:hover{border-color:var(--cyan-line);background:var(--cyan-track)}
+.tcard .tn{font-family:var(--display);font-size:17px;font-weight:600;color:var(--ink-strong)}
+.tcard .tsum{font-size:13px;line-height:1.45;color:var(--ink-dim);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.tcard .tm{font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
+.rrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 16px;padding:8px 0;border-top:1px solid rgba(95,212,230,.12)}
+.rrow:first-child{border-top:0}
+.rrow .rq{font-size:14px;color:var(--ink-strong)}.rrow .rd{font-family:var(--mono);font-size:11px;color:var(--ink-faint);white-space:nowrap}
+.rrow .rh{grid-column:1 / -1;font-size:13px;color:var(--ink-dim)}
+.analogy{padding:10px 14px;border-radius:8px;background:var(--cyan-fill);border:1px solid var(--cyan-soft);font-size:14px;line-height:1.5;color:var(--ink)}
+.quiz{display:flex;flex-direction:column;gap:16px}
+.qz{display:flex;flex-direction:column;gap:8px}
+.qz .qq{font-size:15px;line-height:1.45;color:var(--ink-strong)}
+.qz .qo{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.qz .opt{min-height:40px;padding:6px 12px;border-radius:8px;border:1px solid var(--cyan-soft);background:transparent;color:var(--ink);font-size:14px;text-align:left}
+.qz .opt:hover:not(:disabled){border-color:var(--cyan);background:var(--cyan-track)}
+.qz .opt.qright{border-color:var(--cyan);background:rgba(95,212,230,.16);color:var(--ink-strong)}
+.qz .opt.qwrong{border-color:var(--bad-line);background:var(--bad-fill);color:var(--bad)}
+.qz .opt:disabled{cursor:default}
+.qz .why{font-size:13px;line-height:1.45;color:var(--ink-dim)}
+.qscore{font-family:var(--display);font-size:20px;font-weight:600;color:var(--ink-strong)}
 /* functions */
 .fns{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
 .fn{padding:16px 18px;border:1px solid var(--cyan-soft);border-radius:8px;background:rgba(4,7,11,.5);display:flex;flex-direction:column;gap:6px;min-width:0}
@@ -342,7 +379,7 @@ button.gl:hover{color:var(--ink-strong)}
     <div class="conn" id="conn" role="status"><span class="dot"></span><span id="connText">Connecting…</span></div>
   </div>
 </header>
-<div class="slot"><div class="reply quiet" id="reply" aria-live="polite"></div><button type="button" class="more" id="more" hidden>MORE</button></div>
+<div class="slot"><div class="reply quiet" id="reply" aria-live="polite"></div><button type="button" class="morebtn" id="more" hidden>MORE</button></div>
 <div class="floor" id="floor">
   <main class="stage n0" id="stage" aria-label="Panels"></main>
   <aside class="rail" id="rail" aria-label="Waiting panels" hidden></aside>
@@ -388,6 +425,8 @@ const TITLES = {
   "chrysalis.releases": "Releases", "chrysalis.rollback": "Rollback", "chrysalis.approve": "Release approval",
   "mnemosyne.recall": "Recall", "mnemosyne.facts": "Remembered", "mnemosyne.remember": "Remember",
   "mnemosyne.forget": "Forget",
+  "kepler.research": "Research", "kepler.recall": "Library", "kepler.topic": "Topic", "kepler.explain": "Explanation",
+  "kepler.quiz": "Quiz", "kepler.read_pdf": "PDF", "kepler.forget": "Forget",
 };
 function titleFor(tool) {
   if (TITLES[tool]) return TITLES[tool];
@@ -440,6 +479,8 @@ function arrange() {
 // small: one fact or one device; medium: a set of cards; large: something to read or scan.
 function sizeClass(tool, d) {
   if (!d) return "m";
+  if (d.research || d.library || d.topic) return "l";
+  if (d.explain || d.quiz) return "m";
   if (Array.isArray(d.results) || Array.isArray(d.videos) || (typeof d.text === "string" && d.url) || Array.isArray(d.recall)
       || Array.isArray(d.mailbox) || Array.isArray(d.functions) || (Array.isArray(d.releases) && d.releases.length > 1)) return "l";
   if ((d.kind && d.name) || typeof d.locked === "boolean" || typeof d.muted === "boolean" || typeof d.remembered_fact === "string"
@@ -742,7 +783,8 @@ function headlineFor(tool, d) {
     return { text: d.results.length ? `${count(d.results.length, "result")}${top && top.site ? ` · top: ${top.site}` : ""}` : "No results" };
   }
   if (Array.isArray(d.videos)) return { text: d.videos.length ? count(d.videos.length, "video") : "No videos found" };
-  if (typeof d.text === "string" && d.url) return { text: `${d.site || ""}${d.words ? ` · ${Math.max(1, Math.round(d.words / 230))} min read` : ""}`.replace(/^ · /, "") };
+  if (typeof d.text === "string" && (d.url || typeof d.pages === "number"))
+    return { text: `${d.site || ""}${typeof d.pages === "number" ? ` · ${count(d.pages, "page")}` : ""}${d.words ? ` · ${Math.max(1, Math.round(d.words / 230))} min read` : ""}`.replace(/^ · /, "") };
   if (typeof d.saved_to === "string") return { text: d.quarantined ? `${d.size} · in quarantine` : `${d.size} saved`, level: d.quarantined ? "warn" : null };
   if (d.cancelled) return { text: "Stopped" };
   if (Array.isArray(d.mailbox)) return { text: d.mailbox.length ? `${count(d.mailbox.length, "item")} waiting for you` : "Nothing waiting" };
@@ -753,6 +795,10 @@ function headlineFor(tool, d) {
   }
   if (typeof d.function === "string" && d.state_text) return { text: d.state_text, level: d.state === "online" ? null : "warn" };
   if (Array.isArray(d.recall)) return { text: d.recall.length ? count(d.recall.length, "conversation") : "Nothing found" };
+  if (d.library && typeof d.library === "object") {
+    const t = d.library.topics.length, r = d.library.research.length;
+    return { text: t || r ? [t ? count(t, "topic") : null, r ? count(r, "piece") + " of research" : null].filter(Boolean).join(" · ") : "Nothing yet" };
+  }
   if (d.remembered === true && Array.isArray(d.facts)) return { text: `${count(d.facts.length, "thing")} · ${d.facts.filter(f => f.core).length} core` };
   if (Array.isArray(d.inputs)) { const on = d.inputs.find(i => i.showing); return { text: on ? `Showing ${on.name}` : count(d.inputs.length, "input") }; }
   if (Array.isArray(d.releases) && d.releases.length) { const r = d.releases[0]; return { text: `${String(r.status || "").replace(/_/g, " ")}${r.sha ? " · " + String(r.sha).slice(0, 8) : ""}` }; }
@@ -775,6 +821,16 @@ function nextSteps(tool, d) {
   }
   if (Array.isArray(d.videos) && d.videos.length) out.push({ label: "Open #1", say: "open video #1" });
   if (typeof d.text === "string" && d.url) out.push({ label: "Summarize it", say: "summarize this page" });
+  if (d.research && typeof d.research === "object") {
+    const r = d.research;
+    if (r.depth !== "thorough") out.push({ label: "Go deeper", say: `research this thoroughly: ${r.question}` });
+    out.push({ label: "Explain it simpler", say: `explain ${r.topic ? r.topic.name : r.question} more simply` });
+    out.push({ label: "Quiz me", say: `quiz me on ${r.topic ? r.topic.name : r.question}` });
+  }
+  if (d.topic && typeof d.topic === "object") {
+    out.push({ label: "Quiz me on this", say: `quiz me on ${d.topic.name}` }, { label: "Explain it", say: `explain ${d.topic.name}` });
+  }
+  if (d.explain && typeof d.explain === "object") out.push({ label: "Quiz me", say: `quiz me on ${d.explain.subject}` });
   return out;
 }
 const usualCache = new Map();
@@ -832,6 +888,11 @@ function resultTitle(tool, d) {
   if (Array.isArray(d.mailbox)) return "Mailbox";
   if (d.digest) return "Morning digest";
   if (Array.isArray(d.recall)) return d.query ? `Recall: ${d.query}` : d.date ? `Conversations · ${d.date}` : "Recent conversations";
+  if (d.research && typeof d.research === "object") return d.research.question;
+  if (d.library && typeof d.library === "object") return `Library: ${d.library.query}`;
+  if (d.topic && typeof d.topic === "object") return d.topic.name;
+  if (d.explain && typeof d.explain === "object") return d.explain.subject;
+  if (d.quiz && typeof d.quiz === "object") return `Quiz: ${d.quiz.subject}`;
   if (d.remembered === true) return "What I know about you";
   if (typeof d.remembered_fact === "string") return "Remembered";
   if (typeof d.forgot === "string") return "Forgotten";
@@ -871,13 +932,19 @@ function body(tool, d) {
   }
   if (Array.isArray(d.results) && "query" in d) { wrap.append(searchResults(d.results)); ["results", "query", "provider"].forEach(k => used.add(k)); }
   if (Array.isArray(d.videos)) { wrap.append(videoResults(d.videos)); ["videos", "query"].forEach(k => used.add(k)); }
-  if (typeof d.text === "string" && d.url) { wrap.append(pageView(d)); ["title", "url", "site", "words", "text", "truncated"].forEach(k => used.add(k)); }
+  if (typeof d.text === "string" && (d.url || typeof d.pages === "number")) { wrap.append(pageView(d)); ["title", "url", "site", "words", "text", "truncated"].forEach(k => used.add(k)); }
   if (d.link && d.link.url) { wrap.append(linkView(d.link)); used.add("link"); }
   if (typeof d.saved_to === "string") { wrap.append(downloadView(d)); ["file", "size", "saved_to", "type", "quarantined"].forEach(k => used.add(k)); }
   if (Array.isArray(d.mailbox)) { wrap.append(mailboxView(d.mailbox)); used.add("mailbox"); used.add("counts"); }
   if (d.digest && typeof d.digest === "object") { wrap.append(digestView(d.digest)); used.add("digest"); }
   if (d.release && typeof d.release === "object") { wrap.append(releaseOutcome(d.release)); used.add("release"); used.add("title"); }
   if (Array.isArray(d.functions)) { wrap.append(functionCards(d.functions)); used.add("functions"); }
+  if (d.research && typeof d.research === "object") { wrap.append(researchView(d.research)); used.add("research"); used.add("headline"); }
+  if (d.library && typeof d.library === "object") { wrap.append(libraryView(d.library)); used.add("library"); }
+  if (d.topic && typeof d.topic === "object") { wrap.append(topicView(d.topic)); used.add("topic"); used.add("headline"); }
+  if (d.explain && typeof d.explain === "object") { wrap.append(explainView(d.explain)); used.add("explain"); used.add("headline"); }
+  if (d.quiz && typeof d.quiz === "object") { wrap.append(quizView(d.quiz)); used.add("quiz"); used.add("headline"); }
+  if (typeof d.pages === "number") used.add("pages");
   if (Array.isArray(d.recall)) {
     wrap.append(d.recall.length ? recallView(d.recall) : el("div", "more", "No conversations match."));
     ["recall", "query", "date", "matched_by"].forEach(k => used.add(k));
@@ -969,6 +1036,145 @@ function factsView(list) {
     row.append(el("div", "ftx", f.fact), el("span", "fd", (f.source === "learned" ? "learned " : f.source ? "told " : "") + f.saved), x);
     box.append(row);
   });
+  return box;
+}
+
+// ---- Kepler -----------------------------------------------------------------------------
+// Text with [n] turned into small citation links to source n.
+function citedText(text, sources) {
+  const byN = new Map((sources || []).map(s => [String(s.n), s]));
+  const frag = document.createDocumentFragment();
+  let at = 0;
+  String(text || "").replace(/\[(\d+)\]/g, (m, n, i) => {
+    frag.append(document.createTextNode(text.slice(at, i)));
+    const s = byN.get(n);
+    const url = s && safeUrl(s.url);
+    if (url) { const a = extLink(url, n, "cite"); a.title = `${s.title} · ${s.site}`; frag.append(a); }
+    else frag.append(document.createTextNode(m));
+    at = i + m.length;
+    return m;
+  });
+  frag.append(document.createTextNode(String(text || "").slice(at)));
+  return frag;
+}
+function paragraphs(text, sources) {
+  const box = el("div", "ans");
+  String(text || "").split(/\n+/).filter(p => p.trim()).forEach(p => { const e = el("p"); e.append(citedText(p, sources)); box.append(e); });
+  return box;
+}
+function bullets(items, sources) {
+  const ul = el("ul", "kl");
+  items.forEach(x => { const li = el("li"); li.append(citedText(x, sources)); ul.append(li); });
+  return ul;
+}
+function sourceList(sources) {
+  const box = el("div", "srcs");
+  sources.forEach(s => {
+    const row = el("div", "src" + (s.cited === false ? " unused" : ""));
+    row.append(el("span", "sn", s.n ? `[${s.n}]` : "·"), extLink(s.url, s.title || s.url), el("span", "ss", s.site || ""));
+    if (s.cited === false) row.title = "Read, but not cited";
+    box.append(row);
+  });
+  return box;
+}
+function researchView(r) {
+  const box = el("div"); box.style.display = "flex"; box.style.flexDirection = "column"; box.style.gap = "14px";
+  box.append(paragraphs(r.answer, r.sources));
+  if ((r.key_points || []).length) box.append(el("div", "rl", "Key points"), bullets(r.key_points, r.sources));
+  if ((r.disagreements || []).length) box.append(el("div", "rl", "Where sources disagree"), bullets(r.disagreements, r.sources));
+  box.append(el("div", "rl", `Sources · ${r.depth === "thorough" ? "thorough" : "quick"}`), sourceList(r.sources || []));
+  const t = r.topic || {};
+  if (t.name) {
+    const note = el("div", "lib-note");
+    note.append(document.createTextNode(t.joined ? "Added to " : "New in your library: "), el("b", null, t.name),
+                document.createTextNode(t.joined ? ` (${t.research_count} pieces).` : "."));
+    if (t.whats_new) note.append(document.createTextNode(" " + t.whats_new));
+    if ((t.earlier || []).length) note.append(document.createTextNode(` You looked into this on ${t.earlier[0].date}.`));
+    if (r.trilium === "saved") note.append(document.createTextNode(" Saved to Trilium."));
+    box.append(note);
+  }
+  return box;
+}
+function libraryView(l) {
+  const box = el("div"); box.style.display = "flex"; box.style.flexDirection = "column"; box.style.gap = "14px";
+  if (l.topics.length) {
+    const cards = el("div", "tcards");
+    l.topics.forEach(t => {
+      const c = el("button", "tcard"); c.type = "button";
+      c.append(el("span", "tn", t.name), el("span", "tsum", t.summary), el("span", "tm", `${t.research_count} pieces · updated ${t.updated}`));
+      c.addEventListener("click", () => ask(`show the topic ${t.name}`));
+      cards.append(c);
+    });
+    box.append(cards);
+  }
+  if (l.research.length) {
+    const list = el("div");
+    l.research.forEach(r => {
+      const row = el("div", "rrow");
+      row.append(el("span", "rq", r.question), el("span", "rd", r.date), el("span", "rh", r.headline + (r.topic ? `  ·  ${r.topic}` : "")));
+      list.append(row);
+    });
+    box.append(el("div", "rl", "Research"), list);
+  }
+  return box;
+}
+function topicView(t) {
+  const box = el("div"); box.style.display = "flex"; box.style.flexDirection = "column"; box.style.gap = "14px";
+  box.append(paragraphs(t.summary, []));
+  if (t.whats_new) box.append(el("div", "lib-note", "Latest: " + t.whats_new));
+  if ((t.disagreements || []).length) box.append(el("div", "rl", "Open questions"), bullets(t.disagreements, []));
+  if ((t.research || []).length) {
+    const list = el("div");
+    t.research.forEach(r => { const row = el("div", "rrow"); row.append(el("span", "rq", r.question), el("span", "rd", r.date), el("span", "rh", r.headline.replace(/\s*\[\d+\]/g, ""))); list.append(row); });
+    box.append(el("div", "rl", "Research"), list);
+  }
+  if ((t.sources || []).length) box.append(el("div", "rl", "Sources"), sourceList(t.sources));
+  if (t.in_trilium) box.append(el("div", "more", "Also in your Trilium, under Aurelia · Library."));
+  return box;
+}
+function explainView(e) {
+  const box = el("div"); box.style.display = "flex"; box.style.flexDirection = "column"; box.style.gap = "14px";
+  box.append(paragraphs(e.explanation, []));
+  if (e.analogy) box.append(el("div", "analogy", e.analogy));
+  if ((e.check || []).length) box.append(el("div", "rl", "Check yourself"), bullets(e.check, []));
+  if (e.from_library) box.append(el("div", "more", `Built on your research: ${e.from_library}`));
+  return box;
+}
+// One question at a time is slower to read than a column you can scan; all are shown, each answers on click.
+function quizView(q) {
+  const box = el("div", "quiz");
+  let answered = 0, right = 0;
+  const missed = [];
+  const score = el("div", "qscore");
+  q.questions.forEach((item, i) => {
+    const z = el("div", "qz");
+    z.append(el("div", "qq", `${i + 1}. ${item.q}`));
+    const opts = el("div", "qo");
+    const why = el("div", "why"); why.hidden = true;
+    item.options.forEach((o, k) => {
+      const b = el("button", "opt", o); b.type = "button";
+      b.addEventListener("click", () => {
+        opts.querySelectorAll("button").forEach((x, j) => { x.disabled = true; if (j === item.answer) x.classList.add("qright"); });
+        if (k !== item.answer) { b.classList.add("qwrong"); missed.push(item.q); } else right++;
+        why.textContent = (k === item.answer ? "Right. " : "Not quite. ") + (item.why || ""); why.hidden = false;
+        if (++answered === q.questions.length) finish();
+      });
+      opts.append(b);
+    });
+    z.append(opts, why);
+    box.append(z);
+  });
+  const finish = async () => {
+    score.textContent = `${right} of ${q.questions.length}`;
+    box.append(score);
+    try {
+      const r = await fetch("/learning/quiz", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subject: q.subject, topic_id: q.topic_id, score: right, total: q.questions.length, missed }) });
+      const out = await r.json();
+      if (out.proposed) box.append(el("div", "more", "Nicely done. It's in your mailbox as something you know."));
+      else if (right < q.questions.length) box.append(el("div", "more", "Ask me to explain the ones you missed."));
+    } catch (e) { /* the score still shows */ }
+  };
   return box;
 }
 

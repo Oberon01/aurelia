@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
-from . import assistant, db, digest, glance, mailbox, memory, mnemosyne, registry, releases, tasks
+from . import assistant, db, digest, glance, learning, llm_api, mailbox, memory, mnemosyne, registry, releases, tasks
 from .config import ConfigStore
 from .events import CHANNEL
 from .governance import GovernanceStore
@@ -61,6 +61,8 @@ app.include_router(mailbox.router)
 app.include_router(digest.router)
 app.include_router(mnemosyne.router)
 app.include_router(glance.router)
+app.include_router(llm_api.router)
+app.include_router(learning.router)
 
 
 VIEW = Path(__file__).parent / "static" / "view.html"

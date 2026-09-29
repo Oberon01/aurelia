@@ -83,7 +83,7 @@ async def glance(request: Request, user: str = "owner"):
     items += home_items(rows)
     for r in await pool.fetch(
             "SELECT id, tool, progress_current, progress_total, progress_unit FROM task_runs WHERE status='running' "
-            "AND started_at > now() - make_interval(hours => $1) AND user_id <> ALL($2::text[]) "
+            "AND trigger = 'user' AND started_at > now() - make_interval(hours => $1) AND user_id <> ALL($2::text[]) "
             "ORDER BY started_at DESC LIMIT 5", RUNNING_HOURS, system):
         pct = (round(100 * r["progress_current"] / r["progress_total"])
                if r["progress_total"] and r["progress_current"] is not None else None)
