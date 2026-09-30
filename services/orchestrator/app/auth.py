@@ -48,7 +48,8 @@ PENDING_MINUTES = 15                                    # a request not approved
 MAX_PENDING = 5                                         # at most this many waiting at once
 KEY_CACHE_SECONDS = 30
 SEEN_EVERY_SECONDS = 60
-PUBLIC = {"/pair", "/pair/request", "/pair/status", "/health", "/favicon.ico"}
+PUBLIC = {"/pair", "/pair/request", "/pair/status", "/health", "/favicon.ico",
+          "/node/agent.py", "/node/install-linux.sh"}          # the node agent: code, no secrets
 SCOPES = {"node": ("/nodes/",), "terminal": ("/ask",)}  # prefixes; browser keys aren't limited
 
 _cache: dict[str, tuple[float, dict[str, Any]]] = {}

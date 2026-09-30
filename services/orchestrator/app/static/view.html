@@ -61,6 +61,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 /* several requests at once: each keeps its own line */
 .reply .ex{padding:8px 0;border-top:1px solid rgba(95,212,230,.12);text-align:left}
 .reply .ex:first-child{border-top:0;padding-top:0}
+.reply .ex:not(:first-child){opacity:.6}
 .reply .q{font-family:var(--mono);font-size:12px;color:var(--ink-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .reply .a{font-size:16px}
 .reply .ex.pending .a{color:var(--ink-faint)}
@@ -214,6 +215,10 @@ td .clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;o
 .pdev .dm{grid-column:1;font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
 .pdev .db{grid-column:2;grid-row:1 / span 2;display:flex;gap:8px;align-items:center}
 .pdev.pending .dn{color:var(--warn)}.pdev.revoked{opacity:.55}
+.pdev.online .dn::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--cyan);margin-right:8px;vertical-align:middle}
+.pdev.offline .dn::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;border:1px solid var(--ink-faint);margin-right:8px;vertical-align:middle}
+.napps{columns:3 180px;column-gap:24px;font-size:14px;line-height:1.9;color:var(--ink)}
+.napps span{display:block;break-inside:avoid;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mb-effect{font-size:13px;line-height:1.45;color:var(--ink)}
 .mb-effect b{font-family:var(--mono);font-size:11px;letter-spacing:1px;font-weight:400;color:var(--cyan)}
 details.mb-ev summary{cursor:pointer;font-family:var(--mono);font-size:12px;color:var(--ink-faint)}
@@ -443,7 +448,7 @@ const TITLES = {
   "mnemosyne.forget": "Forget",
   "kepler.research": "Research", "kepler.recall": "Library", "kepler.topic": "Topic", "kepler.explain": "Explanation",
   "kepler.quiz": "Quiz", "kepler.read_pdf": "PDF", "kepler.forget": "Forget",
-  "constellation.devices": "Devices",
+  "constellation.devices": "Devices", "constellation.open": "Open", "constellation.apps": "Apps",
 };
 function titleFor(tool) {
   if (TITLES[tool]) return TITLES[tool];
@@ -959,6 +964,14 @@ function body(tool, d) {
   if (d.research && typeof d.research === "object") { wrap.append(researchView(d.research)); used.add("research"); used.add("headline"); }
   if (d.library && typeof d.library === "object") { wrap.append(libraryView(d.library)); used.add("library"); }
   if (Array.isArray(d.paired)) { wrap.append(devicesView(d.paired)); used.add("paired"); used.add("headline"); }
+  if (d.apps && Array.isArray(d.apps.items)) {
+    const list = el("div", "napps"); d.apps.items.forEach(a => list.append(el("span", null, a.name)));
+    wrap.append(list); used.add("apps"); used.add("headline");
+  }
+  if (d.opened && typeof d.opened === "object") {
+    wrap.append(el("div", "lib-note", `${d.opened.kind === "app" ? "App" : "Page"}: ${d.opened.what}`));
+    used.add("opened"); used.add("headline");
+  }
   if (d.topic && typeof d.topic === "object") { wrap.append(topicView(d.topic)); used.add("topic"); used.add("headline"); }
   if (d.explain && typeof d.explain === "object") { wrap.append(explainView(d.explain)); used.add("explain"); used.add("headline"); }
   if (d.quiz && typeof d.quiz === "object") { wrap.append(quizView(d.quiz)); used.add("quiz"); used.add("headline"); }
@@ -1122,11 +1135,12 @@ function devicesView(list) {
   const KIND = { browser: "browser", node: "computer", terminal: "terminal" };
   const rows = new Map();
   list.forEach(d => {
-    const row = el("div", "pdev " + d.status);
+    const row = el("div", "pdev " + d.status + (d.kind === "node" ? (d.online ? " online" : " offline") : ""));
     const name = el("span", "dn", d.name);
     const bits = [KIND[d.kind] || d.kind, d.os, d.browser && d.kind === "browser" ? null : d.hostname,
                   d.status === "pending" ? `waiting · code ${d.code}` : d.status === "revoked" ? "revoked" :
-                  d.last_seen ? `seen ${d.last_seen}` : "not seen yet"].filter(Boolean);
+                  d.kind === "node" && d.online ? "online" :
+                  d.last_seen ? `${d.kind === "node" ? "offline · " : ""}seen ${d.last_seen}` : "not seen yet"].filter(Boolean);
     const btns = el("span", "db");
     if (d.status === "approved") {
       const rv = el("button", "btn quiet", "Revoke"); rv.type = "button";
@@ -1913,7 +1927,7 @@ function showExchanges() {
   if (sig === reply.dataset.sig) { if (!live.every(e => e.pending)) replyTimer = setTimeout(showExchanges, 1000); fitReply(); return; }
   reply.dataset.sig = sig;
   if (live.length === 1) reply.replaceChildren(live[0].pending ? document.createTextNode("…") : linkify(live[0].reply));
-  else reply.replaceChildren(...live.map(e => {
+  else reply.replaceChildren(...live.slice().reverse().map(e => {          // newest first: it's what fits in the slot
     const d = el("div", "ex" + (e.pending ? " pending" : ""));
     if (e.text) d.append(el("div", "q", "› " + e.text + (e.about ? `  · panel ${e.about}` : "")));
     const a = el("div", "a"); a.append(e.pending ? document.createTextNode("…") : linkify(e.reply)); d.append(a);

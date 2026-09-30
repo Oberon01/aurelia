@@ -6,6 +6,7 @@ enabled: true
 
 tools:
   devices:         { tier: reference }   # list what's paired; pairing and revoking happen only on the display
+  apps:            { tier: reference }   # what's installed on one of his computers
   search_files:    { tier: reference }
   list_processes:  { tier: reference }
   browser_history: { tier: reference }

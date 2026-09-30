@@ -80,16 +80,53 @@ devices but can never pair, approve or revoke one.
 
 **Reaching her from other devices: Tailscale Serve.** The proxy stays bound to
 the server's localhost. Tailscale publishes it to your tailnet only, with
-HTTPS (which the phone's installable app needs), never to your LAN:
+HTTPS (which the phone's installable app needs), never to your LAN. On port
+8443, because Nginx Proxy Manager owns 443 on this server. Tailscale runs here
+as a container with host networking, so the command goes through it:
 
 ```bash
-sudo tailscale serve --bg --https=443 http://127.0.0.1:8080
-tailscale serve status        # shows the address, e.g. https://atlas-ai.<your-tailnet>.ts.net
+docker exec tailscale tailscale serve --bg --https=8443 http://127.0.0.1:8080
+docker exec tailscale tailscale serve status   # e.g. https://atlas-ai.<your-tailnet>.ts.net:8443
 ```
+
+(Once, in the Tailscale admin console: DNS → MagicDNS on, and HTTPS Certificates
+→ Enable.) The setting lives in the container's state, so keep its state
+directory on a volume.
 
 Open that address on any device in your tailnet and pair it. The SSH tunnel
 (`ssh -L 8080:localhost:8080 server`, then `http://localhost:8080`) keeps
 working too; it's just another browser to pair.
+
+## Constellation: her computers
+
+A computer running her **node agent** is one she can act on: open a page or an
+app there, see what's installed. The agent is one Python file (standard
+library only), the same on Linux and Windows. It never opens a port: it calls
+out over the tailnet with its own node key, says what it is, and waits for
+work. What it will do is fixed in the agent, not decided by the server: open an
+http(s) page, launch an installed app by name, list apps, describe the machine.
+Nothing runs through a shell.
+
+**Install on Linux** (Ubuntu, the living room PC), as your user, no sudo:
+
+```bash
+curl -fsSL https://atlas-ai.<tailnet>.ts.net:8443/node/install-linux.sh | bash -s -- https://atlas-ai.<tailnet>.ts.net:8443 "Living room TV"
+```
+
+It shows a code: approve it in the mailbox. A systemd user service keeps it
+running (`journalctl --user -u aurelia-node -f` for its log). Run the same line
+again to update the agent. Revoking the computer on the devices panel stops it.
+
+| Say | Does |
+| --- | --- |
+| `open youtube.com on the living room tv` | Opens the page in that computer's browser |
+| `open the vlc app on the living room tv` | Starts an installed app by name |
+| `what's installed on the living room tv` | The apps a person would launch there |
+| `show my devices` | Every paired device; computers show online or offline |
+
+With one computer online, she uses it when you don't say which. "Open youtube on
+the living room tv" (no `.com`) still goes to the Roku through Orbit until
+target resolution (Phase 7 step 5) decides between the TV and the PC on it.
 
 ## Talk to her
 

@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from redis.asyncio import Redis
 
 from . import (assistant, auth, constellation, db, digest, glance, learning, llm_api, mailbox, memory, mnemosyne,
-               registry, releases, tasks)
+               nodes, registry, releases, tasks)
 from .config import ConfigStore
 from .events import CHANNEL
 from .governance import GovernanceStore
@@ -30,7 +30,8 @@ async def lifespan(app: FastAPI):
     gov_watcher = app.state.governance.start()
     app.state.llm = Router(app.state.config)
     app.state.embedder = memory.Embedder(app.state.config)
-    app.state.redis = Redis.from_url(settings.redis_url)
+    # redis-py 8 reads with a 5 s timeout by default; node long-polls wait up to 30 s.
+    app.state.redis = Redis.from_url(settings.redis_url, socket_timeout=60)
     await db.connect(settings.database_url)
     app.state.draining = False
     maintenance = asyncio.create_task(memory.maintenance_loop(app))
@@ -68,6 +69,7 @@ app.include_router(llm_api.router)
 app.include_router(learning.router)
 app.include_router(auth.router)
 app.include_router(constellation.router)
+app.include_router(nodes.router)
 
 
 VIEW = Path(__file__).parent / "static" / "view.html"
