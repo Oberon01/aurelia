@@ -62,6 +62,8 @@ def test_screen_phrases_reach_the_right_tool(said, tool, args):
     ("force close chrome on the laptop", "constellation.close_process", {"name": "chrome", "target": "laptop", "force": "true"}),
     ("close that on the tv pc", "constellation.home", {"target": "tv pc"}),
     ("how's the weather", None, None),
+    ("sign in to youtube on the tv pc", "constellation.sign_in", {"site": "youtube", "target": "tv pc"}),
+    ("log me into crunchyroll on the TV PC", "constellation.sign_in", {"site": "crunchyroll", "target": "TV PC"}),
 ])
 def test_health_phrases_reach_the_right_tool(said, tool, args):
     from app import fastpath

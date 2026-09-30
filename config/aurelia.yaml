@@ -103,6 +103,11 @@ fastpath:
     # Constellation, step 4: the page on a screen running her shell ("on the …" names it; with no
     # name, the one screen running her shell). Clicking by description ("the second video") goes
     # through the model, which looks first and picks the number.
+    - name: screen-sign-in
+      match: '^(?:sign|log) (?:me )?in(?:to| to)? (?P<site>[\w .+-]+?) on (?:the |my )?(?P<target>.+?)$'
+      tool: constellation.sign_in
+      args: { site: "{site}", target: "{target}" }
+      reply: "Signing in to {site}."
     - name: screen-look
       match: '^(?:what(?:''s| is) on|look at|show me|read) (?:the |my )?(?:(?P<target>.+?)(?:''s)? )?screen$'
       tool: constellation.look

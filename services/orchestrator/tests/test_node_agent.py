@@ -389,3 +389,37 @@ def test_the_installer_makes_a_wayland_session_and_sets_it_through_the_account_s
     assert "apt-get install -y cage" in text and "/usr/share/wayland-sessions/aurelia.desktop" in text
     assert "exec cage -d -s --" in text and "SetSession s" in text and "matchbox" not in text
     assert ">/dev/null\n" not in text.split("apt-get install -y cage")[1][:5]          # its errors are shown
+
+
+# ---- sign-ins saved on this computer -------------------------------------------------------------
+
+def test_saved_logins_stay_private_and_are_never_listed(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(agent, "config_dir", lambda: tmp_path)
+    monkeypatch.setattr(agent, "IS_WINDOWS", False)
+    answers = iter(["me@example.com"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    monkeypatch.setattr("getpass.getpass", lambda prompt="": "hunter2-secret")
+    assert agent.cmd_login("add", "YouTube", "", "") == 0
+    f = tmp_path / "logins.json"
+    assert oct(f.stat().st_mode & 0o777) == "0o600"
+    saved = agent.read_logins()["youtube"]
+    assert saved["origins"] == ["https://accounts.google.com"] and saved["password"] == "hunter2-secret"
+    capsys.readouterr()
+    agent.cmd_login("list", "", "", "")
+    out = capsys.readouterr().out
+    assert "youtube" in out and "hunter2" not in out and "me@example.com" not in out
+    assert "hunter2" not in json.dumps(agent.do_logins({})) and "me@example" not in json.dumps(agent.do_logins({}))
+    assert agent.cmd_login("add", "somesite", "", "") == 1          # an unknown site needs its sign-in page named
+    f.chmod(0o644)                                                   # readable by others: refused outright
+    with pytest.raises(ValueError, match="can be read by other accounts"):
+        agent.read_logins()
+    assert agent.execute({"kind": "sign_in", "args": {"site": "youtube"}})["ok"] is False
+
+
+def test_signing_in_needs_a_saved_login(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent, "config_dir", lambda: tmp_path)
+    out = agent.execute({"kind": "sign_in", "args": {"site": "crunchyroll"}})
+    assert out["ok"] is False and "no saved login for crunchyroll" in out["error"] and "login add crunchyroll" in out["error"]
+
+
+import json  # noqa: E402

@@ -94,6 +94,19 @@ TOOLS = [
                       "required": ["targets"]},
         cancellable=False),
     registry.ToolSpec(
+        name="sign_in", description="Sign in to a site (youtube, crunchyroll, netflix…) on one of his screens, with a "
+                                    "login he saved on that computer himself. You never see or handle the login: the "
+                                    "computer fills it only on that site's real sign-in page. Always needs his "
+                                    "confirmation. If it isn't saved there, tell him how to add it on that computer.",
+        input_schema={"type": "object", "properties": {"target": {"type": "string"}, "site": {"type": "string"}},
+                      "required": ["site"]},
+        cancellable=False),
+    registry.ToolSpec(
+        name="logins", description="Which sites have a login saved on one of his computers (names only; never the "
+                                   "logins themselves).",
+        input_schema={"type": "object", "properties": {"target": {"type": "string"}}},
+        cancellable=False, freshness_seconds=30),
+    registry.ToolSpec(
         name="look", description="See the page on one of his screens (a computer running your shell): its title, "
                                  "what's written on it, any video's state, and everything that can be clicked, NUMBERED. "
                                  "The numbers are drawn on that screen too, so he can say 'click 4'. Look before "
@@ -564,6 +577,31 @@ async def kill_process(app, user: str, args: dict) -> dict:
     return out
 
 
+# ---- sign-ins saved on a computer (his decision, Sep 30: strict) ------------------------------------
+
+async def sign_in(app, user: str, args: dict) -> dict:
+    """He confirmed (a change). The computer fills its own saved login; nothing of it comes back here."""
+    node = await target(app, args.get("target"), screen=True)
+    site = " ".join(str(args.get("site") or "").lower().split())
+    if not re.fullmatch(r"[a-z0-9][a-z0-9 ._+-]{0,40}", site):
+        raise ValueError("Which site? (youtube, crunchyroll, netflix…)")
+    d = await _ask_new(app, node, "sign_in", {"site": site}, 60)
+    label, status = str(d.get("label") or site)[:60], str(d.get("status") or "")[:120]
+    head = f"Signed in to {label}" if status == "signed in" else f"{label}: {status}"
+    return {"headline": head, "did": {"node": node["name"], "what": f"{label} on {node['name']}: {status}"}}
+
+
+async def logins(app, user: str, args: dict) -> dict:
+    node = await target(app, args.get("target"))
+    d = await _ask_new(app, node, "logins", {})
+    items = [{"site": str(i.get("site"))[:40], "label": str(i.get("label"))[:60]} for i in d.get("logins") or []
+             if isinstance(i, dict)]
+    what = ", ".join(i["label"] for i in items) or "none yet"
+    return {"headline": f"Saved logins on {node['name']}: {len(items)}",
+            "did": {"node": node["name"], "what": what + (" (added on that computer with: aurelia_node.py login add <site>)"
+                                                          if not items else "")}}
+
+
 # ---- the page on a screen (step 4) ----------------------------------------------------------------
 
 SHOT = "aurelia:shot:{}"
@@ -776,7 +814,8 @@ async def submit(app, user: str, args: dict) -> dict:
 
 HANDLERS = {"devices": devices, "open": open_, "apps": apps, "home": home, "look": look, "click": click, "type": type_,
             "press": press, "scroll": scroll, "back": back, "media": media, "submit": submit, "health": health,
-            "list_processes": list_processes, "close_process": close_process, "kill_process": kill_process}
+            "list_processes": list_processes, "close_process": close_process, "kill_process": kill_process,
+            "sign_in": sign_in, "logins": logins}
 
 
 @router.get("/shots/{sid}.jpg", include_in_schema=False)

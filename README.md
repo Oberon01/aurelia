@@ -180,6 +180,24 @@ with the Windows installer.
 | `what's running on the tv pc` / `what's using the memory on the laptop` | Processes, by program and one by one |
 | `close chrome on the laptop` / `force close chrome on the laptop` | A confirmation card, then it closes |
 
+**Signing in (your decision, Sep 30: strict).** She can sign in to a site on one
+of your screens with a login you saved on that computer yourself. She never sees
+it. On the TV PC:
+
+```bash
+python3 ~/.local/share/aurelia-node/aurelia_node.py login add youtube       # or crunchyroll, netflix
+python3 ~/.local/share/aurelia-node/aurelia_node.py login list              # names only
+```
+
+The password is asked without being shown and kept in a file only that account
+can read (refused if anyone else could). "Sign in to youtube on the TV PC" puts
+a confirmation card in front of you. The computer then opens the site's own
+sign-in page and fills the login there, and only there (by exact address, never
+a lookalike). Nothing of it goes to Aurelia's server, the model or any log; she
+hears only "signed in" or "waiting for your phone" (2-step stays yours). Other
+sites work with `--origin https://login.example.com`. Google sometimes refuses
+browsers it thinks are automated; if so, sign in by hand once.
+
 **A computer on a TV's input.** The TV PC's picture goes through the living room
 Roku TV, so the TV has to be on and on the right input. Set which input in
 Constellation's policy (`screens`): the computer, the TV (Orbit's name for it)

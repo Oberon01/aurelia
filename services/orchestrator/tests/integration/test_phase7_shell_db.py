@@ -213,3 +213,56 @@ def test_three_failed_updates_reach_the_mailbox_and_retry_starts_over(stack, tmp
         assert again and again[0]["id"] != card["id"]
     finally:
         proc.kill()
+
+
+def test_a_restarted_agent_takes_over_the_kiosk_left_from_before(stack, tmp_path, display):
+    orch = stack["orch"]
+    got = paired_node(orch)
+    home, app = home_for(tmp_path, orch, got, shell=True)
+    port = free_port()
+    env = env_for(home, DISPLAY=display, XDG_CURRENT_DESKTOP="Aurelia", AURELIA_BROWSER=CHROME,
+                  AURELIA_BROWSER_ARGS="--no-sandbox --disable-gpu", AURELIA_DEBUG_PORT=str(port), AURELIA_POLL_WAIT="2")
+
+    def her_screen(timeout=30):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                pages = [p for p in cdp(port, "/json/list") if p["type"] == "page"]
+                if any(f"/view?screen={got['device_id']}" in p["url"] for p in pages):
+                    return pages
+            except OSError:
+                pass
+            time.sleep(0.5)
+        return []
+
+    first = subprocess.Popen([sys.executable, str(app / "aurelia_node_guard.py"), "run"], env=env, stderr=subprocess.DEVNULL)
+    second = None
+    try:
+        assert her_screen()
+        before = cdp(port, "/json/version")["webSocketDebuggerUrl"]
+        first.kill()                                            # the agent goes; its kiosk stays open
+        first.wait(10)
+        second = subprocess.Popen([sys.executable, str(app / "aurelia_node_guard.py"), "run"], env=env, stderr=subprocess.PIPE,
+                                  text=True)
+        deadline = time.time() + 40
+        while time.time() < deadline:
+            try:
+                if cdp(port, "/json/version")["webSocketDebuggerUrl"] != before and her_screen(2):
+                    break
+            except OSError:
+                pass
+            time.sleep(0.5)
+        assert cdp(port, "/json/version")["webSocketDebuggerUrl"] != before       # a fresh kiosk, not the orphan
+        assert her_screen()
+        deadline = time.time() + 15                             # it says so at its next check-in
+        while time.time() < deadline:
+            devs = run_task(orch, "constellation.devices", {"computers": True})[1]["paired"]
+            if devs[0].get("shell") == "on":
+                break
+            time.sleep(0.5)
+        assert devs[0]["shell"] == "on"
+    finally:
+        first.kill()
+        if second:
+            second.kill()
+        subprocess.run(["pkill", "-f", f"remote-debugging-port={port}"], capture_output=True)

@@ -7,6 +7,7 @@ lets her act there. Standard library only: nothing to install but Python 3.9+.
     python3 aurelia_node.py shell on   # this computer's screen is Aurelia (off to stop)
     python3 aurelia_node.py status
     python3 aurelia_node.py forget     # delete this machine's key
+    python3 aurelia_node.py login add youtube   # a login she may use here (she never sees it)
 
 How it works: the node never listens on a port. It calls out to Aurelia over the
 tailnet with its own key (approved in her mailbox), says what it is, then waits for
@@ -57,7 +58,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.5.1"
+VERSION = "0.5.2"
 IS_WINDOWS = platform.system() == "Windows"
 EXIT_REVOKED = 3                                   # the service manager doesn't restart after this
 EXIT_UPDATED = 75                                  # restart me: a new version is in place
@@ -964,6 +965,7 @@ class Shell:
         if len(self.starts) >= 5:
             self.note = "crashing"                      # five starts in two minutes: back off
             return
+        self.close_leftover()
         login = call(self.server, "/nodes/screen", {}, self.key)["login"]
         self.proc = subprocess.Popen(self.argv(browser, self.server + login), env=session_env(),
                                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -971,6 +973,29 @@ class Shell:
         self.starts.append(now)
         self.changed.set()
         log("shell started:", Path(browser).name)
+
+    def close_leftover(self) -> None:
+        """A kiosk from before this agent started (it restarted) still holds the control port and the
+        profile, so a new one couldn't start: close it first."""
+        try:
+            info = self.cdp("/json/version")
+        except OSError:
+            return
+        ws = info.get("webSocketDebuggerUrl") if isinstance(info, dict) else None
+        if not ws:
+            return
+        try:
+            with Tab({"id": "browser", "webSocketDebuggerUrl": ws}) as t:
+                t.call("Browser.close")
+        except (OSError, CDPError):
+            pass
+        for _ in range(20):
+            try:
+                self.cdp("/json/version")
+            except OSError:
+                log("closed the kiosk left from before")
+                return
+            time.sleep(0.25)
 
     def stop(self) -> None:
         if self.running():
@@ -1192,6 +1217,21 @@ async (op, a) => {
   }
   if (op === "clear") { clearMarks(); return {}; }
   if (op === "hide") { const b = D.getElementById("__aurelia_marks"); if (b) b.remove(); return {}; }   // numbers stay usable
+  if (op === "login_fields" || op === "focus_login") {                // sign-in: find the boxes, never read them
+    const inputs = all(D, "input").filter(e => { const r = e.getBoundingClientRect();
+      return r.width > 2 && r.height > 2 && !e.disabled && e.getAttribute("aria-hidden") !== "true" &&
+             e.getAttribute("tabindex") !== "-1" && getComputedStyle(e).visibility !== "hidden"; });
+    const pw = inputs.find(e => (e.type || "").toLowerCase() === "password");
+    const user = inputs.find(e => { const t = (e.type || "").toLowerCase(), au = (e.getAttribute("autocomplete") || "").toLowerCase();
+      const said = [e.name, e.id, e.getAttribute("aria-label"), e.getAttribute("placeholder")].join(" ").toLowerCase();
+      return ["text", "email", ""].includes(t) && (t === "email" || au.includes("username") || au === "email" ||
+             /e-?mail|user|login|identifier|account/.test(said)); });
+    if (op === "login_fields") return { user: !!user, password: !!pw };
+    const e = a.kind === "password" ? pw : user;
+    if (!e) return { error: "nofield" };
+    e.scrollIntoView({ block: "center" }); e.focus(); if (e.select) e.select();
+    return { ok: true };
+  }
   if (op === "state") return { title: clean(D.title), url: location.href, video: vstate(videos()) };
   if (op === "viewport") return { w: innerWidth, h: innerHeight, x: scrollX, y: scrollY };
   if (op === "click" || op === "focus") {
@@ -1510,7 +1550,8 @@ def do_page_type(args: dict) -> dict:
         if f.get("error") == "nofield":
             raise ValueError("no text box is selected; say which one (by its number)")
         if f.get("error") == "secret":
-            raise ValueError("that's a password or payment box; I don't type into those")
+            raise ValueError("that's a password or payment box; I don't type into those (a login he saved on "
+                             "this computer can sign in instead)")
         _page_error(f)
         tab.call("Input.insertText", text=text)
         out = {"typed": text, "into": f.get("label") or "the text box"}
@@ -1581,12 +1622,124 @@ def do_page_media(args: dict) -> dict:
         return r
 
 
+# ---- sign-ins he saved on this computer (strict) ----------------------------------------------------
+#
+# His decision (Sep 30): Aurelia may sign in to a site for him, with a login he saved HERE, on this
+# computer, himself (`aurelia_node.py login add youtube`). The file is readable only by this account
+# and is refused if anyone else could read it. The values never leave this agent: Aurelia (the server
+# and the model) only ever asks "sign in to youtube" and hears back how it went. The agent fills a
+# login only into its own site's sign-in page (by exact origin), never a lookalike.
+
+LOGIN_SITES = {
+    "youtube": {"label": "YouTube (Google)", "origins": ["https://accounts.google.com"],
+                "start": "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2F"},
+    "google": {"label": "Google", "origins": ["https://accounts.google.com"], "start": "https://accounts.google.com/"},
+    "crunchyroll": {"label": "Crunchyroll", "origins": ["https://sso.crunchyroll.com"],
+                    "start": "https://sso.crunchyroll.com/login"},
+    "netflix": {"label": "Netflix", "origins": ["https://www.netflix.com"], "start": "https://www.netflix.com/login"},
+}
+
+
+def logins_file() -> Path:
+    return config_dir() / "logins.json"
+
+
+def read_logins() -> dict:
+    f = logins_file()
+    if not f.exists():
+        return {}
+    if not IS_WINDOWS and f.stat().st_mode & 0o077:
+        raise ValueError("the saved logins file can be read by other accounts, so I won't use it "
+                         f"(fix: chmod 600 {f})")
+    try:
+        data = json.loads(f.read_text())
+    except ValueError:
+        raise ValueError("the saved logins file is damaged; add the logins again")
+    return data if isinstance(data, dict) else {}
+
+
+def save_logins(data: dict) -> None:
+    f = logins_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_suffix(".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as out:
+        json.dump(data, out)
+    if not IS_WINDOWS:
+        os.chmod(tmp, 0o600)
+    os.replace(tmp, f)
+
+
+def _origin(url: str) -> str:
+    u = urllib.parse.urlsplit(url or "")
+    return f"{u.scheme}://{u.netloc}".lower() if u.scheme and u.netloc else ""
+
+
+def do_logins(args: dict) -> dict:
+    """Which sites have a saved login here: names and sign-in pages only, never the values."""
+    return {"logins": [{"site": k, "label": v.get("label") or k, "origins": v.get("origins") or []}
+                       for k, v in sorted(read_logins().items()) if isinstance(v, dict)]}
+
+
+def do_sign_in(args: dict) -> dict:
+    site = " ".join(str(args.get("site") or "").lower().split())
+    entry = read_logins().get(site)
+    if not isinstance(entry, dict) or not entry.get("user") or not entry.get("password"):
+        raise ValueError(f"there's no saved login for {site or 'that site'} on this computer "
+                         f"(he adds it here: aurelia_node.py login add {site or '<site>'})")
+    origins = {_origin(o) for o in entry.get("origins") or []} - {""}
+    if not origins:
+        raise ValueError(f"the saved login for {site} doesn't say which sign-in page it's for")
+    if not (SHELL and SHELL.running()):
+        raise ValueError("her shell isn't running on this computer, so I can't see its screen")
+    try:
+        on_screen = SHELL.page()
+    except ValueError:
+        on_screen = None
+    if (on_screen is None or _origin(on_screen.get("url", "")) not in origins) and entry.get("start"):
+        SHELL.open(entry["start"])                            # its own sign-in page
+        time.sleep(4)
+    filled, label = [], entry.get("label") or site
+    with _tab() as tab:
+        for _ in range(4):                                    # email, then password (one page or two)
+            url = (tab.run("state") or {}).get("url", "")
+            if _origin(url) not in origins:
+                if filled:
+                    break                                     # it left the sign-in page: signed in
+                raise ValueError(f"the page on screen isn't {label}'s sign-in page, so I didn't fill anything")
+            f = tab.run("login_fields") or {}
+            kind = "password" if f.get("password") and "password" not in filled else \
+                   "user" if f.get("user") and "user" not in filled else None
+            if kind is None:
+                break
+            if (tab.run("focus_login", {"kind": kind}) or {}).get("error"):
+                break
+            tab.call("Input.insertText", text=str(entry["password" if kind == "password" else "user"]))
+            tab.key("enter")
+            filled.append(kind)
+            time.sleep(3.5)
+        still = _origin((tab.run("state") or {}).get("url", "")) in origins
+        boxes = (tab.run("login_fields") or {}) if still else {}
+    if not filled:
+        raise ValueError(f"I couldn't find the sign-in boxes on {label}'s page")
+    if not still:
+        status = "signed in"                                  # the site took him back to where he was going
+    elif "password" not in filled:
+        status = "the email went in, but the password box never came"
+    elif boxes.get("password"):
+        status = "the password didn't go through (the saved one may be out of date)"
+    else:
+        status = "waiting for you: it may want your phone (2-step) or a code"
+    return {"site": site, "label": label, "status": status, "filled": filled}      # never the values
+
+
 def do_page_clear(args: dict) -> dict:
     with _tab() as tab:
         tab.run("clear")
         return {}
 
 
+COMMANDS.update({"logins": do_logins, "sign_in": do_sign_in})
 COMMANDS.update({"page_look": do_page_look, "page_click": do_page_click, "page_type": do_page_type,
                  "page_key": do_page_key, "page_scroll": do_page_scroll, "page_back": do_page_back,
                  "page_media": do_page_media, "page_clear": do_page_clear})
@@ -1784,6 +1937,50 @@ def cmd_shell(state: str) -> int:
     return 0
 
 
+def cmd_login(action: str, site: str, origin: str, start: str) -> int:
+    """Logins live only here. Added by him, at this computer; the password is never shown or sent."""
+    import getpass
+    site = " ".join((site or "").lower().split())
+    try:
+        data = read_logins()
+    except ValueError as exc:
+        print(f"Not using the saved logins: {exc}.")
+        return 1
+    if action == "list":
+        if not data:
+            print("No saved logins on this computer.")
+        for k, v in sorted(data.items()):
+            print(f"  {k}: {v.get('label') or k} — fills only on {', '.join(v.get('origins') or [])}")
+        return 0
+    if not site:
+        print("Which site? e.g. login add youtube")
+        return 1
+    if action == "remove":
+        if data.pop(site, None) is None:
+            print(f"No saved login for {site}.")
+            return 1
+        save_logins(data)
+        print(f"Removed the login for {site}.")
+        return 0
+    known = LOGIN_SITES.get(site, {})
+    origins = [origin] if origin else known.get("origins")
+    if not origins or not all(_origin(o) for o in origins):
+        print(f"{site} isn't a site I know; give its sign-in page: login add {site} --origin https://login.example.com "
+              "[--start https://login.example.com/signin]")
+        return 1
+    user = input(f"{known.get('label') or site} email or username: ").strip()
+    password = getpass.getpass("Password (not shown): ")
+    if not user or not password:
+        print("Nothing saved.")
+        return 1
+    data[site] = {"label": known.get("label") or site, "origins": [_origin(o) for o in origins],
+                  "start": start or known.get("start") or origins[0], "user": user, "password": password}
+    save_logins(data)
+    print(f"Saved. Aurelia can sign in to {data[site]['label']} on this computer (she never sees it); "
+          f"it fills only on {', '.join(data[site]['origins'])}.")
+    return 0
+
+
 def cmd_forget() -> int:
     for f in ("key", "config.json"):
         try:
@@ -1805,7 +2002,14 @@ def main(argv=None) -> int:
     sh.add_argument("state", choices=["on", "off"])
     sub.add_parser("status")
     sub.add_parser("forget")
+    lg = sub.add_parser("login", help="logins Aurelia may use on this computer (add, list, remove)")
+    lg.add_argument("action", choices=["add", "list", "remove"])
+    lg.add_argument("site", nargs="?", default="")
+    lg.add_argument("--origin", default="", help="the sign-in page's address (for sites she doesn't know)")
+    lg.add_argument("--start", default="", help="where to open to sign in, if not the origin itself")
     a = ap.parse_args(argv)
+    if a.cmd == "login":
+        return cmd_login(a.action, a.site, a.origin, a.start)
     if a.cmd == "pair":
         return cmd_pair(a.server, a.name)
     if a.cmd == "shell":

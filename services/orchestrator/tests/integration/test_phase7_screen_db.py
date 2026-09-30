@@ -8,6 +8,7 @@ Skipped without Xvfb, Chromium or ffmpeg (for the test video)."""
 import functools
 import http.server
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -183,3 +184,82 @@ def test_she_sees_and_uses_the_page_on_her_screen(stack, tmp_path, display, site
     finally:
         proc.kill()
         subprocess.run(["pkill", "-f", f"remote-debugging-port={port}"], capture_output=True)
+
+
+LOGIN_PAGE = """<!doctype html><title>Sign in</title>
+<form action="password.html"><input type="email" name="identifier" aria-label="Email or phone"><button>Next</button></form>"""
+PASSWORD_PAGE = """<!doctype html><title>Password</title>
+<form action="{back}/welcome.html"><input type="password" name="pw" aria-label="Enter your password"><button>Next</button></form>"""
+WELCOME_PAGE = """<!doctype html><title>Welcome</title><p>Signed in.</p>"""
+
+
+def test_she_signs_in_with_a_login_saved_on_the_computer_without_ever_seeing_it(stack, tmp_path, display, site):
+    orch = stack["orch"]
+    root = tmp_path / "site"
+    (root / "login.html").write_text(LOGIN_PAGE)
+    (root / "password.html").write_text(PASSWORD_PAGE.replace("{back}", site.replace("127.0.0.1", "localhost")))  # back to the site
+    (root / "welcome.html").write_text(WELCOME_PAGE)
+    secret = "s3cret-Aurelia-never-sees-this"
+    got = paired_node(orch, "TV PC")
+    home, app = home_for(tmp_path, orch, got, shell=True)
+    cfg = home / ".config" / "aurelia-node"
+    logins = {"testsite": {"label": "Test site", "origins": [site], "start": f"{site}/login.html",
+                           "user": "me@example.com", "password": secret},
+              "lookalike": {"label": "Lookalike", "origins": ["http://127.0.0.1:1"], "start": f"{site}/login.html",
+                            "user": "me@example.com", "password": secret}}
+    (cfg / "logins.json").write_text(json.dumps(logins))
+    (cfg / "logins.json").chmod(0o600)
+    port = free_port()
+    proc = subprocess.Popen([sys.executable, str(app / "aurelia_node_guard.py"), "run"], stderr=subprocess.PIPE, text=True,
+                            env=env_for(home, DISPLAY=display, XDG_CURRENT_DESKTOP="Aurelia", AURELIA_BROWSER=CHROME,
+                                        AURELIA_BROWSER_ARGS="--no-sandbox --disable-gpu", AURELIA_DEBUG_PORT=str(port),
+                                        AURELIA_POLL_WAIT="2"))
+    try:
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            devs = run_task(orch, "constellation.devices", {"computers": True})[1]["paired"]
+            if devs and devs[0].get("shell") == "on":
+                break
+            time.sleep(0.5)
+        names = ok(orch, "constellation.logins", {"target": "tv pc"})
+        assert "Test site" in names["did"]["what"] and secret not in json.dumps(names) and "me@example" not in json.dumps(names)
+
+        r = httpx.post(f"{orch}/tasks", json={"tool": "constellation.sign_in", "args": {"target": "tv pc", "site": "testsite"}})
+        assert r.status_code == 409                                                      # always his confirmation
+        tid = httpx.post(f"{orch}/tasks", json={"tool": "constellation.sign_in", "args": {"target": "tv pc", "site": "testsite"},
+                                                "confirmed": True}).json()["task_id"]
+        deadline = time.time() + 60
+        while time.time() < deadline and httpx.get(f"{orch}/tasks/{tid}").json()["status"] not in ("completed", "failed"):
+            time.sleep(0.3)
+        t = httpx.get(f"{orch}/tasks/{tid}").json()
+        assert t["status"] == "completed", t.get("error")
+        res = t["result"] if isinstance(t["result"], dict) else json.loads(t["result"])
+        assert res["headline"] == "Signed in to Test site"
+        page = next(p for p in cdp(port, "/json/list") if p["type"] == "page" and "/view" not in p["url"])
+        assert page["title"] == "Welcome" and "pw=" + secret in page["url"]              # the site got the password
+        import asyncio, asyncpg
+        async def everything():
+            c = await asyncpg.connect(DB)
+            try:
+                return json.dumps([dict(r) for r in await c.fetch("SELECT result, args, error FROM task_runs")], default=str)
+            finally:
+                await c.close()
+        stored = asyncio.run(everything())
+        assert secret not in stored and "me@example.com" not in stored                   # Aurelia never had it
+
+        tid = httpx.post(f"{orch}/tasks", json={"tool": "constellation.sign_in", "args": {"target": "tv pc", "site": "lookalike"},
+                                                "confirmed": True}).json()["task_id"]
+        deadline = time.time() + 60
+        while time.time() < deadline and httpx.get(f"{orch}/tasks/{tid}").json()["status"] not in ("completed", "failed"):
+            time.sleep(0.3)
+        t = httpx.get(f"{orch}/tasks/{tid}").json()
+        assert t["status"] == "failed" and "isn't Lookalike's sign-in page" in t["error"]
+        page = next(p for p in cdp(port, "/json/list") if p["type"] == "page" and "/view" not in p["url"] and "login" in p["url"])
+        assert page["title"] == "Sign in"                                                # nothing filled or submitted
+
+        status, _, err = run_task(orch, "constellation.type", {"text": secret, "n": 1})
+        assert status == "failed"                                                        # she still types no passwords herself
+    finally:
+        proc.kill()
+        subprocess.run(["pkill", "-f", f"remote-debugging-port={port}"], capture_output=True)
+    assert secret not in proc.stderr.read()                                              # nor in the agent's log
