@@ -281,6 +281,16 @@ Trilium itself, so its traffic wakes Trilium; while Trilium starts, Kepler
 retries for up to a minute (`trilium.wake_seconds`). The home-lab network
 must exist before Kepler starts.
 
+**If Trilium is unreachable** nothing is lost: the library in Aurelia's
+database is the record, and Trilium is a copy. Research is saved as usual
+(the panel says Trilium will catch up), and a forgotten topic's note is queued
+for removal. Every 5 minutes (`trilium.retry_minutes`) Kepler writes whatever
+Trilium missed and removes queued notes, stopping at the first failure. It only
+contacts Trilium when something is waiting, so it never keeps it awake. Topics
+from before Trilium was connected are copied the same way. Her health shows
+"N waiting to sync" until it's caught up; `POST /trilium/sync` on Kepler runs a
+round now.
+
 Source counts, per-site limit, how close a topic must be to join it, quiz
 length and Trilium settings are in `config/governance/functions/kepler.yaml`.
 Code: `services/functions/kepler/`.

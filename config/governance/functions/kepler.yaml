@@ -27,3 +27,4 @@ rules:
     enabled: true                 # one-way: topics are written to his Trilium; his edits don't flow back (yet)
     parent_note: root             # where the "Aurelia · Library" folder note is made
     wake_seconds: 60              # how long to wait for Trilium to wake (it sleeps behind Lazytainer)
+    retry_minutes: 5              # while Trilium is behind (unreachable), how often to try catching it up

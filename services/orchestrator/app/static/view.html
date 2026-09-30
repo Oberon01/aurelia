@@ -889,7 +889,7 @@ function resultTitle(tool, d) {
   if (d.digest) return "Morning digest";
   if (Array.isArray(d.recall)) return d.query ? `Recall: ${d.query}` : d.date ? `Conversations · ${d.date}` : "Recent conversations";
   if (d.research && typeof d.research === "object") return d.research.question;
-  if (d.library && typeof d.library === "object") return `Library: ${d.library.query}`;
+  if (d.library && typeof d.library === "object") return d.library.query ? `Library: ${d.library.query}` : "Your library";
   if (d.topic && typeof d.topic === "object") return d.topic.name;
   if (d.explain && typeof d.explain === "object") return d.explain.subject;
   if (d.quiz && typeof d.quiz === "object") return `Quiz: ${d.quiz.subject}`;
@@ -1091,12 +1091,14 @@ function researchView(r) {
     if (t.whats_new) note.append(document.createTextNode(" " + t.whats_new));
     if ((t.earlier || []).length) note.append(document.createTextNode(` You looked into this on ${t.earlier[0].date}.`));
     if (r.trilium === "saved") note.append(document.createTextNode(" Saved to Trilium."));
+    else if (r.trilium === "failed") note.append(document.createTextNode(" Trilium isn't reachable; it's saved here and I'll copy it there when it's back."));
     box.append(note);
   }
   return box;
 }
 function libraryView(l) {
   const box = el("div"); box.style.display = "flex"; box.style.flexDirection = "column"; box.style.gap = "14px";
+  if (!l.topics.length && !l.research.length) box.append(el("div", "lib-note", l.message || "Nothing in your library yet."));
   if (l.topics.length) {
     const cards = el("div", "tcards");
     l.topics.forEach(t => {
