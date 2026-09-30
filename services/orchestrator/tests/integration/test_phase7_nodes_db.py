@@ -144,3 +144,40 @@ def test_constellation_answers_its_health_check(node):
             r = httpx.get(f"{f['url'].rstrip('/')}/health")
             assert r.status_code == 200 and r.json()["status"] == "ok", f["name"]
     assert httpx.get(f"{node['orch']}/constellation/health").json()["online"] == 1
+
+
+def test_open_x_on_y_prefers_the_computer_and_opens_sites(node):
+    """'open youtube on the tv': YouTube isn't an installed app there, so its site opens in the browser."""
+    status, res, err = run_task(node["orch"], "constellation.open", {"what": "youtube", "target": "tv"})
+    assert status == "completed", err
+    assert res["opened"] == {"node": "Living room TV", "what": "https://www.youtube.com", "kind": "page"}
+    status, res, _ = run_task(node["orch"], "constellation.open", {"what": "vlc", "target": "living room"})
+    assert status == "completed" and res["opened"]["kind"] == "app"                # a real app wins over a site
+    status, res, _ = run_task(node["orch"], "constellation.open", {"what": "twitch.tv", "target": "tv"})
+    assert status == "completed" and res["opened"]["what"] == "https://twitch.tv"
+    assert started(node)[-3:] == ["xdg-open https://www.youtube.com", "gtk-launch org.videolan.vlc", "xdg-open https://twitch.tv"]
+
+
+def test_no_computer_by_that_name_falls_back_to_a_roku(node):
+    """The test stack has no Orbit, so the Roku fallback is refused and she says which computers exist."""
+    status, _, err = run_task(node["orch"], "constellation.open", {"what": "netflix", "target": "bedroom tv"})
+    assert status == "failed" and "don't know a computer called" in err and "Living room TV" in err
+
+
+def test_a_roku_by_that_name_gets_the_app(node, stack):
+    """Orbit's tv_app runs as its own task (same governance), and her answer names the TV."""
+    orch = stack["orch"]
+    httpx.post(f"{orch}/registry/functions", json={"name": "orbit", "description": "test", "url": stack["fn"],
+        "tools": [{"name": "tv_app", "description": "open an app on a TV", "input_schema": {"type": "object"}}]}).raise_for_status()
+    status, res, err = run_task(orch, "constellation.open", {"what": "netflix", "target": "bedroom tv"})
+    assert status == "completed", err
+    assert res["opened"]["kind"] == "tv" and res["headline"].startswith("Opened on")
+    import asyncio, asyncpg
+    async def q():
+        c = await asyncpg.connect(DB)
+        try:
+            return await c.fetchrow("SELECT args, trigger FROM task_runs WHERE tool='orbit.tv_app' ORDER BY started_at DESC LIMIT 1")
+        finally:
+            await c.close()
+    row = asyncio.run(q())
+    assert json.loads(row["args"]) == {"name": "bedroom tv", "app": "netflix"} and row["trigger"] == "constellation"

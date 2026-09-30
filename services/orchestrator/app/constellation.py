@@ -11,6 +11,7 @@ Aurelia can show the list but can't let a device in or lock one out.
 import asyncio
 import json
 import logging
+import re
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request
@@ -28,14 +29,19 @@ TOOLS = [
     registry.ToolSpec(
         name="devices", description="Every device paired with Aurelia (browsers, the phone, computers running "
                                     "her node, terminals): what it is, when it was last seen, and any waiting to pair. "
+                                    "computers: true shows only his computers (nodes) and which are online. "
                                     "Revoking or approving happens on the display, not through you.",
-        input_schema={"type": "object", "properties": {}}, cancellable=False, freshness_seconds=30, display="panel"),
+        input_schema={"type": "object", "properties": {"computers": {"type": "boolean"}}},
+        cancellable=False, freshness_seconds=30, display="panel"),
     registry.ToolSpec(
-        name="open", description="Open a web page (url) or an app (app, by name) on one of his computers running "
-                                 "your node (target: its name, e.g. 'living room'). Leave target out when only one "
-                                 "is online. Only http and https pages.",
+        name="open", description="Open something on one of his screens (target: its name, e.g. 'living room tv'). "
+                                 "Give what he said in `what` (a site like YouTube or Netflix, a web address, or an "
+                                 "app name), or be explicit with url / app. A computer running your node is used "
+                                 "first; if none matches the name, a Roku TV with that name gets the app instead. "
+                                 "Leave target out when only one computer is online. Only http and https pages.",
         input_schema={"type": "object", "properties": {
-            "target": {"type": "string", "description": "which computer, by name"},
+            "target": {"type": "string", "description": "which screen, by name"},
+            "what": {"type": "string", "description": "what he asked to open, in his words"},
             "url": {"type": "string"}, "app": {"type": "string", "description": "an installed app, by name"}}},
         cancellable=False),
     registry.ToolSpec(
@@ -50,6 +56,12 @@ async def devices(app, user: str, args: dict) -> dict:
     for d in items:
         if d["kind"] == "node" and d["status"] == "approved":
             d["online"] = await nodes.online(app, d["id"])
+    if args.get("computers") in (True, "true", "yes", 1):
+        comps = [d for d in items if d["kind"] == "node" and d["status"] in ("approved", "pending")]
+        on = sum(1 for d in comps if d.get("online"))
+        head = (f"{len([d for d in comps if d['status'] == 'approved'])} computer"
+                f"{'s' if len(comps) != 1 else ''} · {on} online") if comps else "No computers yet"
+        return {"headline": head, "paired": comps, "only": "computers"}
     live = [d for d in items if d["status"] == "approved"]
     waiting = [d for d in items if d["status"] == "pending"]
     head = f"{len(live)} paired" + (f" · {len(waiting)} waiting" if waiting else "")
@@ -65,6 +77,26 @@ def _match(asked: str, name: str, hostname: str | None) -> bool:
     return bool(a) and (a <= norm(name) or a <= norm(hostname or "") or norm(name) <= a)
 
 
+class NoSuchNode(ValueError):
+    """No computer matches (or none is online): a Roku TV with that name may still do."""
+
+
+# Services he'd name like apps but that are web pages on a computer (unless a real app is installed).
+SITES = {"youtube": "https://www.youtube.com", "youtube tv": "https://tv.youtube.com", "netflix": "https://www.netflix.com",
+         "hulu": "https://www.hulu.com", "disney plus": "https://www.disneyplus.com", "disney+": "https://www.disneyplus.com",
+         "prime video": "https://www.primevideo.com", "amazon prime": "https://www.primevideo.com",
+         "max": "https://play.max.com", "hbo max": "https://play.max.com", "twitch": "https://www.twitch.tv",
+         "spotify": "https://open.spotify.com", "peacock": "https://www.peacocktv.com",
+         "paramount plus": "https://www.paramountplus.com", "paramount+": "https://www.paramountplus.com",
+         "crunchyroll": "https://www.crunchyroll.com", "plex": "https://app.plex.tv", "tubi": "https://tubitv.com",
+         "pluto tv": "https://pluto.tv", "google": "https://www.google.com"}
+DOMAIN = re.compile(r"^(?:https?://)?[\w-]+(?:\.[\w-]+)+(?:[/?#]\S*)?$", re.I)
+
+
+def site_for(name: str) -> str | None:
+    return SITES.get(" ".join(name.lower().replace("the ", "", 1).split()))
+
+
 async def target(app, asked: str | None) -> dict:
     """The node a request means. Clear failures, never a guess between two machines."""
     rows = await db.pool().fetch("SELECT id, name, info FROM devices WHERE kind='node' AND status='approved'")
@@ -73,11 +105,11 @@ async def target(app, asked: str | None) -> dict:
         info = r["info"] if isinstance(r["info"], dict) else json.loads(r["info"] or "{}")
         ns.append({"id": r["id"], "name": r["name"], "hostname": info.get("hostname"), "online": await nodes.online(app, r["id"])})
     if not ns:
-        raise ValueError("None of your computers runs my node yet.")
+        raise NoSuchNode("None of your computers runs my node yet.")
     if asked and asked.strip():
         hits = [n for n in ns if _match(asked, n["name"], n["hostname"])]
         if not hits:
-            raise ValueError(f"I don't know a computer called \"{asked}\". Yours: {', '.join(n['name'] for n in ns)}.")
+            raise NoSuchNode(f"I don't know a computer called \"{asked}\". Yours: {', '.join(n['name'] for n in ns)}.")
         if len(hits) > 1:                              # e.g. re-paired without revoking the old entry
             live = [n for n in hits if n["online"]]
             if len(live) != 1:
@@ -91,7 +123,7 @@ async def target(app, asked: str | None) -> dict:
                                                   else "None of them is online right now."))
         node = live[0]
     if not node["online"]:
-        raise ValueError(f"{node['name']} isn't online right now.")
+        raise NoSuchNode(f"{node['name']} isn't online right now.")
     return node
 
 
@@ -107,6 +139,12 @@ async def _ask_node(app, node: dict, kind: str, args: dict, timeout: float = 20)
 
 async def open_(app, user: str, args: dict) -> dict:
     url, name = str(args.get("url") or "").strip(), " ".join(str(args.get("app") or "").split())
+    what = " ".join(str(args.get("what") or "").split())
+    if what and not (url or name):
+        if DOMAIN.match(what):
+            url = what
+        else:
+            name = what
     if bool(url) == bool(name):
         raise ValueError("Say a web page or an app to open (one of them).")
     if url:
@@ -114,11 +152,56 @@ async def open_(app, user: str, args: dict) -> dict:
             url = "https://" + url
         if urlsplit(url).scheme not in ("http", "https") or not urlsplit(url).hostname:
             raise ValueError("I only open web pages (http or https) this way.")
-    node = await target(app, args.get("target"))
-    data = await _ask_node(app, node, "open_url" if url else "launch_app", {"url": url} if url else {"name": name})
-    what = url or data.get("app") or name
-    return {"headline": f"Opened on {node['name']}", "opened": {"node": node["name"], "what": what,
-                                                               "kind": "page" if url else "app"}}
+    try:
+        node = await target(app, args.get("target"))
+    except NoSuchNode as exc:
+        if name and args.get("target"):                    # no computer by that name: maybe a Roku TV is meant
+            tv = await _roku(app, user, str(args["target"]), name)
+            if tv is not None:
+                return tv
+        raise ValueError(str(exc))
+    if url:
+        data = await _ask_node(app, node, "open_url", {"url": url})
+        return _opened(node, url, "page")
+    try:
+        data = await _ask_node(app, node, "launch_app", {"name": name})
+        return _opened(node, data.get("app") or name, "app")
+    except ValueError as exc:
+        site = site_for(name)
+        if site is None or "no app called" not in str(exc):
+            raise
+    await _ask_node(app, node, "open_url", {"url": site})     # YouTube, Netflix…: the site, when no app is installed
+    return _opened(node, site, "page")
+
+
+def _opened(node: dict, what: str, kind: str) -> dict:
+    return {"headline": f"Opened on {node['name']}", "opened": {"node": node["name"], "what": what, "kind": kind}}
+
+
+async def _roku(app, user: str, tv_name: str, app_name: str) -> dict | None:
+    """Orbit's TV app, as a task through the orchestrator like any other (same governance and log).
+    None when there's no Orbit or no TV by that name."""
+    from fastapi import HTTPException
+    from . import tasks
+    try:
+        tid = await tasks.launch(app, tasks.StartTask(tool="orbit.tv_app", args={"name": tv_name, "app": app_name},
+                                                       user=user, trigger="constellation", display="brief"))
+    except HTTPException:
+        return None
+    res = await tasks.wait_for_result(tid, 30)
+    if res is None:
+        return {"headline": f"Opening {app_name} on the {tv_name}", "opened": {"node": tv_name, "what": app_name, "kind": "tv"}}
+    if res["status"] != "completed":
+        err = str(res.get("error") or "")
+        low = err.lower()
+        if "no tv matches" in low or "there's no tv" in low or "couldn't find a roku" in low:
+            return None                                     # no TV by that name either: say what's known about computers
+        raise ValueError(err or "The TV didn't open it.")
+    data = res.get("result") or {}
+    if isinstance(data, str):
+        data = json.loads(data)
+    tv = data.get("name") or tv_name
+    return {"headline": f"Opened on {tv}", "opened": {"node": tv, "what": data.get("app") or app_name, "kind": "tv"}}
 
 
 async def apps(app, user: str, args: dict) -> dict:

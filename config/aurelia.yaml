@@ -111,6 +111,12 @@ fastpath:
       tool: constellation.open
       args: { app: "{app}", target: "{target}" }
       reply: "Opening {app} on the {target}."
+    # "Open X on Y": a computer named Y first (Constellation), else a Roku TV named Y (through Orbit).
+    - name: open-on
+      match: '^(?:open|launch|pull up|bring up|put up)\s+(?:up\s+)?(?P<what>.+?)\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?)\.?$'
+      tool: constellation.open
+      args: { what: "{what}", target: "{target}" }
+      reply: "Opening {what} on the {target}."
     - name: node-apps
       match: '^(?:what(?:''s| is) installed|what apps are(?: installed)?|which apps are(?: installed)?|list (?:the )?apps) on (?:the |my )?(?P<target>.+?)\??$'
       tool: constellation.apps
@@ -173,6 +179,11 @@ fastpath:
       tool: constellation.devices
       args: {}
       reply: "Here's everything paired with me."
+    - name: computers
+      match: '^(?:(?:show|list|open)(?: me)? (?:my |the |all )?(?:connected |online |paired )?(?:nodes|computers|machines|pcs)|(?:what|which) (?:nodes|computers|machines|pcs) are (?:online|connected|paired|up))\??$'
+      tool: constellation.devices
+      args: { computers: "true" }
+      reply: "Here are your computers."
     - name: whole-library
       match: '^(?:(?:what|which) topics (?:have|did) I (?:learn(?:ed|t)?|research(?:ed)?|stud(?:y|ied)|look(?:ed)? into)|what have I (?:learn(?:ed|t)|researched)(?: so far)?|what(?:''s| is) in my library|(?:show|open)(?: me)? (?:my|the) (?:research )?library)\??$'
       tool: kepler.recall
