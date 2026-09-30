@@ -86,6 +86,27 @@ async def topic_for_research(pool, user: str, name: str, doc_embedding: list[flo
     return None
 
 
+async def topic_by_name(pool, user: str, name: str) -> tuple[dict[str, Any] | None, list[str]]:
+    """For forgetting by name: only a clear match by name (never by meaning, since this deletes).
+    Returns (topic or None, all his topic names)."""
+    rows = await pool.fetch(f"SELECT {TOPIC_COLS} FROM kepler_topics WHERE user_id=$1 ORDER BY updated_at DESC", user)
+    key = " ".join(name.lower().split())
+    names = [r["name"] for r in rows]
+    for r in rows:
+        if " ".join(r["name"].lower().split()) == key:
+            return topic_view(r), names
+    asked = R.words(name)
+    holding = [r for r in rows if asked and asked <= R.words(r["name"])]     # "azure" → "Azure landing zones"
+    if len(holding) == 1:
+        return topic_view(holding[0]), names
+    if len(holding) > 1:
+        return None, [r["name"] for r in holding]                           # ambiguous: name the candidates
+    scored = sorted(((R.word_match(name, r["name"]), r) for r in rows), key=lambda x: -x[0])
+    if scored and scored[0][0] >= 0.5 and (len(scored) == 1 or scored[1][0] < scored[0][0]):
+        return topic_view(scored[0][1]), names
+    return None, names
+
+
 async def topic_by_id(pool, user: str, topic_id: int) -> dict[str, Any] | None:
     r = await pool.fetchrow(f"SELECT {TOPIC_COLS} FROM kepler_topics WHERE id=$1 AND user_id=$2", topic_id, user)
     return topic_view(r) if r else None
@@ -156,6 +177,19 @@ async def search(pool, user: str, query: str, embedding: list[float] | None, lim
                         "updated": day(t["updated_at"])} for t in topics],
             "research": [{"id": r["id"], "question": r["question"], "headline": R.plain(r["headline"]), "date": day(r["created_at"]),
                           "topic": r["topic"], "topic_id": r["topic_id"]} for r in research]}
+
+
+async def everything(pool, user: str, topics: int = 30, research: int = 10) -> dict[str, Any]:
+    """The whole library: topics most recently grown first, and the latest research."""
+    ts = await pool.fetch(f"SELECT {TOPIC_COLS} FROM kepler_topics WHERE user_id=$1 ORDER BY updated_at DESC LIMIT $2", user, topics)
+    rs = await pool.fetch(
+        "SELECT r.id, r.question, r.headline, r.created_at, t.name AS topic, t.id AS topic_id FROM kepler_research r "
+        "LEFT JOIN kepler_topics t ON t.id=r.topic_id WHERE r.user_id=$1 ORDER BY r.created_at DESC LIMIT $2", user, research)
+    return {"matched_by": "all",
+            "topics": [{"id": t["id"], "name": t["name"], "summary": t["summary"][:400], "research_count": t["research_count"],
+                        "updated": day(t["updated_at"])} for t in ts],
+            "research": [{"id": r["id"], "question": r["question"], "headline": R.plain(r["headline"]), "date": day(r["created_at"]),
+                          "topic": r["topic"], "topic_id": r["topic_id"]} for r in rs]}
 
 
 async def counts(pool, user: str = "owner") -> dict[str, int]:

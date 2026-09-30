@@ -60,9 +60,10 @@ TOOLS_SPEC = [
      "input_schema": {"type": "object", "properties": {
          "question": {"type": "string"}, "depth": {"type": "string", "enum": ["quick", "thorough"]}},
          "required": ["question"]}, "progress_unit": "steps", "freshness_seconds": 86400},
-    {"name": "recall", "description": "Search his research library by meaning: 'what did I learn about X', 'have I "
-                                      "looked into Y'. (Conversations are Mnemosyne's recall.)",
-     "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
+    {"name": "recall", "description": "His research library. With a query, search it by meaning: 'what did I learn "
+                                      "about X', 'have I looked into Y'. Without a query, the whole library: 'what topics "
+                                      "have I learned', 'show my library'. (Conversations are Mnemosyne's recall.)",
+     "input_schema": {"type": "object", "properties": {"query": {"type": "string", "description": "leave out for the whole library"}}}},
     {"name": "topic", "description": "Show one topic from his library: the combined understanding, what's new, open "
                                      "questions, and the research in it. By name or id.",
      "input_schema": {"type": "object", "properties": {"name": {"type": "string"}, "id": {"type": "integer"}}}},
@@ -77,15 +78,19 @@ TOOLS_SPEC = [
     {"name": "read_pdf", "description": "Read a PDF as text: a link, or a file name in his downloads folder.",
      "input_schema": {"type": "object", "properties": {"url": {"type": "string"}, "file": {"type": "string"}}},
      "progress_unit": "steps"},
-    {"name": "forget", "description": "Delete a piece of research (research_id) or a whole topic (topic_id) from his "
-                                      "library, including its Trilium note. Needs his confirmation.",
-     "input_schema": {"type": "object", "properties": {"research_id": {"type": "integer"}, "topic_id": {"type": "integer"}}}},
+    {"name": "forget", "description": "Delete a whole topic from his library by its name (topic), or by id (topic_id), "
+                                      "or one piece of research (research_id), including the Trilium note. Prefer the "
+                                      "topic's name. Needs his confirmation.",
+     "input_schema": {"type": "object", "properties": {"topic": {"type": "string", "description": "the topic's name"},
+                                                       "research_id": {"type": "integer"}, "topic_id": {"type": "integer"}}}},
 ]
 REFRESHES = {"forget": ["kepler.recall", "kepler.topic"]}
+PANEL_TOOLS = {"research", "recall", "topic", "explain", "quiz"}      # always shown as a panel, never "brief"
 REGISTRATION = {"name": "kepler", "description": "Research and learning: cited answers, a library of what he's learned, "
                                                  "explanations at his level, and quizzes.",
                 "url": settings.function_url,
-                "tools": [{**t, "cancellable": t["name"] in ("research", "read_pdf"), "refreshes": REFRESHES.get(t["name"], [])}
+                "tools": [{**t, "cancellable": t["name"] in ("research", "read_pdf"), "refreshes": REFRESHES.get(t["name"], []),
+                           "display": "panel" if t["name"] in PANEL_TOOLS else "choice"}
                           for t in TOOLS_SPEC]}
 
 POLICY: dict = {}
@@ -277,13 +282,17 @@ async def sync_note(pool, user: str, topic_id: int) -> str:
 
 async def recall(ctx: TaskContext) -> dict:
     q = " ".join(str(ctx.args.get("query") or "").split())[:300]
-    if not q:
-        raise KeplerError("What should I look for in your library?")
-    vec = (await ctx.orch.embed([q]) or [None])[0]
-    found = await store.search(app.state.db, ctx.user, q, vec)
+    if q.lower() in ("all", "everything", "topics", "my topics", "library", "my library", "*"):
+        q = ""
+    if q:
+        vec = (await ctx.orch.embed([q]) or [None])[0]
+        found = await store.search(app.state.db, ctx.user, q, vec)
+    else:
+        found = await store.everything(app.state.db, ctx.user)
     out = {"library": {"query": q, **found}}
     if not found["topics"] and not found["research"]:
-        out["message"] = "Nothing in your library on that yet. Ask me to research it."
+        out["library"]["message"] = out["message"] = ("Nothing in your library on that yet. Ask me to research it." if q else
+                                                      "Your library is empty so far. Ask me to research something.")
     return out
 
 
@@ -370,20 +379,47 @@ async def read_pdf(ctx: TaskContext) -> dict:
             "pages": len(reader.pages), "text": text[:12000] + ("…" if len(text) > 12000 else ""), "truncated": len(text) > 12000}
 
 
+async def _drop_note(t: Trilium, note_id: str) -> str:
+    """Deletes a Trilium note; never fails the forget (the library is the record)."""
+    if not t.ready:
+        return "not set up"
+    try:
+        await t.delete(note_id)
+        return "saved"
+    except httpx.HTTPError as exc:
+        log.warning("couldn't delete Trilium note %s: %s", note_id, exc)
+        return "failed"
+
+
+def _note_line(note: str) -> str:
+    return {"saved": " Trilium is updated too.",
+            "failed": " I couldn't reach Trilium to remove its note; delete it there if it's still showing."}.get(note, "")
+
+
 async def forget(ctx: TaskContext) -> dict:
     pool, t = app.state.db, trilium()
     if ctx.args.get("research_id") is not None:
         question, topic_id, gone = await store.delete_research(pool, ctx.user, int(ctx.args["research_id"]))
-        if gone and gone["trilium_note_id"] and t.ready:
-            await t.delete(gone["trilium_note_id"])
+        if gone and gone["trilium_note_id"]:
+            note = await _drop_note(t, gone["trilium_note_id"])
         elif topic_id and not gone:
-            await sync_note(pool, ctx.user, topic_id)                  # the topic's note no longer lists it
-        return {"forgot": question, "message": "Removed from your library."}
-    if ctx.args.get("topic_id") is not None:
-        gone = await store.delete_topic(pool, ctx.user, int(ctx.args["topic_id"]))
-        if gone["trilium_note_id"] and t.ready:
-            await t.delete(gone["trilium_note_id"])
-        return {"forgot": gone["name"], "message": "The topic and its research are gone, including the Trilium note."}
+            note = await sync_note(pool, ctx.user, topic_id)           # the topic's note no longer lists it
+        else:
+            note = "off"
+        return {"forgot": question, "message": "Removed from your library." + _note_line(note)}
+    topic_id = ctx.args.get("topic_id")
+    if topic_id is None and str(ctx.args.get("topic") or "").strip():
+        found, names = await store.topic_by_name(pool, ctx.user, str(ctx.args["topic"]))
+        if not found:
+            raise KeplerError(f"Which topic? \"{ctx.args['topic']}\" could be {', '.join(names[:10])}." if names and
+                              all(R.words(str(ctx.args['topic'])) <= R.words(n) for n in names) and len(names) > 1 else
+                              f"I don't have a topic called \"{ctx.args['topic']}\"."
+                              + (f" Your topics: {', '.join(names[:10])}." if names else " Your library is empty."))
+        topic_id = found["id"]
+    if topic_id is not None:
+        gone = await store.delete_topic(pool, ctx.user, int(topic_id))
+        note = await _drop_note(t, gone["trilium_note_id"]) if gone["trilium_note_id"] else "off"
+        return {"forgot": gone["name"], "message": "The topic and its research are gone from your library." + _note_line(note)}
     raise KeplerError("Say which research or topic to forget.")
 
 

@@ -240,6 +240,7 @@ learn in a library that grows by topic.
 | `research how do azure landing zones work` | Quick: reads 3 sources. A panel shows progress, then the answer with numbered citations, key points, where sources disagree, and the sources it read |
 | `research … thoroughly` (or `in depth`, `properly`) | Plans 2 or 3 searches from different angles and reads 8 sources |
 | `what did I learn about landing zones?` | Your library: matching topics and the research in them |
+| `what topics have I learned?` / `show my library` | Your whole library: every topic, and your latest research |
 | `show the topic Azure landing zones` | The topic: combined understanding, what's new, open questions, every piece of research and its sources |
 | `explain landing zones` | An explanation at your level, built on your research when there is some, with one analogy and two check questions |
 | `quiz me on landing zones` | 5 multiple-choice questions; answers stay hidden until you pick |
@@ -258,7 +259,8 @@ learn in a library that grows by topic.
 - **Models.** Claude writes answers, merges topics and writes quizzes, through
   the orchestrator (`llm.routes.research`, counted toward the monthly cap);
   Ollama embeds research for finding it by meaning (words are used without it).
-- **Forgetting** research or a whole topic always asks you first.
+- **Forgetting.** "Forget the azure research" (or "forget what I learned about DNS") removes that topic, its research and its Trilium note. It always asks you first, and the confirmation names the topic. A name has to match one topic by its words (never by meaning); otherwise nothing is deleted and she lists your topics.
+- **Always a panel.** Research, the library, topics, explanations and quizzes always open a panel; other tools can answer in a sentence instead (tools declare `display: panel`).
 
 **Trilium (one-way).** Each topic is written to Trilium as a note under
 "Aurelia · Library" (a note labelled `#aureliaLibrary`, created under

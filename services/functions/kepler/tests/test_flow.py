@@ -44,6 +44,7 @@ class Fake:
     def __init__(self):
         self.tasks, self.prompts, self.progress, self.notes, self.trilium_calls = {}, [], [], {}, []
         self.embeddings_on = True
+        self.trilium_down = False
 
     def llm(self, system: str, prompt: str) -> str:
         self.prompts.append((system, prompt))
@@ -85,6 +86,8 @@ class Fake:
                 self.notes[path.split("/")[3]] = req.content.decode()
                 return httpx.Response(204)
             if req.method == "DELETE":
+                if self.trilium_down:
+                    return httpx.Response(500)
                 self.notes.pop(path.split("/")[-1], None)
                 return httpx.Response(204)
             return httpx.Response(200, json={})
@@ -243,3 +246,40 @@ def test_pdfs_from_downloads_stay_inside_the_folder(env):
         env["call"]("read_pdf", {"file": "../../etc/passwd.pdf"})
     with pytest.raises(KeplerError, match="no guide.pdf"):
         env["call"]("read_pdf", {"file": "guide.pdf"})
+
+
+def test_forgetting_a_topic_by_name(env):
+    call = env["call"]
+    call("research", {"question": "What is an Azure landing zone?"})
+    with pytest.raises(Exception, match="don't have a topic called"):
+        call("forget", {"topic": "kubernetes"})
+    out = call("forget", {"topic": "azure"})                      # a short name that only one topic holds
+    assert out["forgot"] == "Azure landing zones"
+    assert call("recall", {"query": "landing zone"})["library"]["topics"] == []
+
+
+def test_the_whole_library_without_a_query(env):
+    call = env["call"]
+    empty = call("recall", {})["library"]
+    assert empty["topics"] == [] and "empty" in empty["message"]
+    call("research", {"question": "What is an Azure landing zone?"})
+    lib = call("recall", {})["library"]
+    assert lib["matched_by"] == "all" and [t["name"] for t in lib["topics"]] == ["Azure landing zones"]
+    assert len(lib["research"]) == 1 and "[1]" not in lib["research"][0]["headline"]
+    assert call("recall", {"query": "my topics"})["library"]["matched_by"] == "all"
+
+
+def test_panel_tools_never_offer_brief():
+    from app import main
+    by_name = {t["name"]: t for t in main.REGISTRATION["tools"]}
+    assert all(by_name[n]["display"] == "panel" for n in ("research", "recall", "topic", "explain", "quiz"))
+    assert by_name["forget"]["display"] == "choice" and "required" not in by_name["recall"]["input_schema"]
+
+
+def test_forgetting_still_works_when_trilium_fails(env):
+    call = env["call"]
+    call("research", {"question": "What is an Azure landing zone?"})
+    env["fake"].trilium_down = True
+    out = call("forget", {"topic": "azure landing zones"})
+    assert out["forgot"] == "Azure landing zones" and "couldn't reach Trilium" in out["message"]
+    assert call("recall", {})["library"]["topics"] == []

@@ -152,11 +152,31 @@ fastpath:
       tool: kepler.recall
       args: { query: "{query}" }
       reply: "Here's what's in your library."
+    - name: whole-library
+      match: '^(?:(?:what|which) topics (?:have|did) I (?:learn(?:ed|t)?|research(?:ed)?|stud(?:y|ied)|look(?:ed)? into)|what have I (?:learn(?:ed|t)|researched)(?: so far)?|what(?:''s| is) in my library|(?:show|open)(?: me)? (?:my|the) (?:research )?library)\??$'
+      tool: kepler.recall
+      args: {}
+      reply: "Here's your library."
     - name: show-topic
       match: '^(?:show|open)(?: me)? the topic\s+(?P<name>.+?)$'
       tool: kepler.topic
       args: { name: "{name}" }
       reply: "Here's the topic."
+    - name: forget-topic
+      match: '^forget (?:about )?(?:the |my )?(?:research|topic|notes?)\s+(?:on|about|for|called)\s+(?P<topic>.+?)\.?$'
+      tool: kepler.forget
+      args: { topic: "{topic}" }
+      reply: "Removed {topic} from your library and Trilium."
+    - name: forget-topic-short
+      match: '^forget (?:the |my )(?P<topic>.+?) (?:research|topic|notes?)\.?$'
+      tool: kepler.forget
+      args: { topic: "{topic}" }
+      reply: "Removed {topic} from your library and Trilium."
+    - name: forget-learned
+      match: '^forget what I (?:learned|learnt|researched|read) (?:on|about)\s+(?P<topic>.+?)\.?$'
+      tool: kepler.forget
+      args: { topic: "{topic}" }
+      reply: "Removed {topic} from your library and Trilium."
     - name: digest
       match: '^(?:(?:show(?: me)?|open|give me)\s+)?(?:the\s+|my\s+|today''s\s+)?(?:morning\s+)?(?:digest|briefing|summary of (?:today|the day))$'
       tool: parallax.digest
