@@ -358,3 +358,34 @@ def test_her_own_processes_are_protected(fake_linux, monkeypatch):
 def agent_signal(name):
     import signal
     return getattr(signal, name)
+
+
+def test_a_snap_browser_is_found_even_off_the_path(tmp_path, monkeypatch):
+    """Ubuntu's Chromium is a snap in /snap/bin, which a user service's PATH usually leaves out."""
+    monkeypatch.delenv("AURELIA_BROWSER", raising=False)
+    monkeypatch.setattr(agent, "IS_WINDOWS", False)
+    monkeypatch.setattr(agent.shutil, "which", lambda name: None)
+    snap = tmp_path / "snap-bin"
+    snap.mkdir()
+    (snap / "chromium").write_text("#!/bin/sh\n")
+    (snap / "chromium").chmod(0o755)
+    monkeypatch.setattr(agent, "BROWSER_DIRS", [str(snap)])
+    assert agent.find_browser() == str(snap / "chromium")
+
+
+def test_in_her_wayland_session_chromium_draws_with_wayland(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent, "IS_WINDOWS", False)
+    monkeypatch.setattr(agent, "config_dir", lambda: tmp_path)
+    monkeypatch.setattr(agent, "session_env", lambda: {"WAYLAND_DISPLAY": "wayland-0", "XDG_SESSION_TYPE": "wayland",
+                                                        "XDG_CURRENT_DESKTOP": "Aurelia"})
+    sh = agent.Shell("https://aurelia", "k")
+    assert sh.wanted() and "--ozone-platform=wayland" in sh.argv("/usr/bin/chromium", "https://x")
+    monkeypatch.setattr(agent, "session_env", lambda: {"DISPLAY": ":0", "XDG_SESSION_TYPE": "x11", "XDG_CURRENT_DESKTOP": "Aurelia"})
+    assert "--ozone-platform=wayland" not in sh.argv("/usr/bin/chromium", "https://x")
+
+
+def test_the_installer_makes_a_wayland_session_and_sets_it_through_the_account_service():
+    text = (agent.Path(__file__).resolve().parents[1] / "app/node_agent/install-linux.sh").read_text()
+    assert "apt-get install -y cage" in text and "/usr/share/wayland-sessions/aurelia.desktop" in text
+    assert "exec cage -d -s --" in text and "SetSession s" in text and "matchbox" not in text
+    assert ">/dev/null\n" not in text.split("apt-get install -y cage")[1][:5]          # its errors are shown

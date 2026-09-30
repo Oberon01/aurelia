@@ -2268,16 +2268,20 @@ async function ask(text) {
   document.getElementById("said").textContent = "› " + text + (screen.focus ? `  · panel ${screen.focus}` : "");
   showExchanges();
   const done = t => { ex.reply = t; ex.pending = false; ex.at = Date.now(); showExchanges(); };
+  let r, out = null;
   try {
-    const r = await fetch("/ask", { method: "POST", headers: { "Content-Type": "application/json" },
-                                    body: JSON.stringify({ text, session_id: session, screen }) });
-    const out = await r.json();
-    if (!r.ok) { done(out.detail ? String(out.detail) : "Something went wrong."); return; }
-    done(out.reply || "");
-    (out.needs_confirmation || []).forEach(showConfirm);
-  } catch (e) {
-    done("I can't reach Aurelia right now.");
+    r = await fetch("/ask", { method: "POST", headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ text, session_id: session, screen }) });
+  } catch (e) { done("I can't reach Aurelia right now. Check this device's connection (Tailscale)."); return; }
+  try { out = await r.json(); } catch (e) {}
+  if (!out) {                                   // not her answer: the proxy's page, or a crash
+    done([502, 503, 504].includes(r.status) ? "She's restarting (probably an update). Try again in a moment."
+         : `Something went wrong on her side (error ${r.status}). It's in her log.`);
+    return;
   }
+  if (!r.ok) { done(out.detail ? String(out.detail) : `Something went wrong (error ${r.status}).`); return; }
+  done(out.reply || "");
+  (out.needs_confirmation || []).forEach(showConfirm);
 }
 
 function showConfirm(action) {

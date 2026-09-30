@@ -126,7 +126,10 @@ curl -fsSL https://…:8443/node/install-linux.sh | bash -s -- https://…:8443 
 
 That adds an "Aurelia" login session and makes it the automatic login: no
 desktop, just her view full screen in a kiosk browser (Chromium is installed if
-there's no Chrome, Chromium or Edge). The screen signs itself in with a key its
+there's no Chrome, Chromium or Edge). The session is Wayland, run by Cage (a
+kiosk compositor), so it works on Ubuntu 25.10 and later, which dropped X11 from
+the desktop, and on 24.04 too. The login session is set through the system's
+account service (and checked), and every step says what failed if one does. The screen signs itself in with a key its
 agent gets from Aurelia; that key shows her but can't decide mailbox items or
 touch devices, and it's revoked with its computer. Pages she opens there open
 inside it; "go home on the TV PC" closes them. GNOME stays on the login screen

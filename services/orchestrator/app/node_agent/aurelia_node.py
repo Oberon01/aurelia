@@ -57,7 +57,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 IS_WINDOWS = platform.system() == "Windows"
 EXIT_REVOKED = 3                                   # the service manager doesn't restart after this
 EXIT_UPDATED = 75                                  # restart me: a new version is in place
@@ -874,6 +874,9 @@ def execute(cmd: dict) -> dict:
 
 # ---- the shell: a kiosk browser that is her ---------------------------------------------------
 
+BROWSER_DIRS = ["/snap/bin", "/usr/local/bin", "/usr/bin", "/var/lib/flatpak/exports/bin"]
+
+
 def find_browser() -> str | None:
     forced = os.environ.get("AURELIA_BROWSER")
     if forced:
@@ -886,11 +889,24 @@ def find_browser() -> str | None:
                 if root and p.exists():
                     return str(p)
         return None
-    for name in ("google-chrome-stable", "google-chrome", "chromium", "chromium-browser",
-                 "microsoft-edge-stable", "microsoft-edge"):
+    names = ("google-chrome-stable", "google-chrome", "chromium", "chromium-browser", "microsoft-edge-stable",
+             "microsoft-edge")
+    for name in names:
         if shutil.which(name):
             return shutil.which(name)
+    # A service's PATH often leaves out snap and flatpak (Ubuntu's Chromium is a snap): look there too.
+    for d in BROWSER_DIRS + [str(Path.home() / ".local/share/flatpak/exports/bin")]:
+        for name in names + ("org.chromium.Chromium", "com.google.Chrome"):
+            p = Path(d) / name
+            if p.is_file() and os.access(p, os.X_OK):
+                return str(p)
     return None
+
+
+def wayland() -> bool:
+    """Her session is Wayland (Cage) when the session says so; Chromium must then draw with Wayland."""
+    env = session_env()
+    return bool(env.get("WAYLAND_DISPLAY")) and (env.get("XDG_SESSION_TYPE") == "wayland" or not env.get("DISPLAY"))
 
 
 class Shell:
@@ -933,6 +949,8 @@ class Shell:
                 "--autoplay-policy=no-user-gesture-required", "--check-for-update-interval=31536000"]
         if IS_WINDOWS and "msedge" in browser.lower():
             args.append("--edge-kiosk-type=fullscreen")
+        if not IS_WINDOWS and wayland():
+            args += ["--ozone-platform=wayland", "--enable-features=UseOzonePlatform"]
         args += [a for a in os.environ.get("AURELIA_BROWSER_ARGS", "").split() if a]
         return args + [url]
 
