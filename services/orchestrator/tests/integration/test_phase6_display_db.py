@@ -71,6 +71,34 @@ def test_a_brief_answer_opens_no_panel(stack, use_model):
     assert opened and opened["data"]["display"] == "brief"
 
 
+def test_a_panel_only_tool_always_opens_a_panel(stack, use_model):
+    """A library or a quiz is something to look at: the tool says so, and "brief" is neither offered nor honoured."""
+    fns = httpx.get(f"{stack['orch']}/registry/functions").json()
+    fns = fns.get("functions", fns) if isinstance(fns, dict) else fns
+    testfn = next(f for f in fns if f["name"] == "testfn")
+    tools = [{**t, "display": "panel"} if t["name"] == "look" else t for t in testfn["tools"]]
+    httpx.post(f"{stack['orch']}/registry/functions", json={**testfn, "tools": tools}).raise_for_status()
+    try:
+        sub = redis_sync.Redis.from_url(REDIS).pubsub()
+        sub.subscribe("aurelia:events")
+        model = use_model([{"calls": [("testfn__look", {"_display": "brief"})]}, {"text": "Here it is."}])
+        out = httpx.post(f"{stack['orch']}/ask", json={"text": "what have I got?", "session_id": uuid.uuid4().hex},
+                         timeout=30).json()
+        schema = next(t for t in model.tools if t.name == "testfn__look").input_schema
+        assert "_display" not in (schema.get("properties") or {})
+        assert "_display" in next(t for t in model.tools if t.name == "testfn__status").input_schema["properties"]
+        opened, deadline = None, time.time() + 5
+        while time.time() < deadline and opened is None:
+            m = sub.get_message(timeout=0.5)
+            if m and m["type"] == "message":
+                ev = json.loads(m["data"])
+                if ev["type"] == "panel.open" and ev["task_id"] == out["task_ids"][0]:
+                    opened = ev
+        assert opened and opened["data"].get("display", "panel") == "panel"
+    finally:
+        httpx.post(f"{stack['orch']}/registry/functions", json=testfn).raise_for_status()
+
+
 def add_task(tool, status="completed", minutes_ago=1, result=None, **kw):
     tid = uuid.uuid4()
     sql("INSERT INTO task_runs (id, tool, status, started_at, finished_at, user_id, result, progress_current, progress_total) "

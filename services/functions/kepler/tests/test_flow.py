@@ -51,6 +51,9 @@ class Fake:
         if system.startswith("You plan"):
             return '{"queries": ["azure landing zones overview", "landing zone design areas"]}'
         if system.startswith("You are Kepler, Aurelia's researcher"):
+            if prompt.startswith("Question: What is DNS over HTTPS"):
+                return json.dumps({"headline": "DNS lookups carried inside HTTPS [1]", "answer": "Queries travel encrypted [1].",
+                                   "key_points": ["Encrypted [1]"], "disagreements": [], "topic": "DNS over HTTPS"})
             if prompt.startswith("Question: How do management groups inherit"):
                 named = "Azure landing zones" if "His existing topics: " in prompt and "Azure landing zones" in prompt else "Management groups"
                 return json.dumps({"headline": "Policy flows down the hierarchy [1]", "answer": "Assignments at a group apply below it [1].",
@@ -76,6 +79,8 @@ class Fake:
         path, body = req.url.path, (json.loads(req.content) if req.content and is_json else {})
         if req.url.host == "trilium":
             self.trilium_calls.append((req.method, path))
+            if self.trilium_down:
+                return httpx.Response(503 if self.trilium_down == "waking" else 500)
             if path == "/etapi/notes" and req.method == "GET":
                 return httpx.Response(200, json={"results": []})
             if path == "/etapi/create-note":
@@ -86,8 +91,6 @@ class Fake:
                 self.notes[path.split("/")[3]] = req.content.decode()
                 return httpx.Response(204)
             if req.method == "DELETE":
-                if self.trilium_down:
-                    return httpx.Response(500)
                 self.notes.pop(path.split("/")[-1], None)
                 return httpx.Response(204)
             return httpx.Response(200, json={})
@@ -276,10 +279,27 @@ def test_panel_tools_never_offer_brief():
     assert by_name["forget"]["display"] == "choice" and "required" not in by_name["recall"]["input_schema"]
 
 
-def test_forgetting_still_works_when_trilium_fails(env):
-    call = env["call"]
-    call("research", {"question": "What is an Azure landing zone?"})
-    env["fake"].trilium_down = True
+def test_the_library_keeps_everything_and_trilium_catches_up(env):
+    """Trilium away: research and forgetting still work (the library is the record); once Trilium
+    answers again, one round writes what it missed and removes what was forgotten."""
+    call, fake, loop, pool = env["call"], env["fake"], env["loop"], env["pool"]
+    from app import main
+    kept = call("research", {"question": "What is an Azure landing zone?"})["research"]       # written while up
+    fake.trilium_down = True
+    new = call("research", {"question": "What is DNS over HTTPS?"})["research"]
+    assert new["trilium"] == "failed" and new["id"]                                            # saved here anyway
     out = call("forget", {"topic": "azure landing zones"})
-    assert out["forgot"] == "Azure landing zones" and "couldn't reach Trilium" in out["message"]
-    assert call("recall", {})["library"]["topics"] == []
+    assert out["forgot"] == "Azure landing zones" and "remove its note there once it's back" in out["message"]
+    assert [t["name"] for t in call("recall", {})["library"]["topics"]] == [new["topic"]["name"]]
+    assert loop.run_until_complete(main.catch_up(pool)) == {"written": 0, "removed": 0}      # still away: nothing lost
+    assert loop.run_until_complete(main.store.counts(pool))["pending"] == 2
+    fake.trilium_down = False
+    before = dict(fake.notes)
+    assert loop.run_until_complete(main.catch_up(pool)) == {"written": 1, "removed": 1}
+    assert loop.run_until_complete(main.store.counts(pool))["pending"] == 0
+    assert kept["topic"]["id"] and any("Landing zones" in c for c in before.values())
+    assert not any("Landing zones" in c for c in fake.notes.values())                        # the forgotten topic's note is gone
+    assert any("DNS lookups carried inside HTTPS" in c for c in fake.notes.values())         # the one it missed is written
+    calls = len(fake.trilium_calls)
+    assert loop.run_until_complete(main.catch_up(pool)) == {"written": 0, "removed": 0}
+    assert len(fake.trilium_calls) == calls                                                  # nothing waiting: Trilium isn't touched

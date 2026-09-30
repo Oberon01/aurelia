@@ -95,7 +95,7 @@ REGISTRATION = {"name": "kepler", "description": "Research and learning: cited a
 
 POLICY: dict = {}
 DEFAULT_RULES = {"quick_sources": 3, "thorough_sources": 8, "topic_join": 0.78, "max_per_site": 2,
-                 "read_timeout_seconds": 45, "quiz_questions": 5, "trilium": {"enabled": True, "parent_note": "root", "wake_seconds": 60}}
+                 "read_timeout_seconds": 45, "quiz_questions": 5, "trilium": {"enabled": True, "parent_note": "root", "wake_seconds": 60, "retry_minutes": 5}}
 _cancelled: set[str] = set()
 
 
@@ -260,24 +260,68 @@ async def research(ctx: TaskContext) -> dict:
         "trilium": note}}
 
 
+_sync_lock = asyncio.Lock()      # one writer to Trilium at a time (never two new notes for one topic)
+
+
 async def sync_note(pool, user: str, topic_id: int) -> str:
-    """Writes the topic to Trilium. 'saved', 'off', 'not set up', or 'failed' (never fails the research)."""
+    """Writes the topic to Trilium: 'saved', 'off', 'not set up', or 'failed' (never fails the research).
+    The library is the record: if Trilium can't be reached, the topic is marked and the catch-up round
+    writes it once Trilium answers again."""
     t = trilium()
     if not rules()["trilium"].get("enabled", True):
         return "off"
     if not t.ready:
         return "not set up"
-    topic = await store.topic_by_id(pool, user, topic_id)
-    try:
-        note = await t.upsert(topic["trilium_note_id"], topic["name"],
-                              R.trilium_html(topic, await store.research_in(pool, topic_id, 30)),
-                              rules()["trilium"].get("parent_note") or "root")
-        if note != topic["trilium_note_id"]:
-            await store.set_note(pool, topic_id, note)
-        return "saved"
-    except (httpx.HTTPError, KeyError, ValueError) as exc:
-        log.warning("couldn't write topic %s to Trilium: %s", topic_id, exc)
-        return "failed"
+    async with _sync_lock:
+        topic = await store.topic_by_id(pool, user, topic_id)
+        if topic is None:
+            return "off"                                      # forgotten meanwhile
+        try:
+            note = await t.upsert(topic["trilium_note_id"], topic["name"],
+                                  R.trilium_html(topic, await store.research_in(pool, topic_id, 30)),
+                                  rules()["trilium"].get("parent_note") or "root")
+            await store.set_note(pool, topic_id, note)        # clears pending
+            return "saved"
+        except (httpx.HTTPError, KeyError, ValueError) as exc:
+            log.warning("couldn't write topic %s to Trilium (will retry): %s", topic_id, exc)
+            await store.set_pending(pool, topic_id, True)
+            return "failed"
+
+
+async def catch_up(pool) -> dict[str, int]:
+    """Writes every topic Trilium is behind on, and removes notes of forgotten topics. Only talks to
+    Trilium when something is waiting (so it never keeps a sleeping Trilium awake), and stops at the
+    first failure: Trilium is still away, the next round tries again."""
+    done = {"written": 0, "removed": 0}
+    t = trilium()
+    if not rules()["trilium"].get("enabled", True) or not t.ready:
+        return done
+    for note_id in await store.pending_deletes(pool):
+        try:
+            async with _sync_lock:
+                await t.delete(note_id)
+        except httpx.HTTPError as exc:
+            log.info("Trilium still unreachable (%s); will retry", exc.__class__.__name__)
+            return done
+        await store.delete_done(pool, note_id)
+        done["removed"] += 1
+    for user, topic_id in await store.pending_topics(pool):
+        if await sync_note(pool, user, topic_id) == "failed":
+            return done
+        done["written"] += 1
+    if done["written"] or done["removed"]:
+        log.info("Trilium caught up: %s topic(s) written, %s note(s) removed", done["written"], done["removed"])
+    return done
+
+
+async def catch_up_loop() -> None:
+    await asyncio.sleep(30)                                   # soon after start: picks up anything left waiting
+    while True:
+        try:
+            await catch_up(app.state.db)
+        except Exception:                                     # never let the loop die
+            log.exception("Trilium catch-up failed")
+        await asyncio.sleep(max(1.0, float(rules()["trilium"].get("retry_minutes", 5))) * 60)
 
 
 async def recall(ctx: TaskContext) -> dict:
@@ -379,21 +423,26 @@ async def read_pdf(ctx: TaskContext) -> dict:
             "pages": len(reader.pages), "text": text[:12000] + ("…" if len(text) > 12000 else ""), "truncated": len(text) > 12000}
 
 
-async def _drop_note(t: Trilium, note_id: str) -> str:
-    """Deletes a Trilium note; never fails the forget (the library is the record)."""
-    if not t.ready:
-        return "not set up"
+async def _drop_note(pool, user: str, t: Trilium, note_id: str) -> str:
+    """Deletes a Trilium note; never fails the forget. If Trilium can't be reached, the note waits in a
+    queue and the catch-up round removes it later."""
+    if not t.ready or not rules()["trilium"].get("enabled", True):
+        await store.queue_delete(pool, user, note_id)         # removed once Trilium is set up or back on
+        return "queued"
     try:
-        await t.delete(note_id)
+        async with _sync_lock:
+            await t.delete(note_id)
         return "saved"
     except httpx.HTTPError as exc:
-        log.warning("couldn't delete Trilium note %s: %s", note_id, exc)
-        return "failed"
+        log.warning("couldn't delete Trilium note %s (will retry): %s", note_id, exc)
+        await store.queue_delete(pool, user, note_id)
+        return "queued"
 
 
 def _note_line(note: str) -> str:
     return {"saved": " Trilium is updated too.",
-            "failed": " I couldn't reach Trilium to remove its note; delete it there if it's still showing."}.get(note, "")
+            "queued": " Trilium isn't reachable right now; I'll remove its note there once it's back.",
+            "failed": " Trilium isn't reachable right now; I'll update it once it's back."}.get(note, "")
 
 
 async def forget(ctx: TaskContext) -> dict:
@@ -401,7 +450,7 @@ async def forget(ctx: TaskContext) -> dict:
     if ctx.args.get("research_id") is not None:
         question, topic_id, gone = await store.delete_research(pool, ctx.user, int(ctx.args["research_id"]))
         if gone and gone["trilium_note_id"]:
-            note = await _drop_note(t, gone["trilium_note_id"])
+            note = await _drop_note(pool, ctx.user, t, gone["trilium_note_id"])
         elif topic_id and not gone:
             note = await sync_note(pool, ctx.user, topic_id)           # the topic's note no longer lists it
         else:
@@ -418,7 +467,7 @@ async def forget(ctx: TaskContext) -> dict:
         topic_id = found["id"]
     if topic_id is not None:
         gone = await store.delete_topic(pool, ctx.user, int(topic_id))
-        note = await _drop_note(t, gone["trilium_note_id"]) if gone["trilium_note_id"] else "off"
+        note = await _drop_note(pool, ctx.user, t, gone["trilium_note_id"]) if gone["trilium_note_id"] else "off"
         return {"forgot": gone["name"], "message": "The topic and its research are gone from your library." + _note_line(note)}
     raise KeplerError("Say which research or topic to forget.")
 
@@ -448,8 +497,10 @@ async def heartbeat() -> None:
 async def lifespan(app: FastAPI):
     app.state.db = await asyncpg.create_pool(settings.database_url, min_size=1, max_size=4)
     beat = asyncio.create_task(heartbeat())
+    sync = asyncio.create_task(catch_up_loop())
     yield
     beat.cancel()
+    sync.cancel()
     await app.state.db.close()
 
 
@@ -465,10 +516,21 @@ class Invoke(BaseModel):
 async def health():
     try:
         c = await store.counts(app.state.db)
+    except asyncpg.UndefinedTableError:
+        return {"status": "error", "database": "library tables missing (the orchestrator's migrations haven't run)"}
     except Exception as exc:
         return {"status": "error", "database": f"unreachable ({exc.__class__.__name__})"}
-    return {"status": "ok", "topics": c["topics"], "research": c["research"],
-            "trilium": "connected" if trilium().ready else "not set up"}
+    out = {"status": "ok", "topics": c["topics"], "research": c["research"],
+           "trilium": "connected" if trilium().ready else "not set up"}
+    if c["pending"] and trilium().ready:
+        out["trilium"] = f"{c['pending']} waiting to sync"
+    return out
+
+
+@app.post("/trilium/sync")
+async def trilium_sync():
+    """Catch Trilium up now instead of waiting for the next round."""
+    return await catch_up(app.state.db)
 
 
 @app.post("/tools/{tool}/invoke", status_code=202)

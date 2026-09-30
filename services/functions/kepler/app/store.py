@@ -147,7 +147,32 @@ async def save(pool, user: str, topic: dict[str, Any] | None, new_topic_name: st
 
 
 async def set_note(pool, topic_id: int, note_id: str | None) -> None:
-    await pool.execute("UPDATE kepler_topics SET trilium_note_id=$2 WHERE id=$1", topic_id, note_id)
+    await pool.execute("UPDATE kepler_topics SET trilium_note_id=$2, trilium_pending=false WHERE id=$1", topic_id, note_id)
+
+
+async def set_pending(pool, topic_id: int, pending: bool) -> None:
+    await pool.execute("UPDATE kepler_topics SET trilium_pending=$2 WHERE id=$1", topic_id, pending)
+
+
+async def pending_topics(pool, limit: int = 50) -> list[tuple[str, int]]:
+    """Topics whose Trilium copy is behind: a write failed, or it was never written (Trilium set up later)."""
+    rows = await pool.fetch("SELECT user_id, id FROM kepler_topics WHERE trilium_pending OR trilium_note_id IS NULL "
+                            "ORDER BY updated_at LIMIT $1", limit)
+    return [(r["user_id"], r["id"]) for r in rows]
+
+
+async def queue_delete(pool, user: str, note_id: str) -> None:
+    await pool.execute("INSERT INTO kepler_trilium_deletes (note_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                       note_id, user)
+
+
+async def pending_deletes(pool, limit: int = 50) -> list[str]:
+    return [r["note_id"] for r in await pool.fetch(
+        "SELECT note_id FROM kepler_trilium_deletes ORDER BY created_at LIMIT $1", limit)]
+
+
+async def delete_done(pool, note_id: str) -> None:
+    await pool.execute("DELETE FROM kepler_trilium_deletes WHERE note_id=$1", note_id)
 
 
 async def search(pool, user: str, query: str, embedding: list[float] | None, limit: int = 6) -> dict[str, Any]:
@@ -194,8 +219,10 @@ async def everything(pool, user: str, topics: int = 30, research: int = 10) -> d
 
 async def counts(pool, user: str = "owner") -> dict[str, int]:
     r = await pool.fetchrow("SELECT (SELECT count(*) FROM kepler_topics WHERE user_id=$1) AS topics, "
-                            "(SELECT count(*) FROM kepler_research WHERE user_id=$1) AS research", user)
-    return {"topics": r["topics"], "research": r["research"]}
+                            "(SELECT count(*) FROM kepler_research WHERE user_id=$1) AS research, "
+                            "(SELECT count(*) FROM kepler_topics WHERE trilium_pending OR trilium_note_id IS NULL) "
+                            "+ (SELECT count(*) FROM kepler_trilium_deletes) AS pending", user)
+    return {"topics": r["topics"], "research": r["research"], "pending": r["pending"]}
 
 
 async def delete_research(pool, user: str, research_id: int) -> tuple[str, int | None, dict[str, Any] | None]:
