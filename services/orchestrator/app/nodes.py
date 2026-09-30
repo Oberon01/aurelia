@@ -2,7 +2,7 @@
 talks to her.
 
 A node never opens a port. It calls out, over the tailnet, with its own key:
-  POST /nodes/hello                  what it is (OS, version, screens, what it can do)
+  POST /nodes/hello                  what it is (OS, version, screens, hardware) and how it's doing (vitals)
   GET  /nodes/commands?wait=25       waits for work (long poll); this is also its heartbeat
   POST /nodes/commands/{id}/result   how a command went
   POST /nodes/screen                 a one-time sign-in link for its own shell (kiosk browser)
@@ -88,12 +88,107 @@ async def node_from(request: Request) -> dict[str, Any]:
 
 class Hello(BaseModel):
     info: dict[str, Any] = {}
+    specs: dict[str, Any] = {}          # its hardware (agent 0.5+)
+    vitals: dict[str, Any] = {}         # a small health reading with every check-in (agent 0.5+)
+
+
+# ---- node health: what a check-in reports, and when it's worth telling him --------------------
+
+HEALTH_DEFAULTS = {"disk_warn_percent": 90, "disk_urgent_percent": 97, "memory_warn_percent": 90,
+                   "temp_warn_c": 85, "temp_urgent_c": 95, "cpu_busy_percent": 90, "cpu_busy_checkins": 3,
+                   "battery_low_percent": 10}
+RECENT = "aurelia:node:{}:vitals"
+
+
+def health_rules(app) -> dict:
+    r = dict(HEALTH_DEFAULTS)
+    for k, v in (policy_rules(app).get("health") or {}).items():
+        if k in r and isinstance(v, (int, float)):
+            r[k] = v
+    return r
+
+
+def clean_tree(v: Any, depth: int = 0) -> Any:
+    """Whatever a node reports, bounded: nested dicts and lists of plain values only."""
+    if depth > 4:
+        return None
+    if isinstance(v, dict):
+        return {str(k)[:40]: clean_tree(x, depth + 1) for k, x in list(v.items())[:30]}
+    if isinstance(v, list):
+        return [clean_tree(x, depth + 1) for x in v[:20]]
+    if isinstance(v, str):
+        return v[:120]
+    if isinstance(v, (int, float, bool)) or v is None:
+        return v
+    return None
+
+
+def issues(v: dict, recent_cpu: list[float], r: dict) -> list[dict]:
+    """What's wrong with a computer, in plain words: [{key, level (warn|urgent), text}]."""
+    out = []
+    for d in v.get("disks") or []:
+        used = d.get("used") or 0
+        if used >= r["disk_warn_percent"]:
+            out.append({"key": f"disk:{d.get('mount')}", "level": "urgent" if used >= r["disk_urgent_percent"] else "warn",
+                        "text": f"Disk {d.get('mount')} is {used}% full ({d.get('free_gb')} GB free)"})
+    if (v.get("memory") or 0) >= r["memory_warn_percent"]:
+        out.append({"key": "memory", "level": "warn", "text": f"Memory is {v['memory']}% used"
+                    + (f" and it's swapping ({v['swap']}% of swap)" if (v.get("swap") or 0) >= 25 else "")})
+    hot = max([t for t in (v.get("temp"), v.get("gpu_temp")) if isinstance(t, (int, float))], default=None)
+    if hot is not None and hot >= r["temp_warn_c"]:
+        out.append({"key": "temp", "level": "urgent" if hot >= r["temp_urgent_c"] else "warn",
+                    "text": f"It's running hot ({hot:.0f}°C)"})
+    n = int(r["cpu_busy_checkins"])
+    if len(recent_cpu) >= n and all(c >= r["cpu_busy_percent"] for c in recent_cpu[:n]):
+        out.append({"key": "cpu", "level": "warn", "text": f"The CPU has been over {r['cpu_busy_percent']}% busy "
+                                                          f"for its last {n} check-ins"})
+    b = v.get("battery") or {}
+    if isinstance(b, dict) and b.get("percent") is not None and not b.get("charging") and b["percent"] <= r["battery_low_percent"]:
+        out.append({"key": "battery", "level": "warn", "text": f"Battery is at {b['percent']}% and not charging"})
+    return out
+
+
+async def _alert(redis, dev: dict, urgent: list[dict]) -> None:
+    """An urgent problem gets one mailbox card per problem per day (the digest mentions the rest)."""
+    from . import mailbox
+    from datetime import date
+    made = False
+    for i in urgent:
+        item = await db.pool().fetchval(
+            "INSERT INTO mailbox_items (kind, fingerprint, source, title, summary, proposal, evidence, strength, confidence, "
+            "effect, urgent) SELECT 'node_alert', $1, 'constellation', $2, $3, $4::jsonb, '[]'::jsonb, 1, 1, $5, true "
+            "WHERE NOT EXISTS (SELECT 1 FROM mailbox_items WHERE fingerprint=$1) RETURNING id",
+            f"node_alert:{dev['id']}:{i['key']}:{date.today().isoformat()}", f"{dev['name']}: {i['text'][0].lower()}{i['text'][1:]}",
+            f"{i['text']}. Ask me \"why is the {dev['name']} slow\" or \"how's the {dev['name']} doing\" for the details.",
+            json.dumps({"device_id": dev["id"], "key": i["key"]}), "Nothing changes; it only lets me know you've seen it.")
+        made = made or bool(item)
+    if made:
+        log.warning("node %s: %s", dev["id"], "; ".join(i["text"] for i in urgent))
+        await mailbox.notify(redis)
 
 
 @router.post("/nodes/hello")
 async def hello(body: Hello, request: Request):
     dev = await node_from(request)
     info = auth.clean_info(body.info)
+    if body.specs:
+        info["specs"] = clean_tree(body.specs)
+    if body.vitals:
+        v = clean_tree(body.vitals)
+        redis = request.app.state.redis
+        if isinstance(v.get("cpu"), (int, float)):
+            await redis.lpush(RECENT.format(dev["id"]), v["cpu"])
+            await redis.ltrim(RECENT.format(dev["id"]), 0, 9)
+            await redis.expire(RECENT.format(dev["id"]), 86400)
+        recent = [float(x) for x in await redis.lrange(RECENT.format(dev["id"]), 0, 9)]
+        found = issues(v, recent, health_rules(request.app))
+        info.update(vitals=v, issues=found, vitals_at=int(time.time()))
+        urgent = [i for i in found if i["level"] == "urgent"]
+        if urgent:
+            try:
+                await _alert(request.app.state.redis, dev, urgent)
+            except Exception:
+                log.exception("couldn't file a health alert for node %s", dev["id"])
     await db.pool().execute("UPDATE devices SET info = info || $2::jsonb, last_seen=now() WHERE id=$1",
                             dev["id"], json.dumps(info))
     await request.app.state.redis.set(ONLINE.format(dev["id"]), "1", ex=offline_after(request.app))

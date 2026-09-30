@@ -235,6 +235,27 @@ fastpath:
       tool: constellation.apps
       args: { target: "{target}" }
       reply: "Here's what's installed on the {target}."
+    # Node health: how a computer is doing, what's running, closing a program (always confirmed).
+    - name: node-health
+      match: '^(?:how(?:''s| is) (?:the |my )?(?P<t1>.+?) (?:doing|running|holding up)|check on (?:the |my )?(?P<t2>.+?)|why is (?:the |my )?(?P<t3>.+?) (?:so |running |being )?slow|(?:show (?:me )?|what are )?(?:the )?specs (?:of|on|for) (?:the |my )?(?P<t4>.+?))$'
+      tool: constellation.health
+      args: { target: "{t1}{t2}{t3}{t4}" }
+      reply: "Here's how the {t1}{t2}{t3}{t4} is doing."
+    - name: node-processes
+      match: '^(?:what(?:''s| is) (?:running|using (?:the |all the |so much )?(?P<what>cpu|memory|ram)) on|(?:show|list) (?:me )?(?:the )?processes on) (?:the |my )?(?P<target>.+?)$'
+      tool: constellation.list_processes
+      args: { target: "{target}", sort: "{what}" }
+      reply: "Here's what's running on the {target}."
+    - name: node-force-close
+      match: '^force[- ](?:close|quit|kill|end) (?:the )?(?P<name>.+?) (?:on|from) (?:the |my )?(?P<target>.+?)$'
+      tool: constellation.close_process
+      args: { name: "{name}", target: "{target}", force: "true" }
+      reply: "Waiting for your OK to force-close {name}."
+    - name: node-close
+      match: '^(?:close|quit|kill|end) (?:the )?(?P<name>.+?) (?:on|from) (?:the |my )?(?P<target>.+?)$'
+      tool: constellation.close_process
+      args: { name: "{name}", target: "{target}" }
+      reply: "Waiting for your OK to close {name}."
     - name: open-url
       match: '^open\s+(?P<url>https?://\S+)$'
       tool: nebula.open

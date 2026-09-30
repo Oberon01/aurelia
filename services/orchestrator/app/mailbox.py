@@ -75,6 +75,13 @@ def validate(kind: str, proposal: dict[str, Any]) -> dict[str, Any]:
             raise HTTPException(400, "The card doesn't say which computer.")
         p["version"] = str(p.get("version") or "")[:40]
         return p
+    if kind == "node_alert":                 # a computer with an urgent health problem (nodes.py)
+        try:
+            p["device_id"] = int(p.get("device_id"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "The card doesn't say which computer.")
+        p["key"] = str(p.get("key") or "")[:60]
+        return p
     if kind == "device":                     # a device asking to pair (auth.py)
         try:
             p["device_id"] = int(p.get("device_id"))
@@ -129,6 +136,8 @@ async def apply(conn, item_id: int, kind: str, p: dict[str, Any]) -> str:
         from .main import app as _app
         await _app.state.redis.set(nodes.RETRY.format(p["device_id"]), "1", ex=86400)
         return "It will try the update again at its next check-in."
+    if kind == "node_alert":
+        return "Noted. I'll let you know again if it happens tomorrow or gets worse."
     if kind == "about_you":
         from . import profile
         user = "owner"
@@ -287,6 +296,7 @@ async def _decide(item_id: int, d: Decision, batch: bool = False) -> dict[str, A
                            "updated_at=now() WHERE id=$1", item_id, (d.reason or "").strip() or None, d.user)
         done = ("Declined. That device isn't paired." if row["kind"] == "device" else
                 "Left as is. It keeps its current version until the next release." if row["kind"] == "node_update" else
+                "Dismissed." if row["kind"] == "node_alert" else
                 "Declined. I won't suggest it again unless things change a lot.")
         return {"id": item_id, "status": "rejected", "done": done}
     if d.action == "defer":

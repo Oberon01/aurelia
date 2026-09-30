@@ -278,9 +278,10 @@ def _secs(ms: float) -> str:
 # ---- morning digest --------------------------------------------------------------------------
 
 def digest(rows: list[dict], now: datetime, rules: Rules, waiting: list[dict], releases: list[dict],
-           anomalies: list[dict]) -> dict:
-    """Waiting items, what ran without you since yesterday, failures, anomalies, one
-    notable pattern. Quiet (nothing to show) when none of the first four has anything."""
+           anomalies: list[dict], computers: list[dict] | None = None) -> dict:
+    """Waiting items, what ran without you since yesterday, failures, anomalies, his
+    computers' health problems, one notable pattern. Quiet (nothing to show) when none
+    of the first five has anything. `computers`: [{name, issues: [{level, text}]}]."""
     tz = ZoneInfo(rules.timezone)
     since = now - timedelta(hours=24)
     failed: dict[str, list[dict]] = defaultdict(list)
@@ -301,7 +302,9 @@ def digest(rows: list[dict], now: datetime, rules: Rules, waiting: list[dict], r
         n = sum(1 for r in week if r["tool"] == top)
         if n >= 3:
             pattern = f"Most used this week: {noun(top)}, {n} times."
-    quiet = not (waiting or failures or automatic or anomalies)
+    health = [f"{c['name']}: {i['text']}" for c in (computers or []) for i in (c.get("issues") or [])
+              if isinstance(i, dict) and i.get("text")]
+    quiet = not (waiting or failures or automatic or anomalies or health)
     return {
         "date": f"{now.astimezone(tz):%A, %B %-d}",
         "quiet": quiet,
@@ -310,5 +313,6 @@ def digest(rows: list[dict], now: datetime, rules: Rules, waiting: list[dict], r
         "automatic": automatic[:8],
         "failures": failures[:6],
         "anomalies": [a["text"] for a in anomalies],
+        "computers": health[:8],
         "pattern": pattern,
     }

@@ -50,3 +50,25 @@ def test_screen_phrases_reach_the_right_tool(said, tool, args):
         assert m is None or not m.pattern.tool.startswith("constellation.")
         return
     assert m and m.pattern.tool == tool and m.args == args
+
+
+@pytest.mark.skipif(not CONFIG.exists(), reason="the repo's config isn't in the test image")
+@pytest.mark.parametrize("said,tool,args", [
+    ("how's the tv pc doing", "constellation.health", {"target": "tv pc"}),
+    ("why is the laptop so slow", "constellation.health", {"target": "laptop"}),
+    ("what are the specs of the desktop", "constellation.health", {"target": "desktop"}),
+    ("what's using the memory on the laptop", "constellation.list_processes", {"target": "laptop", "sort": "memory"}),
+    ("close chrome on the laptop", "constellation.close_process", {"name": "chrome", "target": "laptop"}),
+    ("force close chrome on the laptop", "constellation.close_process", {"name": "chrome", "target": "laptop", "force": "true"}),
+    ("close that on the tv pc", "constellation.home", {"target": "tv pc"}),
+    ("how's the weather", None, None),
+])
+def test_health_phrases_reach_the_right_tool(said, tool, args):
+    from app import fastpath
+    from app.config import RuntimeConfig
+    cfg = RuntimeConfig.model_validate(yaml.safe_load(CONFIG.read_text()))
+    m = fastpath.match(said, cfg.fastpath.patterns)
+    if tool is None:
+        assert m is None or not m.pattern.tool.startswith("constellation.")
+        return
+    assert m and m.pattern.tool == tool and m.args == args

@@ -135,3 +135,12 @@ def test_digest_is_quiet_unless_something_needs_you(month):
 def test_rules_come_from_the_policy():
     r = Rules.from_policy({"timezone": "America/New_York", "recurrence": {"min_days": 3}, "retention": {"hot_days": 14}})
     assert (r.timezone, r.min_days, r.retention_days, r.window_days) == ("America/New_York", 3, 14, 14)
+
+
+def test_a_computer_with_a_problem_is_worth_a_digest(month):
+    quiet_rows = [r for r in month if r["status"] == "completed"]
+    d = analysis.digest(quiet_rows, NOW, RULES, waiting=[], releases=[], anomalies=[],
+                        computers=[{"name": "TV PC", "issues": [{"level": "warn", "text": "Disk / is 92% full (8 GB free)"}]},
+                                   {"name": "Laptop", "issues": []}])
+    assert d["quiet"] is False and d["computers"] == ["TV PC: Disk / is 92% full (8 GB free)"]
+    assert analysis.digest(quiet_rows, NOW, RULES, waiting=[], releases=[], anomalies=[])["computers"] == []

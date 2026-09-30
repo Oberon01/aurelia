@@ -13,8 +13,9 @@ tailnet with its own key (approved in her mailbox), says what it is, then waits 
 commands (long polling) and reports how each went.
 
 What it will do is fixed here, not decided by the server: open an http(s) page,
-launch an installed app by name, list installed apps, describe this machine, bring
-its screen back to Aurelia, and see and use the page on her screen (number what can
+launch an installed app by name, list installed apps, describe this machine (its
+hardware, how it's doing, its processes), close a process he confirmed (only that exact
+process, only his, never the system's or her own), bring its screen back to Aurelia, and see and use the page on her screen (number what can
 be clicked, click, type, press a key, scroll, go back, control a video). Anything
 else is refused. Nothing is ever run through a shell, and only paths it found itself
 (installed apps) are launched. The page script is fixed here too; it won't type into
@@ -56,7 +57,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 IS_WINDOWS = platform.system() == "Windows"
 EXIT_REVOKED = 3                                   # the service manager doesn't restart after this
 EXIT_UPDATED = 75                                  # restart me: a new version is in place
@@ -171,6 +172,582 @@ def spawn(argv: list[str]) -> None:
                      stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
 
 
+# ---- what this computer can report (node health) ----------------------------------------------
+#
+# Hardware, live state and processes, read straight from the system: /proc and /sys on Linux,
+# system calls on Windows. Nothing is run through a shell; the only programs started are
+# nvidia-smi and lspci, by full argument list, when they exist. Command lines are never
+# reported (they can hold tokens): a process is its name, its user and what it uses.
+
+PROC, SYS = Path("/proc"), Path("/sys")
+DISK_TYPES = {"ext2", "ext3", "ext4", "xfs", "btrfs", "zfs", "f2fs", "ntfs", "ntfs3", "fuseblk", "vfat", "exfat"}
+PROTECTED_LINUX = {"systemd", "init", "gnome-shell", "gnome-session-b", "gdm", "gdm-session-wor", "gdm-x-session",
+                   "gdm-wayland-ses", "Xorg", "Xwayland", "dbus-daemon", "dbus-broker", "pipewire", "wireplumber",
+                   "pipewire-pulse", "pulseaudio", "sshd", "matchbox-window", "aurelia-session", "tailscaled"}
+PROTECTED_WINDOWS = {"system", "idle", "registry", "smss.exe", "csrss.exe", "wininit.exe", "winlogon.exe", "services.exe",
+                     "lsass.exe", "svchost.exe", "dwm.exe", "explorer.exe", "fontdrvhost.exe", "sihost.exe", "ctfmon.exe",
+                     "memory compression", "secure system", "lsaiso.exe", "tailscaled.exe", "tailscale-ipn.exe"}
+
+
+def _read(path: Path, default: str = "") -> str:
+    try:
+        return path.read_text(errors="replace").strip()
+    except OSError:
+        return default
+
+
+def _run(argv: list[str], timeout: float = 4) -> str:
+    """A fixed helper program, by argument list; its output or ''."""
+    exe = shutil.which(argv[0])
+    if not exe:
+        return ""
+    try:
+        return subprocess.run([exe, *argv[1:]], capture_output=True, text=True, timeout=timeout).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def gpus(live: bool = True) -> list[dict]:
+    out = _run(["nvidia-smi", "--query-gpu=name,memory.total,memory.used,utilization.gpu,temperature.gpu",
+                "--format=csv,noheader,nounits"])
+    found = []
+    for line in out.splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) >= 5:
+            num = lambda s: int(float(s)) if re.fullmatch(r"[\d.]+", s) else None
+            g = {"name": parts[0], "memory_mb": num(parts[1])}
+            if live:
+                g.update(memory_used_mb=num(parts[2]), load=num(parts[3]), temp_c=num(parts[4]))
+            found.append(g)
+    if found or IS_WINDOWS:
+        return found or _windows_gpus()
+    for line in _run(["lspci", "-mm"]).splitlines():                  # no NVIDIA tools: at least the name
+        if re.search(r'"(VGA compatible controller|3D controller|Display controller)"', line):
+            fields = re.findall(r'"([^"]*)"', line)
+            if len(fields) >= 3:
+                found.append({"name": f"{fields[1]} {fields[2]}".strip()})
+    return found
+
+
+# Linux ---------------------------------------------------------------------------------------
+
+def _meminfo() -> dict:
+    out = {}
+    for line in _read(PROC / "meminfo").splitlines():
+        k, _, v = line.partition(":")
+        if v.strip().split()[:1]:
+            out[k] = int(v.split()[0]) * 1024
+    return out
+
+
+def _cpu_times() -> tuple[int, int]:
+    """(busy, total) jiffies for the whole machine."""
+    first = _read(PROC / "stat").splitlines()[:1]
+    if not first:
+        return 0, 0
+    f = [int(x) for x in first[0].split()[1:9]]
+    idle = f[3] + f[4]
+    return sum(f) - idle, sum(f)
+
+
+def _linux_disks() -> list[dict]:
+    seen, out = set(), []
+    for line in _read(PROC / "mounts").splitlines():
+        dev, mount, fstype = (line.split() + ["", "", ""])[:3]
+        mount = mount.replace("\\040", " ")
+        if fstype not in DISK_TYPES or dev in seen or mount.startswith(("/snap", "/boot/efi", "/var/snap")):
+            continue
+        try:
+            u = shutil.disk_usage(mount)
+        except OSError:
+            continue
+        if u.total < 1 << 30:
+            continue
+        seen.add(dev)
+        out.append({"mount": mount, "total_gb": round(u.total / 1e9, 1), "free_gb": round(u.free / 1e9, 1),
+                    "used_percent": round(100 * (u.total - u.free) / u.total)})
+    return out
+
+
+def _linux_temps() -> list[dict]:
+    temps = []
+    for hw in sorted((SYS / "class" / "hwmon").glob("hwmon*")):
+        name = _read(hw / "name")
+        for t in sorted(hw.glob("temp*_input")):
+            raw = _read(t)
+            if raw.lstrip("-").isdigit():
+                label = _read(t.with_name(t.name.replace("_input", "_label"))) or name
+                c = int(raw) / 1000
+                if -20 < c < 150:
+                    temps.append({"sensor": name, "label": label, "c": round(c)})
+    if not temps:
+        for z in sorted((SYS / "class" / "thermal").glob("thermal_zone*")):
+            raw = _read(z / "temp")
+            if raw.lstrip("-").isdigit() and -20 < int(raw) / 1000 < 150:
+                temps.append({"sensor": _read(z / "type") or z.name, "label": _read(z / "type"), "c": round(int(raw) / 1000)})
+    return temps
+
+
+def _linux_speed() -> int | None:
+    """How fast the CPU runs right now, as a % of its top speed (low under load = throttling)."""
+    cur, top = [], []
+    for c in (SYS / "devices" / "system" / "cpu").glob("cpu[0-9]*"):
+        a, b = _read(c / "cpufreq" / "scaling_cur_freq"), _read(c / "cpufreq" / "cpuinfo_max_freq")
+        if a.isdigit() and b.isdigit() and int(b):
+            cur.append(int(a))
+            top.append(int(b))
+    return round(100 * sum(cur) / sum(top)) if top else None
+
+
+def _linux_battery() -> dict | None:
+    for p in (SYS / "class" / "power_supply").glob("*"):
+        if _read(p / "type") == "Battery" and _read(p / "capacity").isdigit():
+            return {"percent": int(_read(p / "capacity")), "charging": _read(p / "status").lower() in ("charging", "full")}
+    return None
+
+
+def _net_bytes() -> dict:
+    out = {}
+    for line in _read(PROC / "net" / "dev").splitlines()[2:]:
+        name, _, rest = line.partition(":")
+        f = rest.split()
+        if name.strip() != "lo" and len(f) >= 9:
+            out[name.strip()] = (int(f[0]), int(f[8]))
+    return out
+
+
+def _linux_procs() -> dict[int, dict]:
+    """pid → {name, uid, ticks (cpu), rss, start} for every process we can read."""
+    page = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 4096
+    procs = {}
+    for d in PROC.iterdir():
+        if not d.name.isdigit():
+            continue
+        stat = _read(d / "stat")
+        if ")" not in stat:
+            continue
+        name = stat[stat.find("(") + 1:stat.rfind(")")]
+        f = stat[stat.rfind(")") + 2:].split()
+        uid = None
+        for line in _read(d / "status").splitlines():
+            if line.startswith("Uid:"):
+                uid = int(line.split()[1])
+                break
+        try:
+            if f[0] in ("Z", "X"):                              # exited, just not collected by its parent yet
+                continue
+            procs[int(d.name)] = {"name": name, "uid": uid, "ticks": int(f[11]) + int(f[12]), "start": int(f[19]),
+                                  "rss": int(f[21]) * page, "ppid": int(f[1])}
+        except (IndexError, ValueError):
+            continue
+    return procs
+
+
+def _boot_time() -> float:
+    for line in _read(PROC / "stat").splitlines():
+        if line.startswith("btime"):
+            return float(line.split()[1])
+    return time.time() - float(_read(PROC / "uptime", "0").split()[0] or 0)
+
+
+def _user(uid) -> str:
+    try:
+        import pwd
+        return pwd.getpwuid(uid).pw_name
+    except (ImportError, KeyError, TypeError):
+        return str(uid)
+
+
+def linux_specs() -> dict:
+    cpu = ""
+    for line in _read(PROC / "cpuinfo").splitlines():
+        k, _, v = line.partition(":")
+        if k.strip() in ("model name", "Model", "Hardware") and v.strip():
+            cpu = " ".join(v.split())
+            break
+    dmi = SYS / "class" / "dmi" / "id"
+    model = " ".join(x for x in (_read(dmi / "sys_vendor"), _read(dmi / "product_name")) if x and "o.e.m" not in x.lower())
+    return {"cpu": cpu, "cores": os.cpu_count(), "memory_gb": round(_meminfo().get("MemTotal", 0) / 1e9, 1),
+            "model": model or None, "gpus": gpus(live=False),
+            "disks": [{"mount": d["mount"], "total_gb": d["total_gb"]} for d in _linux_disks()]}
+
+
+def linux_sample(seconds: float = 1.0, with_procs: bool = True) -> dict:
+    busy0, total0 = _cpu_times()
+    net0 = _net_bytes()
+    procs0 = _linux_procs() if with_procs else {}
+    time.sleep(seconds)
+    busy1, total1 = _cpu_times()
+    net1 = _net_bytes()
+    procs1 = _linux_procs() if with_procs else {}
+    span = max(1, total1 - total0)
+    mem = _meminfo()
+    total_mem = mem.get("MemTotal", 0) or 1
+    out = {"cpu_percent": round(100 * (busy1 - busy0) / span),
+           "load": [round(x, 2) for x in os.getloadavg()] if hasattr(os, "getloadavg") else None,
+           "memory": {"total_gb": round(total_mem / 1e9, 1), "used_percent": round(100 * (total_mem - mem.get("MemAvailable", 0)) / total_mem),
+                      "available_gb": round(mem.get("MemAvailable", 0) / 1e9, 1)},
+           "swap": {"total_gb": round(mem.get("SwapTotal", 0) / 1e9, 1),
+                    "used_percent": round(100 * (mem.get("SwapTotal", 0) - mem.get("SwapFree", 0)) / mem["SwapTotal"])
+                    if mem.get("SwapTotal") else 0},
+           "disks": _linux_disks(), "temps": _linux_temps(), "speed_percent": _linux_speed(),
+           "battery": _linux_battery(), "gpus": gpus(),
+           "uptime_hours": round(float(_read(PROC / "uptime", "0").split()[0] or 0) / 3600, 1),
+           "network": {k: {"down_kbps": round((net1[k][0] - v[0]) * 8 / seconds / 1000),
+                           "up_kbps": round((net1[k][1] - v[1]) * 8 / seconds / 1000)}
+                       for k, v in net0.items() if k in net1 and (net1[k][0] - v[0] or net1[k][1] - v[1])}}
+    if with_procs:
+        tick = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+        boot, me = _boot_time(), os.getuid() if hasattr(os, "getuid") else None
+        rows = []
+        for pid, p in procs1.items():
+            before = procs0.get(pid)
+            used = p["ticks"] - before["ticks"] if before and before["start"] == p["start"] else 0
+            rows.append({"pid": pid, "name": p["name"], "user": _user(p["uid"]), "mine": p["uid"] == me,
+                         "cpu_percent": round(100 * used / span, 1), "memory_mb": round(p["rss"] / 1e6),
+                         "started": round(boot + p["start"] / tick), "start_key": str(p["start"])})
+        out["processes"] = rows
+    return out
+
+
+# Windows (system calls through ctypes) --------------------------------------------------------
+
+def _win():
+    from ctypes import wintypes
+    return ctypes, wintypes, ctypes.windll.kernel32
+
+
+def _filetime(ft) -> int:
+    return (ft.dwHighDateTime << 32) | ft.dwLowDateTime
+
+
+def _windows_gpus() -> list[dict]:
+    if not IS_WINDOWS:
+        return []
+    import winreg
+    found = []
+    base = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+    for i in range(10):
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, f"{base}\\{i:04d}") as k:
+                name = winreg.QueryValueEx(k, "DriverDesc")[0]
+                if name and "basic" not in name.lower():
+                    found.append({"name": name})
+        except OSError:
+            continue
+    return found
+
+
+def _windows_memory() -> dict:
+    c, w, k32 = _win()
+
+    class MEMORYSTATUSEX(c.Structure):
+        _fields_ = [("dwLength", w.DWORD), ("dwMemoryLoad", w.DWORD), ("ullTotalPhys", c.c_ulonglong),
+                    ("ullAvailPhys", c.c_ulonglong), ("ullTotalPageFile", c.c_ulonglong), ("ullAvailPageFile", c.c_ulonglong),
+                    ("ullTotalVirtual", c.c_ulonglong), ("ullAvailVirtual", c.c_ulonglong), ("ullAvailExtendedVirtual", c.c_ulonglong)]
+    m = MEMORYSTATUSEX()
+    m.dwLength = c.sizeof(MEMORYSTATUSEX)
+    k32.GlobalMemoryStatusEx(c.byref(m))
+    return {"total": m.ullTotalPhys, "available": m.ullAvailPhys, "load": m.dwMemoryLoad,
+            "page_total": m.ullTotalPageFile, "page_free": m.ullAvailPageFile}
+
+
+def _windows_cpu_times() -> tuple[int, int]:
+    c, w, k32 = _win()
+    idle, kernel, user = w.FILETIME(), w.FILETIME(), w.FILETIME()
+    k32.GetSystemTimes(c.byref(idle), c.byref(kernel), c.byref(user))
+    total = _filetime(kernel) + _filetime(user)              # kernel time includes idle
+    return total - _filetime(idle), total
+
+
+def _windows_disks() -> list[dict]:
+    c, w, k32 = _win()
+    out = []
+    for letter in "CDEFGHIJKLMNOPQRSTUVWXYZ":
+        root = f"{letter}:\\"
+        if k32.GetDriveTypeW(c.c_wchar_p(root)) != 3:        # DRIVE_FIXED
+            continue
+        try:
+            u = shutil.disk_usage(root)
+        except OSError:
+            continue
+        out.append({"mount": f"{letter}:", "total_gb": round(u.total / 1e9, 1), "free_gb": round(u.free / 1e9, 1),
+                    "used_percent": round(100 * (u.total - u.free) / u.total) if u.total else 0})
+    return out
+
+
+def _windows_battery() -> dict | None:
+    c, w, k32 = _win()
+
+    class SYSTEM_POWER_STATUS(c.Structure):
+        _fields_ = [("ACLineStatus", c.c_ubyte), ("BatteryFlag", c.c_ubyte), ("BatteryLifePercent", c.c_ubyte),
+                    ("SystemStatusFlag", c.c_ubyte), ("BatteryLifeTime", w.DWORD), ("BatteryFullLifeTime", w.DWORD)]
+    s = SYSTEM_POWER_STATUS()
+    if not k32.GetSystemPowerStatus(c.byref(s)) or s.BatteryFlag == 128 or s.BatteryLifePercent == 255:
+        return None                                          # no battery
+    return {"percent": int(s.BatteryLifePercent), "charging": s.ACLineStatus == 1}
+
+
+def _windows_procs() -> dict[int, dict]:
+    c, w, k32 = _win()
+
+    class PROCESSENTRY32W(c.Structure):
+        _fields_ = [("dwSize", w.DWORD), ("cntUsage", w.DWORD), ("th32ProcessID", w.DWORD), ("th32DefaultHeapID", c.c_void_p),
+                    ("th32ModuleID", w.DWORD), ("cntThreads", w.DWORD), ("th32ParentProcessID", w.DWORD),
+                    ("pcPriClassBase", c.c_long), ("dwFlags", w.DWORD), ("szExeFile", c.c_wchar * 260)]
+
+    class PMC(c.Structure):
+        _fields_ = [("cb", w.DWORD), ("PageFaultCount", w.DWORD), ("PeakWorkingSetSize", c.c_size_t),
+                    ("WorkingSetSize", c.c_size_t), ("QuotaPeakPagedPoolUsage", c.c_size_t),
+                    ("QuotaPagedPoolUsage", c.c_size_t), ("QuotaPeakNonPagedPoolUsage", c.c_size_t),
+                    ("QuotaNonPagedPoolUsage", c.c_size_t), ("PagefileUsage", c.c_size_t), ("PeakPagefileUsage", c.c_size_t)]
+    k32.CreateToolhelp32Snapshot.restype = w.HANDLE
+    k32.OpenProcess.restype = w.HANDLE
+    snap = k32.CreateToolhelp32Snapshot(2, 0)                # TH32CS_SNAPPROCESS
+    entry = PROCESSENTRY32W()
+    entry.dwSize = c.sizeof(PROCESSENTRY32W)
+    mine = w.DWORD()
+    k32.ProcessIdToSessionId(os.getpid(), c.byref(mine))
+    procs = {}
+    ok = k32.Process32FirstW(snap, c.byref(entry))
+    while ok:
+        pid = int(entry.th32ProcessID)
+        rec = {"name": entry.szExeFile, "uid": None, "ticks": 0, "start": 0, "rss": 0, "ppid": int(entry.th32ParentProcessID)}
+        sess = w.DWORD()
+        if k32.ProcessIdToSessionId(pid, c.byref(sess)):
+            rec["uid"] = int(sess.value)                     # "same user" on Windows = his session
+        h = k32.OpenProcess(0x1000, False, pid)              # PROCESS_QUERY_LIMITED_INFORMATION
+        if h:
+            cr, ex, ke, us = w.FILETIME(), w.FILETIME(), w.FILETIME(), w.FILETIME()
+            if k32.GetProcessTimes(h, c.byref(cr), c.byref(ex), c.byref(ke), c.byref(us)):
+                rec["ticks"], rec["start"] = _filetime(ke) + _filetime(us), _filetime(cr)
+            pmc = PMC()
+            pmc.cb = c.sizeof(PMC)
+            if k32.K32GetProcessMemoryInfo(h, c.byref(pmc), pmc.cb):
+                rec["rss"] = int(pmc.WorkingSetSize)
+            k32.CloseHandle(h)
+        procs[pid] = rec
+        ok = k32.Process32NextW(snap, c.byref(entry))
+    k32.CloseHandle(snap)
+    procs["_session"] = int(mine.value)
+    return procs
+
+
+def windows_specs() -> dict:
+    import winreg
+    def reg(path, value):
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path) as k:
+                return str(winreg.QueryValueEx(k, value)[0]).strip()
+        except OSError:
+            return ""
+    cpu = " ".join(reg(r"HARDWARE\DESCRIPTION\System\CentralProcessor\0", "ProcessorNameString").split())
+    model = " ".join(x for x in (reg(r"HARDWARE\DESCRIPTION\System\BIOS", "SystemManufacturer"),
+                                 reg(r"HARDWARE\DESCRIPTION\System\BIOS", "SystemProductName")) if x)
+    return {"cpu": cpu, "cores": os.cpu_count(), "memory_gb": round(_windows_memory()["total"] / 1e9, 1),
+            "model": model or None, "gpus": gpus(live=False),
+            "disks": [{"mount": d["mount"], "total_gb": d["total_gb"]} for d in _windows_disks()]}
+
+
+def windows_sample(seconds: float = 1.0, with_procs: bool = True) -> dict:
+    busy0, total0 = _windows_cpu_times()
+    procs0 = _windows_procs() if with_procs else {}
+    t0 = time.time()
+    time.sleep(seconds)
+    busy1, total1 = _windows_cpu_times()
+    procs1 = _windows_procs() if with_procs else {}
+    wall = max(1e-3, time.time() - t0) * 1e7 * (os.cpu_count() or 1)       # 100 ns units, all cores
+    m = _windows_memory()
+    out = {"cpu_percent": round(100 * (busy1 - busy0) / max(1, total1 - total0)), "load": None,
+           "memory": {"total_gb": round(m["total"] / 1e9, 1), "used_percent": int(m["load"]),
+                      "available_gb": round(m["available"] / 1e9, 1)},
+           "swap": {"total_gb": round(max(0, m["page_total"] - m["total"]) / 1e9, 1),
+                    "used_percent": round(100 * (1 - m["page_free"] / m["page_total"])) if m["page_total"] else 0},
+           "disks": _windows_disks(), "temps": [], "speed_percent": None, "battery": _windows_battery(),
+           "gpus": gpus(), "uptime_hours": round(ctypes.windll.kernel32.GetTickCount64() / 3.6e6, 1), "network": {}}
+    if with_procs:
+        session = procs1.pop("_session", None)
+        procs0.pop("_session", None)
+        rows = []
+        for pid, p in procs1.items():
+            before = procs0.get(pid)
+            used = p["ticks"] - before["ticks"] if before and before["start"] == p["start"] else 0
+            rows.append({"pid": pid, "name": p["name"], "user": "you" if p["uid"] == session else "system",
+                         "mine": p["uid"] == session and p["uid"] not in (None, 0), "cpu_percent": round(100 * used / wall, 1),
+                         "memory_mb": round(p["rss"] / 1e6),
+                         "started": round(p["start"] / 1e7 - 11644473600) if p["start"] else None,
+                         "start_key": str(p["start"])})
+        out["processes"] = rows
+    return out
+
+
+# Both ------------------------------------------------------------------------------------------
+
+_SPECS: dict | None = None
+
+
+def specs() -> dict:
+    global _SPECS
+    if _SPECS is None:
+        try:
+            _SPECS = windows_specs() if IS_WINDOWS else linux_specs()
+        except Exception as exc:
+            log("couldn't read the hardware:", repr(exc))
+            _SPECS = {}
+    return _SPECS
+
+
+def sample(seconds: float = 1.0, with_procs: bool = True) -> dict:
+    return (windows_sample if IS_WINDOWS else linux_sample)(seconds, with_procs)
+
+
+def vitals() -> dict:
+    """The small reading that goes with every check-in (for alerts and the devices panel)."""
+    try:
+        s = sample(0.5, with_procs=False)
+    except Exception as exc:
+        log("couldn't read vitals:", repr(exc))
+        return {}
+    return {"cpu": s["cpu_percent"], "memory": s["memory"]["used_percent"], "swap": s["swap"]["used_percent"],
+            "disks": [{"mount": d["mount"], "used": d["used_percent"], "free_gb": d["free_gb"]} for d in s["disks"]],
+            "temp": max((t["c"] for t in s["temps"]), default=None),
+            "gpu_temp": max((g.get("temp_c") or 0 for g in s["gpus"]), default=None) or None,
+            "battery": s["battery"]}
+
+
+def _groups(rows: list[dict]) -> list[dict]:
+    by: dict[str, dict] = {}
+    for r in rows:
+        g = by.setdefault(r["name"], {"name": r["name"], "count": 0, "cpu_percent": 0.0, "memory_mb": 0, "mine": True})
+        g["count"] += 1
+        g["cpu_percent"] = round(g["cpu_percent"] + r["cpu_percent"], 1)
+        g["memory_mb"] += r["memory_mb"]
+        g["mine"] = g["mine"] and r["mine"]
+    return sorted(by.values(), key=lambda g: (g["cpu_percent"], g["memory_mb"]), reverse=True)
+
+
+def _public(r: dict) -> dict:
+    out = {k: r[k] for k in ("pid", "name", "user", "mine", "cpu_percent", "memory_mb", "started", "start_key")}
+    if _protected(r["pid"], r["name"]):
+        out["protected"] = True                               # never offered for closing
+    return out
+
+
+def do_health(args: dict) -> dict:
+    s = sample(1.0)
+    rows = s.pop("processes", [])
+    s["top_cpu"] = [_public(r) for r in sorted(rows, key=lambda r: r["cpu_percent"], reverse=True)[:8]]
+    s["top_memory"] = [_public(r) for r in sorted(rows, key=lambda r: r["memory_mb"], reverse=True)[:8]]
+    s["groups"] = _groups(rows)[:10]
+    s["process_count"] = len(rows)
+    return {"specs": specs(), **s}
+
+
+def do_processes(args: dict) -> dict:
+    s = sample(1.0)
+    rows = s.get("processes", [])
+    name = " ".join(str(args.get("name") or "").lower().split())
+    if name:
+        exe = name if name.endswith(".exe") or not IS_WINDOWS else name + ".exe"
+        rows = [r for r in rows if r["name"].lower() in (name, exe)] or \
+               [r for r in rows if r["name"].lower().startswith(name)]
+    key = "memory_mb" if args.get("sort") == "memory" else "cpu_percent"
+    rows.sort(key=lambda r: (r[key], r["memory_mb"]), reverse=True)
+    limit = max(1, min(int(args.get("limit") or 25), 200))
+    return {"processes": [_public(r) for r in rows[:limit]], "groups": _groups(rows)[:15], "total": len(rows),
+            "cpu_percent": s["cpu_percent"], "memory_percent": s["memory"]["used_percent"]}
+
+
+def _protected(pid: int, name: str) -> bool:
+    ours = {os.getpid(), os.getppid()}
+    if SHELL and SHELL.proc:
+        ours.add(SHELL.proc.pid)                              # her own screen
+    if pid in ours or pid <= 4:
+        return True
+    return name.lower() in PROTECTED_WINDOWS if IS_WINDOWS else name in PROTECTED_LINUX
+
+
+def _alive(pid: int, start_key: str) -> bool:
+    if IS_WINDOWS:
+        p = _windows_procs().get(pid)
+        return bool(p) and str(p["start"]) == start_key
+    p = _linux_procs().get(pid)
+    return bool(p) and str(p["start"]) == start_key
+
+
+def _windows_close(pid: int, force: bool) -> bool:
+    """Gently: ask its windows to close (like clicking X). Force: end it. True if something was sent."""
+    c, w, k32 = _win()
+    if force:
+        h = k32.OpenProcess(0x0001, False, pid)              # PROCESS_TERMINATE
+        if not h:
+            return False
+        done = bool(k32.TerminateProcess(h, 1))
+        k32.CloseHandle(h)
+        return done
+    user32, sent = c.windll.user32, []
+    proto = c.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
+
+    def each(hwnd, _):
+        owner = w.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, c.byref(owner))
+        if owner.value == pid and user32.IsWindowVisible(hwnd):
+            user32.PostMessageW(hwnd, 0x0010, 0, 0)            # WM_CLOSE
+            sent.append(hwnd)
+        return True
+    user32.EnumWindows(proto(each), 0)
+    return bool(sent)
+
+
+def do_kill(args: dict) -> dict:
+    """Close exactly the processes Aurelia showed him (number + start time), his own only,
+    never protected ones. Gently unless force; waits up to 5 s to see them go."""
+    targets = [t for t in (args.get("targets") or []) if isinstance(t, dict)][:100]
+    if not targets:
+        raise ValueError("which process? (its number and start time from the list)")
+    force = bool(args.get("force"))
+    procs = _windows_procs() if IS_WINDOWS else _linux_procs()
+    session = procs.pop("_session", None) if IS_WINDOWS else None
+    me = session if IS_WINDOWS else (os.getuid() if hasattr(os, "getuid") else None)
+    sent, refused = [], []
+    for t in targets:
+        try:
+            pid, key = int(t.get("pid")), str(t.get("start_key"))
+        except (TypeError, ValueError):
+            continue
+        p = procs.get(pid)
+        if not p or str(p["start"]) != key:
+            refused.append({"pid": pid, "why": "it isn't running anymore (or a different program has that number now)"})
+            continue
+        if _protected(pid, p["name"]):
+            refused.append({"pid": pid, "name": p["name"], "why": "it's part of the system or of me, so I don't close it"})
+            continue
+        if p["uid"] != me or (IS_WINDOWS and not me):
+            refused.append({"pid": pid, "name": p["name"], "why": "it isn't yours"})
+            continue
+        if IS_WINDOWS:
+            if not _windows_close(pid, force):
+                refused.append({"pid": pid, "name": p["name"], "why": "it has no window to close; it needs a force close"})
+                continue
+        else:
+            import signal
+            try:
+                os.kill(pid, signal.SIGKILL if force else signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                refused.append({"pid": pid, "name": p["name"], "why": "it isn't yours"})
+                continue
+        sent.append({"pid": pid, "name": p["name"], "key": key})
+    deadline = time.time() + 5
+    while time.time() < deadline and any(_alive(s["pid"], s["key"]) for s in sent):
+        time.sleep(0.25)
+    closed = [s for s in sent if not _alive(s["pid"], s["key"])]
+    still = [{"pid": s["pid"], "name": s["name"]} for s in sent if s not in closed]
+    return {"closed": [{"pid": s["pid"], "name": s["name"]} for s in closed], "still_running": still,
+            "refused": refused, "force": force}
+
+
 # ---- installed apps -----------------------------------------------------------------------------
 
 LINUX_APP_DIRS = ["/usr/share/applications", "/usr/local/share/applications", "~/.local/share/applications",
@@ -277,7 +854,7 @@ def do_home(args: dict) -> dict:
 
 
 COMMANDS = {"open_url": do_open_url, "launch_app": do_launch_app, "list_apps": do_list_apps, "info": do_info,
-            "home": do_home}
+            "home": do_home, "health": do_health, "processes": do_processes, "kill": do_kill}
 
 
 def execute(cmd: dict) -> dict:
@@ -1152,7 +1729,7 @@ def cmd_run() -> int:
             if time.time() - said_hello_at > HELLO_SECONDS or (SHELL and SHELL.changed.is_set()):
                 if SHELL:
                     SHELL.changed.clear()
-                hello = call(server, "/nodes/hello", {"info": machine_info()}, key)
+                hello = call(server, "/nodes/hello", {"info": machine_info(), "specs": specs(), "vitals": vitals()}, key)
                 said_hello_at = time.time()
                 log("connected")
                 after_hello(server, key, hello)

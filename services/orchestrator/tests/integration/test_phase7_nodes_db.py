@@ -227,3 +227,79 @@ def test_a_computer_on_a_tv_input_brings_the_tv_with_it(node, stack):
     status, res, err = run_task(orch, "constellation.open", {"url": "https://example.com/d", "target": "attic pc"})
     assert status == "completed" and "tv" not in res and "tv_note" not in res, err
     assert len(tv_tasks()) == before + 3
+
+
+def test_she_reports_how_a_computer_is_doing_and_closes_only_what_he_confirms(node, stack):
+    """Node reporting with a real agent: hardware and live health, what's running, and closing a
+    program only through his confirmation (the exact process, never the system's)."""
+    orch = stack["orch"]
+    status, res, err = run_task(orch, "constellation.health", {"target": "living room tv"}, wait=30)
+    assert status == "completed", err
+    h = res["health"]
+    assert h["specs"]["cpu"] and h["specs"]["memory_gb"] > 0 and h["memory"]["used_percent"] >= 0
+    assert h["disks"] and isinstance(h["groups"], list) and res["diagnosis"] and res["headline"].startswith("Living room TV: ")
+
+    sleeper = subprocess.Popen(["sleep", "300"])                 # a program of his to close
+    try:
+        status, res, err = run_task(orch, "constellation.list_processes", {"target": "tv", "name": "sleep"}, wait=30)
+        assert status == "completed", err
+        mine = [p for p in res["processes"]["items"] if p["pid"] == sleeper.pid]
+        assert mine and mine[0]["name"] == "sleep" and "cmdline" not in mine[0]          # names only, never command lines
+
+        status, res, err = run_task(orch, "constellation.close_process", {"target": "tv", "name": "sleep"}, wait=30)
+        assert status == "completed", err
+        c = res["confirm"]
+        assert c["tool"] == "constellation.kill_process" and "Close Sleep on Living room TV" in c["reason"]
+        assert {"pid": sleeper.pid, "start_key": mine[0]["start_key"]} in c["args"]["targets"]
+        assert sleeper.poll() is None                                                   # nothing closed yet
+        r = httpx.post(f"{orch}/tasks", json={"tool": "constellation.kill_process", "args": c["args"]})
+        assert r.status_code == 409                                                     # a change: he confirms
+        tid = httpx.post(f"{orch}/tasks", json={"tool": "constellation.kill_process", "args": c["args"],
+                                                "confirmed": True}).json()["task_id"]
+        deadline = time.time() + 20
+        while time.time() < deadline and httpx.get(f"{orch}/tasks/{tid}").json()["status"] not in ("completed", "failed"):
+            time.sleep(0.2)
+        t = httpx.get(f"{orch}/tasks/{tid}").json()
+        done = t["result"] if isinstance(t["result"], dict) else json.loads(t["result"])
+        assert done["headline"] == "Closed Sleep" and sleeper.wait(5) is not None
+    finally:
+        sleeper.kill()
+
+    status, _, err = run_task(orch, "constellation.close_process", {"target": "tv", "name": "no-such-program"}, wait=30)
+    assert status == "failed" and "Nothing called no-such-program is running" in err
+    stale = httpx.post(f"{orch}/tasks", json={"tool": "constellation.kill_process", "confirmed": True, "args": {
+        "target": "tv", "targets": [{"pid": node["proc"].pid, "start_key": "1"}]}}).json()["task_id"]
+    deadline = time.time() + 20
+    while time.time() < deadline and httpx.get(f"{orch}/tasks/{stale}").json()["status"] not in ("completed", "failed"):
+        time.sleep(0.2)
+    t = httpx.get(f"{orch}/tasks/{stale}").json()
+    out = t["result"] if isinstance(t["result"], dict) else json.loads(t["result"])
+    assert out["headline"].startswith("Didn't close") and node["proc"].poll() is None   # its own agent survives
+
+
+def test_a_check_in_carries_health_and_urgent_problems_reach_the_mailbox(node, stack):
+    orch = stack["orch"]
+    import asyncio, asyncpg
+    async def q(sql, *a):
+        c = await asyncpg.connect(DB)
+        try:
+            return await c.fetch(sql, *a)
+        finally:
+            await c.close()
+    asyncio.run(q("DELETE FROM mailbox_items WHERE kind='node_alert'"))
+    devs = run_task(orch, "constellation.devices", {"computers": True})[1]["paired"]
+    tv = [d for d in devs if d["name"] == "Living room TV"][0]
+    assert "cpu" in tv["vitals"] and isinstance(tv["issues"], list)                     # its first check-in's reading
+
+    vitals = {"cpu": 12, "memory": 40, "swap": 0, "disks": [{"mount": "/", "used": 98, "free_gb": 2}], "temp": 60}
+    hello = lambda: httpx.post(f"{orch}/nodes/hello", headers={"Authorization": f"Bearer {node['key']}"},
+                               json={"info": {"os": "Linux"}, "specs": {"cpu": "Test CPU", "cores": 4}, "vitals": vitals})
+    hello().raise_for_status()
+    hello().raise_for_status()                                                          # once a day per problem
+    cards = asyncio.run(q("SELECT id, title, urgent FROM mailbox_items WHERE kind='node_alert'"))
+    assert len(cards) == 1 and cards[0]["title"] == "Living room TV: disk / is 98% full (2 GB free)" and cards[0]["urgent"]
+    devs = run_task(orch, "constellation.devices", {"computers": True})[1]["paired"]
+    tv = [d for d in devs if d["name"] == "Living room TV"][0]
+    assert tv["issues"][0]["level"] == "urgent" and tv["vitals"]["disks"][0]["used"] == 98
+    out = httpx.post(f"{orch}/mailbox/{cards[0]['id']}/decide", json={"action": "approve"}).json()
+    assert out["done"].startswith("Noted.")

@@ -147,7 +147,16 @@ async def build_digest() -> dict:
     releases = [dict(x) for x in await app.state.db.fetch(
         "SELECT sha, message, status FROM releases WHERE started_at > now() - interval '24 hours' "
         "AND status IN ('live', 'rolled_back', 'failed', 'held') ORDER BY id DESC")]
-    return analysis.digest(rows, now, r, waiting, releases, analysis.drift(rows, now, r))
+    computers = []
+    try:                                   # Constellation keeps each computer's latest health problems
+        for c in await app.state.db.fetch(
+                "SELECT name, info->'issues' AS issues FROM devices WHERE kind='node' AND status='approved' "
+                "AND jsonb_array_length(COALESCE(info->'issues', '[]'::jsonb)) > 0 "
+                "AND last_seen > now() - interval '1 day' ORDER BY name"):
+            computers.append({"name": c["name"], "issues": json.loads(c["issues"]) if isinstance(c["issues"], str) else c["issues"]})
+    except Exception as exc:               # an older database without devices: no section
+        log.info("no computer health for the digest: %s", exc)
+    return analysis.digest(rows, now, r, waiting, releases, analysis.drift(rows, now, r), computers)
 
 
 async def analysis_loop() -> None:

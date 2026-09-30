@@ -154,6 +154,29 @@ With one computer online, she uses it when you don't say which. "Open X on Y"
 tries a computer named Y first (YouTube, Netflix and the like open as sites in
 its browser unless the app is installed), then a Roku TV named Y through Orbit.
 
+**How your computers are doing.** Every computer running her agent (0.5+) reports
+its hardware (CPU, GPU, memory, disks, model) and, with each check-in, a small
+health reading. Ask for more and it samples live: CPU and memory, swap, disk space,
+temperatures and whether the CPU is slowing itself down, GPU load, battery,
+uptime, network, and what's using the most. She explains what's wrong in plain
+words. Processes are reported by name, user and what they use, never their command
+lines. Closing a program never happens by itself: she finds exactly what would
+close and puts a confirmation card in front of you. The computer closes only those
+exact processes (checked by number and start time), only yours, never the
+system's or her own. It asks first and ends a program only if you say force.
+Problems past the lines in Constellation's policy (`health`) show on the devices
+panel and in the digest; urgent ones (a disk 97% full, 95°C) also get a mailbox
+card, once a day per problem. Windows reporting is written but gets its real test
+with the Windows installer.
+
+| Say | Does |
+| --- | --- |
+| `how's the laptop doing` / `check on the tv pc` | Health panel: hardware, live numbers, what's using the most, and what's wrong |
+| `why is the laptop so slow` | The same, with the reason in a sentence |
+| `what are the specs of the desktop` | Its hardware |
+| `what's running on the tv pc` / `what's using the memory on the laptop` | Processes, by program and one by one |
+| `close chrome on the laptop` / `force close chrome on the laptop` | A confirmation card, then it closes |
+
 **A computer on a TV's input.** The TV PC's picture goes through the living room
 Roku TV, so the TV has to be on and on the right input. Set which input in
 Constellation's policy (`screens`): the computer, the TV (Orbit's name for it)

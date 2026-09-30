@@ -17,14 +17,16 @@ tools:
   media:           { tier: act }         # play, pause, seek, volume, speed, full screen
   submit:          { tier: change }      # the press that buys, pays, sends, posts or deletes: always confirmed
   search_files:    { tier: reference }
-  list_processes:  { tier: reference }
+  list_processes:  { tier: reference }   # what's running on a computer (node reporting)
+  health:          { tier: reference }   # how a computer is doing: hardware, live state, why it's slow
+  close_process:   { tier: act }         # finds exactly what would close; never closes anything itself
   browser_history: { tier: reference }
   read_file:       { tier: read }
   open:            { tier: act }     # open a file, app or URL on a node
   launch:          { tier: act }
   move_file:       { tier: change }
   delete_file:     { tier: change }
-  kill_process:    { tier: change }
+  kill_process:    { tier: change }      # closing those exact processes: always his confirmation
   install:         { tier: change }
   read_secrets:    { tier: never }
 
@@ -59,6 +61,17 @@ rules:
     # A click (or Enter) whose label has one of these words waits for his OK (as submit).
     confirm_before: [buy, buy now, purchase, pay, pay now, checkout, check out, place order, order now, rent,
                      subscribe, donate, tip, transfer, send, post, reply, comment, submit, delete, confirm]
+  # Node health: each check-in carries a small reading. Past a warn line it's in the digest;
+  # past an urgent line, also a mailbox card (once a day per problem). Nothing is closed on its own.
+  health:
+    disk_warn_percent: 90
+    disk_urgent_percent: 97
+    memory_warn_percent: 90
+    temp_warn_c: 85
+    temp_urgent_c: 95
+    cpu_busy_percent: 90               # ...for this many check-ins in a row (about 10 minutes apart)
+    cpu_busy_checkins: 3
+    battery_low_percent: 10
   # A computer whose picture reaches you through a TV's input (the TV PC is plugged into the
   # living room Roku TV). When she opens something on it or brings it home, Orbit turns that TV
   # on if it's off and switches it to this input first. tv: Orbit's name for the TV (empty = your

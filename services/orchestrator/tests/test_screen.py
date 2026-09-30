@@ -86,3 +86,37 @@ def test_which_tv_input_a_computer_comes_through():
     assert constellation.tv_link(App, {"name": "TV PC", "hostname": "tv-pc"}) == {"tv": "Living room TV", "input": "HDMI 2"}
     assert constellation.tv_link(App, {"name": "Desk", "hostname": "desk"}) is None          # no input set: nothing to do
     assert constellation.tv_link(App, {"name": "Laptop", "hostname": "lap"}) is None
+
+
+# ---- node health ----------------------------------------------------------------------------------
+
+from app import nodes  # noqa: E402
+
+
+def test_what_a_check_in_says_is_wrong():
+    r = nodes.HEALTH_DEFAULTS
+    v = {"cpu": 95, "memory": 93, "swap": 40, "disks": [{"mount": "/", "used": 98, "free_gb": 2}, {"mount": "/data", "used": 50}],
+         "temp": 88, "battery": {"percent": 6, "charging": False}}
+    found = {i["key"]: i for i in nodes.issues(v, [95, 96, 97], r)}
+    assert set(found) == {"disk:/", "memory", "temp", "cpu", "battery"}
+    assert found["disk:/"]["level"] == "urgent" and found["disk:/"]["text"] == "Disk / is 98% full (2 GB free)"
+    assert found["temp"]["level"] == "warn" and "swapping" in found["memory"]["text"]
+    assert "cpu" not in {i["key"] for i in nodes.issues(v, [95, 20, 97], r)}               # busy once isn't a problem
+    assert nodes.issues({"cpu": 5, "memory": 30, "disks": [{"mount": "/", "used": 40}]}, [5], r) == []
+
+
+def test_what_a_node_reports_is_bounded():
+    t = nodes.clean_tree({"a": "x" * 500, "b": list(range(100)), "c": {"d": {"e": {"f": {"g": {"h": 1}}}}}, "f": object()})
+    assert len(t["a"]) == 120 and len(t["b"]) == 20 and t["c"]["d"]["e"]["f"]["g"] is None and t["f"] is None
+
+
+def test_why_its_slow_in_plain_words():
+    d = {"cpu_percent": 93, "memory": {"used_percent": 95, "available_gb": 0.4}, "swap": {"used_percent": 40},
+         "disks": [{"mount": "/", "used_percent": 60, "free_gb": 90}], "specs": {"cores": 4},
+         "groups": [{"name": "chrome", "count": 38, "cpu_percent": 70.2, "memory_mb": 3100}]}
+    found = constellation.diagnose(d, nodes.HEALTH_DEFAULTS)
+    assert found[0] == {"short": "CPU busy (Chrome)", "text": "The CPU is 93% busy; most of it is Chrome (38 processes, 70%)"}
+    assert "swapping" in found[1]["text"] and "Chrome (3.1 GB)" in found[1]["text"]
+    ok = constellation.diagnose({"cpu_percent": 5, "memory": {"used_percent": 30}, "disks": [{"used_percent": 40}]},
+                                nodes.HEALTH_DEFAULTS)
+    assert ok == [{"short": "running fine", "text": "Nothing looks wrong: CPU 5%, memory 30%, fullest disk 40%"}]

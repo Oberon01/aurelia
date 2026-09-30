@@ -215,6 +215,22 @@ td .clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;o
 .pdev .dm{grid-column:1;font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
 .pdev .db{grid-column:2;grid-row:1 / span 2;display:flex;gap:8px;align-items:center}
 .pdev.pending .dn{color:var(--warn)}.pdev.revoked{opacity:.55}
+.pdev .dv{grid-column:1;font-family:var(--mono);font-size:11px;color:var(--ink-dim)}
+.pdev .di{grid-column:1;font-size:13px;color:var(--warn)}.pdev .di.urgent{color:var(--bad,#ff7a7a);font-weight:600}
+.hl-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px 18px}
+.meter{display:flex;flex-direction:column;gap:4px;min-width:0}
+.meter .ml{display:flex;justify-content:space-between;gap:8px;font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
+.meter .ml b{font-weight:500;color:var(--ink-strong)}
+.meter .mb{height:6px;border-radius:3px;background:var(--cyan-track);overflow:hidden}
+.meter .mb span{display:block;height:100%;background:var(--cyan)}
+.meter.warn .mb span{background:var(--warn)}.meter.warn .ml b{color:var(--warn)}
+.diag{display:flex;flex-direction:column;gap:6px;font-size:15px;line-height:1.4;color:var(--ink-strong)}
+.diag div{padding-left:12px;border-left:2px solid var(--warn)}.diag.ok div{border-left-color:var(--cyan)}
+.ptab{width:100%;border-collapse:collapse;font-size:13px}
+.ptab th{text-align:left;font-family:var(--mono);font-size:10px;font-weight:400;letter-spacing:1px;text-transform:uppercase;color:var(--ink-faint);padding:4px 8px 4px 0}
+.ptab td{padding:4px 8px 4px 0;border-top:1px solid rgba(95,212,230,.1);color:var(--ink);white-space:nowrap}
+.ptab td.n{max-width:220px;overflow:hidden;text-overflow:ellipsis;color:var(--ink-strong)}.ptab td.num{font-family:var(--mono);text-align:right}
+.ptab tr.sys td{color:var(--ink-faint)}
 .pdev .rn{font:inherit;font-size:15px;background:transparent;color:var(--ink-strong);border:1px solid var(--cyan);border-radius:6px;padding:2px 8px;width:min(320px,100%)}
 .pdev.online .dn::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--cyan);margin-right:8px;vertical-align:middle}
 .pdev.offline .dn::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;border:1px solid var(--ink-faint);margin-right:8px;vertical-align:middle}
@@ -477,6 +493,8 @@ const TITLES = {
   "constellation.home": "Home", "constellation.look": "On the screen", "constellation.click": "Click",
   "constellation.type": "Type", "constellation.press": "Key", "constellation.scroll": "Scroll",
   "constellation.back": "Back", "constellation.media": "Video", "constellation.submit": "Press",
+  "constellation.health": "Computer health", "constellation.list_processes": "Processes",
+  "constellation.close_process": "Close a program", "constellation.kill_process": "Close a program",
 };
 function titleFor(tool) {
   if (TITLES[tool]) return TITLES[tool];
@@ -1003,6 +1021,13 @@ function body(tool, d) {
   }
   if (typeof d.tv === "string") { wrap.append(el("div", "facts", `Showing on ${d.tv}`)); used.add("tv"); }
   if (typeof d.tv_note === "string") { wrap.append(el("div", "error", d.tv_note)); used.add("tv_note"); }
+  if (Array.isArray(d.diagnosis)) { wrap.append(diagView(d.diagnosis, d.headline)); used.add("diagnosis"); used.add("headline"); }
+  if (d.health && typeof d.health === "object" && d.health.node) { wrap.append(healthView(d.health)); used.add("health"); }
+  if (d.processes && typeof d.processes === "object" && Array.isArray(d.processes.items)) { wrap.append(processesView(d.processes)); used.add("processes"); used.add("headline"); }
+  if (Array.isArray(d.closed) && Array.isArray(d.refused)) {
+    (d.refused || []).forEach(r => wrap.append(el("div", "more", `${r.name || r.pid}: ${r.why}`)));
+    ["closed", "still_running", "refused"].forEach(k => used.add(k));
+  }
   if (d.onscreen && typeof d.onscreen === "object") { wrap.append(onscreenView(d.onscreen, !!d.did)); used.add("onscreen"); used.add("headline"); }
   if (d.did && typeof d.did === "object") { wrap.prepend(didView(d.did)); used.add("did"); used.add("headline"); }
   if (d.video && typeof d.video === "object" && !Array.isArray(d.video)) { wrap.append(videoView(d.video)); used.add("video"); used.add("headline"); }
@@ -1218,6 +1243,12 @@ function devicesView(list) {
       btns.append(rv);
     }
     row.append(name, el("span", "dm", bits.join(" · ")), btns);
+    if (d.kind === "node" && d.vitals && d.online) {             // how it's doing, from its last check-in
+      const v = d.vitals, disk = (v.disks || []).reduce((m, x) => Math.max(m, x.used || 0), 0);
+      row.append(el("span", "dv", [`CPU ${v.cpu ?? "?"}%`, `memory ${v.memory ?? "?"}%`, v.disks && v.disks.length ? `disk ${disk}%` : null,
+                                   v.temp != null ? `${v.temp}°C` : null, v.battery ? `battery ${v.battery.percent}%` : null].filter(Boolean).join(" · ")));
+      (d.issues || []).forEach(i => row.append(el("span", "di " + (i.level || ""), i.text)));
+    }
     rows.set(d.id, { row, name });
     box.append(row);
   });
@@ -1399,6 +1430,62 @@ function videoResults(list) {
   });
   return box;
 }
+// Constellation: how a computer is doing, and what's running on it.
+function meter(label, pct, detail, warnAt) {
+  const m = el("div", "meter" + (pct != null && pct >= (warnAt || 90) ? " warn" : ""));
+  const l = el("div", "ml"); l.append(el("span", null, label), el("b", null, pct == null ? "—" : `${pct}%${detail ? ` · ${detail}` : ""}`));
+  const bar = el("div", "mb"), fill = el("span"); fill.style.width = `${Math.max(0, Math.min(100, pct || 0))}%`; bar.append(fill);
+  m.append(l, bar); return m;
+}
+function diagView(list, headline) {
+  const ok = /running fine/.test(headline || "");
+  const box = el("div", "diag" + (ok ? " ok" : ""));
+  list.forEach(t => box.append(el("div", null, t)));
+  return box;
+}
+const gbs = mb => mb >= 1000 ? `${(mb / 1000).toFixed(1)} GB` : `${Math.round(mb || 0)} MB`;
+function procTable(rows, groups) {
+  const t = el("table", "ptab"), head = el("tr");
+  ["Program", groups ? "Count" : "PID", "CPU", "Memory"].forEach((h, i) => { const th = el("th", null, h); if (i > 1) th.style.textAlign = "right"; head.append(th); });
+  t.append(head);
+  rows.forEach(r => {
+    const tr = el("tr", r.mine === false || r.protected ? "sys" : "");
+    tr.append(el("td", "n", r.name), el("td", "num", String(groups ? r.count : r.pid)),
+              el("td", "num", `${(r.cpu_percent || 0).toFixed(r.cpu_percent >= 10 ? 0 : 1)}%`), el("td", "num", gbs(r.memory_mb)));
+    t.append(tr);
+  });
+  return t;
+}
+function healthView(h) {
+  const box = el("div", "onscr");
+  const s = h.specs || {};
+  const spec = [s.model, s.cpu && `${s.cpu}${s.cores ? ` · ${s.cores} threads` : ""}`, s.memory_gb && `${s.memory_gb} GB memory`,
+                ...(s.gpus || []).map(g => `${g.name}${g.memory_mb ? ` (${Math.round(g.memory_mb / 1024)} GB)` : ""}`)].filter(Boolean);
+  if (spec.length) box.append(el("div", "facts", spec.join(" · ")));
+  const grid = el("div", "hl-grid");
+  grid.append(meter("CPU", h.cpu_percent, h.speed_percent != null && h.speed_percent < 80 ? `${h.speed_percent}% speed` : "", 85));
+  if (h.memory) grid.append(meter("Memory", h.memory.used_percent, `${h.memory.available_gb} GB free`));
+  if (h.swap && h.swap.total_gb) grid.append(meter("Swap", h.swap.used_percent, "", 50));
+  (h.disks || []).forEach(d => grid.append(meter(`Disk ${d.mount}`, d.used_percent, `${d.free_gb} GB free`)));
+  (h.gpus || []).filter(g => g.load != null).forEach(g => grid.append(meter("GPU", g.load, g.temp_c != null ? `${g.temp_c}°C` : "", 90)));
+  if (h.battery) grid.append(meter(h.battery.charging ? "Battery (charging)" : "Battery", h.battery.percent, "", 101));
+  box.append(grid);
+  const hot = (h.temps || []).reduce((m, t) => Math.max(m, t.c || 0), 0);
+  const bits = [hot ? `hottest sensor ${hot}°C` : null, h.uptime_hours != null ? `up ${h.uptime_hours >= 48 ? `${Math.round(h.uptime_hours / 24)} days` : `${h.uptime_hours} h`}` : null,
+                h.load ? `load ${h.load.join(" / ")}` : null, h.process_count ? `${h.process_count} processes` : null].filter(Boolean);
+  if (bits.length) box.append(el("div", "facts", bits.join(" · ")));
+  if ((h.groups || []).length) { box.append(el("div", "rl", "Using the most")); box.append(procTable(h.groups.slice(0, 6), true)); }
+  return box;
+}
+function processesView(p) {
+  const box = el("div", "onscr");
+  box.append(el("div", "facts", [p.node, p.cpu_percent != null ? `CPU ${p.cpu_percent}%` : null, p.memory_percent != null ? `memory ${p.memory_percent}%` : null,
+                                 p.total != null ? `${p.total} processes` : null, `by ${p.sort === "memory" ? "memory" : "CPU"}`].filter(Boolean).join(" · ")));
+  if ((p.groups || []).length > 1) { box.append(el("div", "rl", "By program")); box.append(procTable(p.groups.slice(0, 8), true)); }
+  box.append(el("div", "rl", "Processes")); box.append(procTable(p.items.slice(0, 25), false));
+  return box;
+}
+
 // Constellation, step 4: the page on one of his screens, numbered like the screen itself.
 function onscreenView(o, compact) {
   const box = el("div", "onscr");
@@ -1475,7 +1562,7 @@ function linkView(link) {
 // ---------------------------------------------------------------- mailbox
 // Deciding happens only here, from your click: there is no tool for it, so
 // Aurelia can show you her ideas but never approve them herself.
-const KIND_LABEL = { device: "Waiting to pair", node_update: "Computers", about_you: "About you", automation: "Automations", criticality: "What matters most", retention: "Keep longer" };
+const KIND_LABEL = { device: "Waiting to pair", node_update: "Computers", node_alert: "Computers", about_you: "About you", automation: "Automations", criticality: "What matters most", retention: "Keep longer" };
 const CATEGORY_LABEL = { communication: "How to talk to you", mood: "Mood patterns", interests: "Interests", goals: "Goals",
   life: "What's going on", people: "People", learning: "What you know and are learning", rhythms: "Rhythms",
   work: "Work", preferences: "Preferences", general: "Other" };
@@ -1529,7 +1616,7 @@ function mailboxItem(item) {
   const c = el("div", "mb-item" + (item.urgent ? " urgent" : ""));
   const top = el("div", "mb-top");
   top.append(el("span", "mb-title", item.title),
-             el("span", "mb-conf", item.kind === "device" ? `asked ${item.age}` : item.kind === "node_update" ? item.age
+             el("span", "mb-conf", item.kind === "device" ? `asked ${item.age}` : ["node_update", "node_alert"].includes(item.kind) ? item.age
                                  : `${Math.round(item.confidence * 100)}% sure · ${item.age}`));
   c.append(top);
   if (item.kind === "device") {
@@ -1594,7 +1681,8 @@ function mailboxItem(item) {
   const mk = (text, cls) => { const b = el("button", "btn " + (cls || ""), text); b.type = "button"; return b; };
   const approve = mk("Approve", "primary"), change = mk("Change"), later = mk("Not now", "quiet"), no = mk("Decline", "quiet");
   if (item.kind === "node_update") { approve.textContent = "Retry"; no.textContent = "Leave it"; }
-  const noChange = item.kind === "node_update";
+  if (item.kind === "node_alert") { approve.textContent = "Got it"; no.textContent = "Dismiss"; }
+  const noChange = item.kind === "node_update" || item.kind === "node_alert";
   btns.append(approve, ...(noChange ? [] : [change]), ...(item.kind === "device" ? [] : [later]), no);   // a pairing request expires; no "not now"
   c.append(btns);
 
@@ -1633,6 +1721,7 @@ function digestView(d) {
     line.append(statusPill(tone, String(a.outcome).replace(/_/g, " ")), document.createTextNode(a.what)); return line; }));
   section("Failed", (d.failures || []).map(f => el("div", "dg-line", `${f.what}: ${f.count} time${f.count === 1 ? "" : "s"}${f.last_error ? ` (last: ${f.last_error})` : ""}`)));
   section("Unusual", (d.anomalies || []).map(a => el("div", "dg-line", a)));
+  section("Computers", (d.computers || []).map(c => el("div", "dg-line", c)));
   if (d.pattern) section("Noticed", [el("div", "dg-line", d.pattern)]);
   return box;
 }

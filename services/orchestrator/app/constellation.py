@@ -9,6 +9,8 @@ nodes hold their connection here (nodes.py). Tools:
   look, click, type, press, scroll, back, media   see and use the page on a screen running
            her shell (step 4): numbers are drawn on what can be clicked, so "click 3" works
   submit   a click (or Enter) that buys, pays, sends, posts or deletes: always his confirmation
+  health, list_processes   how a computer is doing (hardware, live state, processes) and why it's slow
+  close_process → kill_process   closing a program: found first, then always his confirmation
 Pairing and revoking happen on the display (or the server), never through a tool:
 Aurelia can show the list but can't let a device in or lock one out.
 """
@@ -59,6 +61,38 @@ TOOLS = [
         name="apps", description="The apps installed on one of his computers (target: its name).",
         input_schema={"type": "object", "properties": {"target": {"type": "string"}}},
         cancellable=False, freshness_seconds=300),
+    registry.ToolSpec(
+        name="health", description="How one of his computers is doing, and why it's slow if it is: its hardware (CPU, "
+                                   "GPU, memory, disks, model), live CPU, memory, swap, disk space, temperatures and "
+                                   "throttling, GPU load, battery, uptime, network, and the processes using the most. "
+                                   "`diagnosis` says what's wrong in plain words; explain it from that, briefly.",
+        input_schema={"type": "object", "properties": {"target": {"type": "string", "description": "which computer"}}},
+        cancellable=False, freshness_seconds=15, display="panel"),
+    registry.ToolSpec(
+        name="list_processes", description="What's running on one of his computers: processes sorted by CPU (or "
+                                           "sort: memory), grouped by program too; name filters to one program.",
+        input_schema={"type": "object", "properties": {"target": {"type": "string"}, "name": {"type": "string"},
+                                                       "sort": {"type": "string", "enum": ["cpu", "memory"]},
+                                                       "limit": {"type": "integer", "minimum": 1, "maximum": 100}}},
+        cancellable=False, freshness_seconds=10),
+    registry.ToolSpec(
+        name="close_process", description="Close a program on one of his computers, by its name (all of its "
+                                          "processes) or one pid from list_processes. This never closes anything by "
+                                          "itself: it finds exactly what would close and puts a confirmation card in "
+                                          "front of him. force: true ends it without asking it to close (unsaved work "
+                                          "is lost); use it only when he says force, or it didn't close.",
+        input_schema={"type": "object", "properties": {"target": {"type": "string"}, "name": {"type": "string"},
+                                                       "pid": {"type": "integer"}, "force": {"type": "boolean"}}},
+        cancellable=False),
+    registry.ToolSpec(
+        name="kill_process", description="Close exactly these processes (pid and start_key from list_processes). "
+                                         "Always needs his confirmation; prefer close_process, which prepares it.",
+        input_schema={"type": "object", "properties": {
+            "target": {"type": "string"}, "name": {"type": "string"}, "force": {"type": "boolean"},
+            "targets": {"type": "array", "items": {"type": "object", "properties": {
+                "pid": {"type": "integer"}, "start_key": {"type": "string"}}, "required": ["pid", "start_key"]}}},
+                      "required": ["targets"]},
+        cancellable=False),
     registry.ToolSpec(
         name="look", description="See the page on one of his screens (a computer running your shell): its title, "
                                  "what's written on it, any video's state, and everything that can be clicked, NUMBERED. "
@@ -133,8 +167,8 @@ async def devices(app, user: str, args: dict) -> dict:
     if args.get("computers") in (True, "true", "yes", 1):
         comps = [d for d in items if d["kind"] == "node" and d["status"] in ("approved", "pending")]
         on = sum(1 for d in comps if d.get("online"))
-        head = (f"{len([d for d in comps if d['status'] == 'approved'])} computer"
-                f"{'s' if len(comps) != 1 else ''} · {on} online") if comps else "No computers yet"
+        n = len([d for d in comps if d["status"] == "approved"])
+        head = f"{n} computer{'s' if n != 1 else ''} · {on} online" if comps else "No computers yet"
         return {"headline": head, "paired": comps, "only": "computers"}
     live = [d for d in items if d["status"] == "approved"]
     waiting = [d for d in items if d["status"] == "pending"]
@@ -383,6 +417,153 @@ async def apps(app, user: str, args: dict) -> dict:
     return {"headline": f"{len(items)} apps on {node['name']}", "apps": {"node": node["name"], "items": items[:400]}}
 
 
+# ---- node health: how a computer is doing, and closing a program -------------------------------------
+
+def _gb(mb) -> str:
+    mb = float(mb or 0)
+    return f"{mb / 1000:.1f} GB" if mb >= 1000 else f"{mb:.0f} MB"
+
+
+def _pretty(name: str) -> str:
+    n = re.sub(r"\.exe$", "", str(name or ""), flags=re.I)
+    return n[:1].upper() + n[1:] if n.islower() else n
+
+
+def diagnose(d: dict, r: dict) -> list[dict]:
+    """Why a computer is slow (or that it isn't), from one health reading: [{short, text}]."""
+    out, groups = [], [g for g in d.get("groups") or [] if isinstance(g, dict)]
+    by_cpu = sorted(groups, key=lambda g: g.get("cpu_percent") or 0, reverse=True)
+    by_mem = sorted(groups, key=lambda g: g.get("memory_mb") or 0, reverse=True)
+    specs, cpu = d.get("specs") or {}, d.get("cpu_percent") or 0
+    mem, swap = d.get("memory") or {}, d.get("swap") or {}
+    if cpu >= 85:
+        top = by_cpu[0] if by_cpu else None
+        out.append({"short": "CPU busy" + (f" ({_pretty(top['name'])})" if top else ""),
+                    "text": f"The CPU is {cpu}% busy" + (f"; most of it is {_pretty(top['name'])} ({top['count']} "
+                    f"process{'es' if top['count'] != 1 else ''}, {top['cpu_percent']:.0f}%)" if top else "")})
+    if (mem.get("used_percent") or 0) >= r["memory_warn_percent"]:
+        top = by_mem[0] if by_mem else None
+        swapping = (swap.get("used_percent") or 0) >= 25
+        out.append({"short": "memory nearly full",
+                    "text": f"Memory is {mem['used_percent']}% used ({mem.get('available_gb')} GB free)"
+                            + (f"; the biggest user is {_pretty(top['name'])} ({_gb(top['memory_mb'])})" if top else "")
+                            + ("; it's swapping to disk, which slows everything down" if swapping else "")})
+    for disk in d.get("disks") or []:
+        if (disk.get("used_percent") or 0) >= r["disk_warn_percent"]:
+            out.append({"short": f"disk {disk.get('mount')} nearly full",
+                        "text": f"Disk {disk.get('mount')} is {disk['used_percent']}% full ({disk.get('free_gb')} GB free)"})
+    temps = [t.get("c") for t in d.get("temps") or [] if isinstance(t, dict) and isinstance(t.get("c"), (int, float))]
+    temps += [g.get("temp_c") for g in d.get("gpus") or [] if isinstance(g, dict) and isinstance(g.get("temp_c"), (int, float))]
+    if temps and max(temps) >= r["temp_warn_c"]:
+        out.append({"short": "running hot", "text": f"It's running hot ({max(temps):.0f}°C)"})
+    speed = d.get("speed_percent")
+    if isinstance(speed, (int, float)) and speed <= 60 and cpu >= 50:
+        out.append({"short": "CPU slowed down", "text": f"The CPU is running at {speed:.0f}% of its top speed while busy, "
+                                                        "so it's probably throttling (heat or power settings)"})
+    for g in d.get("gpus") or []:
+        if isinstance(g, dict) and (g.get("load") or 0) >= 90:
+            out.append({"short": "GPU busy", "text": f"The GPU ({g.get('name')}) is {g['load']}% busy"})
+    load, cores = d.get("load"), specs.get("cores") or 0
+    if isinstance(load, list) and load and cores and load[0] > cores * 2:
+        out.append({"short": "overloaded", "text": f"{load[0]:.1f} tasks are waiting for {cores} CPU cores"})
+    b = d.get("battery") or {}
+    if isinstance(b, dict) and b.get("percent") is not None and not b.get("charging") and b["percent"] <= r["battery_low_percent"]:
+        out.append({"short": "battery low", "text": f"Battery is at {b['percent']}% and not charging"})
+    if not out:
+        out.append({"short": "running fine", "text": f"Nothing looks wrong: CPU {cpu}%, memory {mem.get('used_percent', '?')}%"
+                    + (f", fullest disk {max(x.get('used_percent') or 0 for x in d.get('disks'))}%" if d.get("disks") else "")})
+    return out
+
+
+async def _ask_new(app, node: dict, kind: str, args: dict, timeout: float = 25) -> dict:
+    try:
+        return await _ask_node(app, node, kind, args, timeout)
+    except ValueError as exc:
+        if "doesn't do" in str(exc):
+            raise ValueError(f"{node['name']} is running an older agent that can't report this yet; it updates itself "
+                             "within ten minutes.")
+        raise
+
+
+async def health(app, user: str, args: dict) -> dict:
+    node = await target(app, args.get("target"))
+    d = await _ask_new(app, node, "health", {})
+    found = diagnose(d, nodes.health_rules(app))
+    keep = ("specs", "cpu_percent", "load", "memory", "swap", "disks", "temps", "speed_percent", "gpus", "battery",
+            "uptime_hours", "network", "top_cpu", "top_memory", "groups", "process_count")
+    return {"headline": f"{node['name']}: {found[0]['short']}" + (f" (+{len(found) - 1})" if len(found) > 1 else ""),
+            "health": {"node": node["name"], **{k: d.get(k) for k in keep}}, "diagnosis": [f["text"] for f in found]}
+
+
+async def list_processes(app, user: str, args: dict) -> dict:
+    node = await target(app, args.get("target"))
+    sort = "memory" if str(args.get("sort") or "").lower() in ("memory", "ram", "mem") else "cpu"
+    d = await _ask_new(app, node, "processes", {"sort": sort, "name": args.get("name") or "", "limit": args.get("limit") or 25})
+    name = " ".join(str(args.get("name") or "").split())
+    return {"headline": (f"{_pretty(name)} on {node['name']}" if name else f"What's running on {node['name']}"),
+            "processes": {"node": node["name"], "sort": sort, "items": d.get("processes") or [], "groups": d.get("groups") or [],
+                          "total": d.get("total"), "cpu_percent": d.get("cpu_percent"), "memory_percent": d.get("memory_percent")}}
+
+
+async def close_process(app, user: str, args: dict) -> dict:
+    """Find exactly what would close, and hand him the confirmation (kill_process, a change)."""
+    node = await target(app, args.get("target"))
+    name = " ".join(str(args.get("name") or "").split())
+    pid = args.get("pid")
+    if not name and pid in (None, ""):
+        raise ValueError("Which program? Say its name (or its number from the list).")
+    d = await _ask_new(app, node, "processes", {"name": "" if pid not in (None, "") else name, "limit": 200})
+    rows = d.get("processes") or []
+    if pid not in (None, ""):
+        rows = [r for r in rows if str(r.get("pid")) == str(pid)]
+    if not rows:
+        hint = ""
+        if name and (await db.pool().fetchval("SELECT info->>'shell' FROM devices WHERE id=$1", node["id"])) == "on":
+            if site_for(name) or DOMAIN.match(name):          # "close youtube on the tv pc": the page on her screen
+                return await home(app, user, {"target": node["name"]})
+            hint = f' If you meant the page on its screen, say "go home on the {node["name"]}".'
+        raise ValueError(f"Nothing called {name or pid} is running on {node['name']}.{hint}")
+    ok = [r for r in rows if r.get("mine") and not r.get("protected")]
+    if not ok:
+        raise ValueError(f"{_pretty(rows[0]['name'])} is part of the system (or isn't yours), so I won't close it.")
+    label = _pretty(name or ok[0]["name"])
+    cpu = sum(r.get("cpu_percent") or 0 for r in ok)
+    mem = sum(r.get("memory_mb") or 0 for r in ok)
+    force = bool(args.get("force"))
+    n = len(ok)
+    why = (f"{'Force-close' if force else 'Close'} {label} on {node['name']} ({n} process{'es' if n != 1 else ''}, "
+           f"{_gb(mem)}, {cpu:.0f}% CPU)? " + ("It ends at once; anything unsaved in it is lost." if force else
+                                              "It's asked to close normally; anything unsaved may be lost."))
+    return {"headline": "Waiting for you", "did": {"node": node["name"], "what": f"Didn't close {label} yet"},
+            "confirm": {"tool": f"{NAME}.kill_process", "reason": why, "reply": f"Closed {label}.",
+                        "args": {"target": node["name"], "name": label, "force": force,
+                                 "targets": [{"pid": r["pid"], "start_key": r["start_key"]} for r in ok]}}}
+
+
+async def kill_process(app, user: str, args: dict) -> dict:
+    """He confirmed (a change). Only these exact processes; the node checks each again."""
+    node = await target(app, args.get("target"))
+    targets = [{"pid": int(t["pid"]), "start_key": str(t["start_key"])} for t in (args.get("targets") or [])
+               if isinstance(t, dict) and str(t.get("pid", "")).isdigit() and t.get("start_key") not in (None, "")]
+    if not targets:
+        raise ValueError("Which processes? (their numbers and start times, from the list)")
+    d = await _ask_new(app, node, "kill", {"targets": targets, "force": bool(args.get("force"))}, 30)
+    label = _pretty(args.get("name") or (d.get("closed") or d.get("still_running") or d.get("refused") or [{}])[0].get("name") or "it")
+    closed, still, refused = d.get("closed") or [], d.get("still_running") or [], d.get("refused") or []
+    if closed and not still:
+        head, what = f"Closed {label}", f"Closed {label}" + (f" ({len(closed)} processes)" if len(closed) > 1 else "")
+    elif still:
+        head = f"{label} didn't close"
+        what = f"{label} is still running ({len(still)} of {len(still) + len(closed)})"
+    else:
+        head, what = f"Didn't close {label}", refused[0]["why"] if refused else "Nothing was closed"
+    out = {"headline": head, "did": {"node": node["name"], "what": what}, "closed": closed, "still_running": still,
+           "refused": refused}
+    if still and not d.get("force"):
+        out["note"] = f'It didn\'t respond to being asked. Say "force close {label.lower()} on the {node["name"]}" to end it.'
+    return out
+
+
 # ---- the page on a screen (step 4) ----------------------------------------------------------------
 
 SHOT = "aurelia:shot:{}"
@@ -594,7 +775,8 @@ async def submit(app, user: str, args: dict) -> dict:
 
 
 HANDLERS = {"devices": devices, "open": open_, "apps": apps, "home": home, "look": look, "click": click, "type": type_,
-            "press": press, "scroll": scroll, "back": back, "media": media, "submit": submit}
+            "press": press, "scroll": scroll, "back": back, "media": media, "submit": submit, "health": health,
+            "list_processes": list_processes, "close_process": close_process, "kill_process": kill_process}
 
 
 @router.get("/shots/{sid}.jpg", include_in_schema=False)

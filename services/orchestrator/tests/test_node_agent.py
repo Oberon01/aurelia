@@ -256,3 +256,105 @@ def test_keys_and_media_actions_are_a_fixed_set(monkeypatch):
     monkeypatch.setattr(agent, "SHELL", S())
     assert "I can press" in agent.execute({"kind": "page_key", "args": {"key": "ctrl+w"}})["error"]
     assert agent.execute({"kind": "page_media", "args": {"action": "delete"}})["error"].startswith("I can play")
+
+
+# ---- node reporting ----------------------------------------------------------------------------------
+
+@pytest.fixture
+def fake_linux(tmp_path, monkeypatch):
+    proc, sys_ = tmp_path / "proc", tmp_path / "sys"
+    (proc / "net").mkdir(parents=True)
+    (proc / "stat").write_text("cpu  100 0 50 800 50 0 0 0 0 0\ncpu0 100 0 50 800 50 0 0 0 0 0\nbtime 1790000000\n")
+    (proc / "meminfo").write_text("MemTotal:       16000000 kB\nMemAvailable:    4000000 kB\nSwapTotal:       2000000 kB\n"
+                                  "SwapFree:        1000000 kB\n")
+    (proc / "cpuinfo").write_text("processor\t: 0\nmodel name\t: Intel(R) N100\n")
+    (proc / "uptime").write_text("7200.5 100.0\n")
+    (proc / "mounts").write_text("")
+    (proc / "net" / "dev").write_text("h1\nh2\n  lo: 1 0 0 0 0 0 0 0 1 0\n eth0: 1000 0 0 0 0 0 0 0 500 0\n")
+
+    def pid(n, name, uid, state="S", start=500, ticks=(30, 20)):
+        d = proc / str(n)
+        d.mkdir()
+        f = [state, "1"] + ["0"] * 9 + [str(ticks[0]), str(ticks[1])] + ["0"] * 6 + [str(start), "0", "25"]
+        (d / "stat").write_text(f"{n} ({name}) " + " ".join(f) + "\n")
+        (d / "status").write_text(f"Name:\t{name}\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n")
+    pid(1, "systemd", 0, start=1)
+    pid(200, "Web Content (x)", 1000, start=900)                  # names can hold spaces and parens
+    pid(201, "chrome", 1000, start=950)
+    pid(202, "chrome", 1000, start=960)
+    pid(203, "defunct", 1000, state="Z")
+    hw = sys_ / "class" / "hwmon" / "hwmon0"
+    hw.mkdir(parents=True)
+    (hw / "name").write_text("coretemp\n")
+    (hw / "temp1_input").write_text("71000\n")
+    (hw / "temp1_label").write_text("Package id 0\n")
+    bat = sys_ / "class" / "power_supply" / "BAT0"
+    bat.mkdir(parents=True)
+    (bat / "type").write_text("Battery\n")
+    (bat / "capacity").write_text("42\n")
+    (bat / "status").write_text("Discharging\n")
+    cpu = sys_ / "devices" / "system" / "cpu" / "cpu0" / "cpufreq"
+    cpu.mkdir(parents=True)
+    (cpu / "scaling_cur_freq").write_text("1200000\n")
+    (cpu / "cpuinfo_max_freq").write_text("3400000\n")
+    (sys_ / "class" / "dmi" / "id").mkdir(parents=True)
+    (sys_ / "class" / "dmi" / "id" / "sys_vendor").write_text("AZW\n")
+    (sys_ / "class" / "dmi" / "id" / "product_name").write_text("MINI S\n")
+    monkeypatch.setattr(agent, "PROC", proc)
+    monkeypatch.setattr(agent, "SYS", sys_)
+    monkeypatch.setattr(agent, "IS_WINDOWS", False)
+    monkeypatch.setattr(agent, "_run", lambda argv, timeout=4: "")
+    monkeypatch.setattr(agent, "SHELL", None)
+    return proc
+
+
+def test_it_reads_this_linux_machine(fake_linux):
+    s = agent.linux_specs()
+    assert s["cpu"] == "Intel(R) N100" and s["memory_gb"] == 16.4 and s["model"] == "AZW MINI S"
+    procs = agent._linux_procs()
+    assert procs[200]["name"] == "Web Content (x)" and procs[200]["ticks"] == 50 and procs[200]["uid"] == 1000
+    assert 203 not in procs                                        # a zombie has already exited
+    assert agent._linux_temps() == [{"sensor": "coretemp", "label": "Package id 0", "c": 71}]
+    assert agent._linux_battery() == {"percent": 42, "charging": False}
+    assert agent._linux_speed() == 35
+    assert agent._net_bytes() == {"eth0": (1000, 500)}
+
+
+def test_programs_are_grouped_with_their_processes():
+    rows = [{"name": "chrome", "cpu_percent": 30.0, "memory_mb": 500, "mine": True},
+            {"name": "chrome", "cpu_percent": 12.5, "memory_mb": 700, "mine": True},
+            {"name": "sshd", "cpu_percent": 0.1, "memory_mb": 5, "mine": False}]
+    g = agent._groups(rows)
+    assert g[0] == {"name": "chrome", "count": 2, "cpu_percent": 42.5, "memory_mb": 1200, "mine": True}
+    assert g[1]["mine"] is False
+
+
+def test_closing_takes_only_the_exact_process_and_never_protected_ones(fake_linux, monkeypatch):
+    killed = []
+    monkeypatch.setattr(agent.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(agent.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    monkeypatch.setattr(agent, "_alive", lambda pid, key: False)
+    out = agent.do_kill({"targets": [{"pid": 1, "start_key": "1"},            # the init system
+                                     {"pid": 201, "start_key": "123"},        # restarted since: not the one he saw
+                                     {"pid": 999, "start_key": "5"},          # gone
+                                     {"pid": 202, "start_key": "960"}]})      # this one
+    assert killed == [(202, agent_signal("SIGTERM"))]
+    assert out["closed"] == [{"pid": 202, "name": "chrome"}]
+    why = {r["pid"]: r["why"] for r in out["refused"]}
+    assert "part of the system" in why[1] and "isn't running anymore" in why[201] and "isn't running anymore" in why[999]
+    monkeypatch.setattr(agent.os, "getuid", lambda: 1001)                    # someone else's
+    killed.clear()
+    out = agent.do_kill({"targets": [{"pid": 202, "start_key": "960"}], "force": True})
+    assert killed == [] and out["refused"][0]["why"] == "it isn't yours"
+
+
+def test_her_own_processes_are_protected(fake_linux, monkeypatch):
+    monkeypatch.setattr(agent.os, "getpid", lambda: 201)
+    assert agent._protected(201, "chrome") and agent._protected(1, "systemd") and not agent._protected(202, "chrome")
+    assert agent._public({"pid": 201, "name": "chrome", "user": "k", "mine": True, "cpu_percent": 1, "memory_mb": 1,
+                          "started": 0, "start_key": "950"})["protected"] is True
+
+
+def agent_signal(name):
+    import signal
+    return getattr(signal, name)
