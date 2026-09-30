@@ -1001,6 +1001,8 @@ function body(tool, d) {
     wrap.append(el("div", "lib-note", `${label}${d.opened.what}`));
     used.add("opened"); used.add("headline");
   }
+  if (typeof d.tv === "string") { wrap.append(el("div", "facts", `Showing on ${d.tv}`)); used.add("tv"); }
+  if (typeof d.tv_note === "string") { wrap.append(el("div", "error", d.tv_note)); used.add("tv_note"); }
   if (d.onscreen && typeof d.onscreen === "object") { wrap.append(onscreenView(d.onscreen, !!d.did)); used.add("onscreen"); used.add("headline"); }
   if (d.did && typeof d.did === "object") { wrap.prepend(didView(d.did)); used.add("did"); used.add("headline"); }
   if (d.video && typeof d.video === "object" && !Array.isArray(d.video)) { wrap.append(videoView(d.video)); used.add("video"); used.add("headline"); }

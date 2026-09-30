@@ -154,6 +154,17 @@ With one computer online, she uses it when you don't say which. "Open X on Y"
 tries a computer named Y first (YouTube, Netflix and the like open as sites in
 its browser unless the app is installed), then a Roku TV named Y through Orbit.
 
+**A computer on a TV's input.** The TV PC's picture goes through the living room
+Roku TV, so the TV has to be on and on the right input. Set which input in
+Constellation's policy (`screens`): the computer, the TV (Orbit's name for it)
+and the input ("HDMI 2", or what you named it on the TV). Then opening
+something on the TV PC or "go home on the tv pc" also has Orbit turn the TV on
+if it's off and switch it to that input, while the page loads. A web address
+"on the living room tv" goes to the computer plugged into it (a Roku can't open
+web pages); an app name there still opens the Roku's own app. To find the
+input: put the TV PC on screen with the remote and ask "what inputs does the
+living room tv have" (the one showing is marked).
+
 **Seeing and using the page on her screen (step 4).** On a computer running her
 shell, she can read the page that's open and act on it the way you would with a
 remote: everything clickable gets a number, drawn on the TV itself and listed on

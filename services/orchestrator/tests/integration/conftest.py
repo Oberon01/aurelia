@@ -65,12 +65,13 @@ def stack(tmp_path_factory):
         "  remember: {tier: act}\n  forget: {tier: change}\n"
         "rules:\n  quiet_minutes: 30\n  every_minutes: 600\n  exclude_tools: [testfn.switch]\n  max_facts: 6\n"
         "  max_core: 2\n  recall_min_score: 0.1\n")
-    (tmp / "gov" / "functions" / "orbit.yaml").write_text("function: orbit\ntools:\n  tv_app: {tier: act}\n")
+    (tmp / "gov" / "functions" / "orbit.yaml").write_text("function: orbit\ntools:\n  tv_app: {tier: act}\n  tv_input: {tier: act}\n")
     (tmp / "gov" / "functions" / "constellation.yaml").write_text(
         "function: constellation\ntools:\n  devices: {tier: reference}\n  open: {tier: act}\n  apps: {tier: reference}\n  home: {tier: act}\n"
         "  look: {tier: read}\n  click: {tier: act}\n  type: {tier: act}\n  press: {tier: act}\n  scroll: {tier: act}\n"
         "  back: {tier: act}\n  media: {tier: act}\n  submit: {tier: change}\n"
-        "rules:\n  screen:\n    confirm_before: [buy, place order, pay, send, delete]\n")
+        "rules:\n  screen:\n    confirm_before: [buy, place order, pay, send, delete]\n"
+        "  screens:\n    - {computer: Den PC, tv: Den TV, input: HDMI 2}\n    - {computer: Attic PC, tv: Attic TV, input: ''}\n")
     (tmp / "aurelia.yaml").write_text(
         f"llm:\n  providers:\n    ollama: {{base_url: 'http://127.0.0.1:{fn_port}'}}\n"
         "memory:\n  maintenance_minutes: 60\n"

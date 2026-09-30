@@ -148,7 +148,9 @@ def _match(asked: str, name: str, hostname: str | None) -> bool:
     import re
     norm = lambda t: set(w for w in re.findall(r"[a-z0-9]+", t.lower()) if w not in ("the", "my", "on", "pc", "computer"))
     a = norm(clean_name(asked, ""))
-    return bool(a) and (a <= norm(name) or a <= norm(hostname or "") or norm(name) <= a)
+    # Every word he said is in the computer's name (or hostname). Not the other way round:
+    # "TV PC" is just {"tv"} once "pc" is dropped, and that must not claim "the living room tv".
+    return bool(a) and (a <= norm(name) or a <= norm(hostname or ""))
 
 
 class NoSuchNode(ValueError):
@@ -216,6 +218,57 @@ class ConfirmFirst(Exception):
         self.label, self.what = label, what
 
 
+def tv_link(app, node: dict) -> dict | None:
+    """Which TV input this computer's picture comes through (Constellation's policy, `screens`),
+    e.g. the TV PC on HDMI 2 of the living room Roku. None when it isn't set."""
+    for s in (nodes.policy_rules(app).get("screens") or []):
+        if not isinstance(s, dict) or not str(s.get("input") or "").strip():
+            continue
+        if _match(str(s.get("computer") or ""), node["name"], node.get("hostname")) or \
+                " ".join(str(s.get("computer") or "").lower().split()) == " ".join(node["name"].lower().split()):
+            return {"tv": str(s.get("tv") or "").strip(), "input": str(s["input"]).strip()}
+    return None
+
+
+async def node_on_tv(app, asked: str) -> dict | None:
+    """The online computer plugged into the TV he named (by its `screens` link), if exactly one."""
+    if not asked.strip():
+        return None
+    rows = await db.pool().fetch("SELECT id, name, info FROM devices WHERE kind='node' AND status='approved'")
+    hits = []
+    for r in rows:
+        info = r["info"] if isinstance(r["info"], dict) else json.loads(r["info"] or "{}")
+        n = {"id": r["id"], "name": r["name"], "hostname": info.get("hostname"), "shell": info.get("shell")}
+        link = tv_link(app, n)
+        if link and link["tv"] and _match(asked, link["tv"], None) and await nodes.online(app, r["id"]):
+            hits.append(n)
+    return hits[0] if len(hits) == 1 else None
+
+
+async def show_on_tv(app, user: str, node: dict) -> dict:
+    """Put this computer on its TV: Orbit turns the TV on if it's off and switches it to the
+    computer's input (orbit.tv_input, its own task, same governance). Never fails the request:
+    what happened comes back as a line for the answer."""
+    link = tv_link(app, node)
+    if not link:
+        return {}
+    from . import tasks
+    where = f"{link['tv'] or 'the TV'} on {link['input']}"
+    try:
+        tid = await tasks.launch(app, tasks.StartTask(tool="orbit.tv_input", args={"name": link["tv"], "input": link["input"]},
+                                                       user=user, trigger="constellation", display="brief"))
+    except HTTPException as exc:
+        d = exc.detail
+        why = d.get("reason", str(d)) if isinstance(d, dict) else str(d)
+        return {"tv_note": f"I couldn't switch {link['tv'] or 'the TV'} to {link['input']} ({why})."}
+    res = await tasks.wait_for_result(tid, 45)
+    if res is None:
+        return {"tv": where, "tv_note": f"{link['tv'] or 'The TV'} is still switching to {link['input']}."}
+    if res["status"] != "completed":
+        return {"tv_note": f"{link['tv'] or 'The TV'} didn't switch to {link['input']}: {res.get('error') or 'it failed'}"}
+    return {"tv": where}
+
+
 async def _ask_node(app, node: dict, kind: str, args: dict, timeout: float = 20) -> dict:
     try:
         res = await nodes.send(app, node["id"], kind, args, timeout)
@@ -247,13 +300,27 @@ async def open_(app, user: str, args: dict) -> dict:
     try:
         node = await target(app, args.get("target"))
     except NoSuchNode as exc:
-        if name and args.get("target"):                    # no computer by that name: maybe a Roku TV is meant
-            tv = await _roku(app, user, str(args["target"]), name)
-            if tv is not None:
-                return tv
-        raise ValueError(str(exc))
+        linked = await node_on_tv(app, str(args.get("target") or "")) if url else None
+        if linked:                                         # a web page "on the living room tv": the computer plugged into it
+            node = linked
+        else:
+            if name and args.get("target"):                # no computer by that name: maybe a Roku TV is meant
+                tv = await _roku(app, user, str(args["target"]), name)
+                if tv is not None:
+                    return tv
+            raise ValueError(str(exc))
+    tv = asyncio.create_task(show_on_tv(app, user, node))    # the TV wakes and switches while the page loads
+    try:
+        out = await _open_on_node(app, node, url, name)
+    except BaseException:
+        await tv
+        raise
+    return {**out, **await tv}
+
+
+async def _open_on_node(app, node: dict, url: str, name: str) -> dict:
     if url:
-        data = await _ask_node(app, node, "open_url", {"url": url})
+        await _ask_node(app, node, "open_url", {"url": url})
         return _opened(node, url, "page")
     try:
         data = await _ask_node(app, node, "launch_app", {"name": name})
@@ -298,10 +365,15 @@ async def _roku(app, user: str, tv_name: str, app_name: str) -> dict | None:
 
 async def home(app, user: str, args: dict) -> dict:
     node = await target(app, args.get("target"))
-    data = await _ask_node(app, node, "home", {})
+    tv = asyncio.create_task(show_on_tv(app, user, node))
+    try:
+        data = await _ask_node(app, node, "home", {})
+    except BaseException:
+        await tv
+        raise
     n = int(data.get("closed") or 0)
     return {"headline": f"{node['name']} is back to me", "opened": {"node": node["name"], "kind": "home",
-            "what": f"Closed {n} page{'s' if n != 1 else ''}" if n else "Nothing was open"}}
+            "what": f"Closed {n} page{'s' if n != 1 else ''}" if n else "Nothing was open"}, **await tv}
 
 
 async def apps(app, user: str, args: dict) -> dict:

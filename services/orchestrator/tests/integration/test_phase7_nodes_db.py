@@ -181,3 +181,49 @@ def test_a_roku_by_that_name_gets_the_app(node, stack):
             await c.close()
     row = asyncio.run(q())
     assert json.loads(row["args"]) == {"name": "bedroom tv", "app": "netflix"} and row["trigger"] == "constellation"
+
+
+def test_a_computer_on_a_tv_input_brings_the_tv_with_it(node, stack):
+    """The TV PC is plugged into a Roku TV: opening something on it also has Orbit turn that TV on
+    and switch it to the PC's input (Constellation's `screens`), as its own governed task."""
+    import asyncio, asyncpg
+    orch = stack["orch"]
+    httpx.post(f"{orch}/devices/{node['id']}/rename", json={"name": "Den PC"}).raise_for_status()
+
+    def tv_tasks():
+        async def q():
+            c = await asyncpg.connect(DB)
+            try:
+                return await c.fetch("SELECT tool, args, trigger FROM task_runs WHERE tool LIKE 'orbit.%' ORDER BY started_at")
+            finally:
+                await c.close()
+        return [(r["tool"], json.loads(r["args"]), r["trigger"]) for r in asyncio.run(q())]
+    before = len(tv_tasks())
+
+    # Orbit isn't there: the page still opens, and she says the TV didn't switch.
+    status, res, err = run_task(orch, "constellation.open", {"url": "https://example.com/a", "target": "den pc"})
+    assert status == "completed", err
+    assert res["opened"]["what"] == "https://example.com/a" and "couldn't switch Den TV to HDMI 2" in res["tv_note"]
+
+    httpx.post(f"{orch}/registry/functions", json={"name": "orbit", "description": "test", "url": stack["fn"], "tools": [
+        {"name": "tv_app", "description": "app", "input_schema": {"type": "object"}},
+        {"name": "tv_input", "description": "input", "input_schema": {"type": "object"}}]}).raise_for_status()
+    status, res, err = run_task(orch, "constellation.open", {"url": "https://example.com/b", "target": "den pc"})
+    assert status == "completed", err
+    assert res["tv"] == "Den TV on HDMI 2" and "tv_note" not in res
+    # A web page "on the den tv" goes to the computer plugged into it (a Roku can't open pages)…
+    status, res, err = run_task(orch, "constellation.open", {"what": "example.com/c", "target": "den tv"})
+    assert status == "completed" and res["opened"]["node"] == "Den PC" and res["tv"] == "Den TV on HDMI 2", err
+    # …an app name there is the Roku's own app.
+    status, res, err = run_task(orch, "constellation.open", {"what": "netflix", "target": "den tv"})
+    assert status == "completed" and res["opened"]["kind"] == "tv", err
+    assert started(node)[-3:] == ["xdg-open https://example.com/a", "xdg-open https://example.com/b", "xdg-open https://example.com/c"]
+    assert tv_tasks()[before:] == [("orbit.tv_input", {"name": "Den TV", "input": "HDMI 2"}, "constellation"),
+                                   ("orbit.tv_input", {"name": "Den TV", "input": "HDMI 2"}, "constellation"),
+                                   ("orbit.tv_app", {"name": "den tv", "app": "netflix"}, "constellation")]
+
+    # A link without an input set does nothing to any TV.
+    httpx.post(f"{orch}/devices/{node['id']}/rename", json={"name": "Attic PC"}).raise_for_status()
+    status, res, err = run_task(orch, "constellation.open", {"url": "https://example.com/d", "target": "attic pc"})
+    assert status == "completed" and "tv" not in res and "tv_note" not in res, err
+    assert len(tv_tasks()) == before + 3

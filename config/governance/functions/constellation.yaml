@@ -59,6 +59,14 @@ rules:
     # A click (or Enter) whose label has one of these words waits for his OK (as submit).
     confirm_before: [buy, buy now, purchase, pay, pay now, checkout, check out, place order, order now, rent,
                      subscribe, donate, tip, transfer, send, post, reply, comment, submit, delete, confirm]
+  # A computer whose picture reaches you through a TV's input (the TV PC is plugged into the
+  # living room Roku TV). When she opens something on it or brings it home, Orbit turns that TV
+  # on if it's off and switches it to this input first. tv: Orbit's name for the TV (empty = your
+  # only TV). input: "HDMI 2", or the name you gave the input on the TV. Empty input = not set.
+  screens:
+    - computer: TV PC
+      tv: Living room TV
+      input: ""                        # which HDMI the TV PC is plugged into, e.g. "HDMI 2"
   targeting:
     default_target: requesting_node
     quiet_hours: []                    # e.g. { node: bedroom-tv, from: "22:00", to: "07:00" }

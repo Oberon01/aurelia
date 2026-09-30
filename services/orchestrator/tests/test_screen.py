@@ -66,3 +66,23 @@ def test_nothing_else_is_held(result):
     out = {"needs_confirmation": []}
     assert asyncio.run(assistant._follow_up(FakeApp, "owner", "constellation.click", result, out)) is None
     assert out["needs_confirmation"] == []
+
+
+@pytest.mark.parametrize("said,hit", [("tv pc", True), ("the TV PC", True), ("tv", True), ("tv-pc", True),
+                                      ("living room tv", False), ("the living room tv", False), ("bedroom", False)])
+def test_a_computer_called_tv_pc_doesnt_claim_the_living_room_tv(said, hit):
+    assert constellation._match(said, "TV PC", "tv-pc") is hit
+
+
+def test_which_tv_input_a_computer_comes_through():
+    class Policy:
+        rules = {"screens": [{"computer": "TV PC", "tv": "Living room TV", "input": "HDMI 2"},
+                             {"computer": "Desk", "tv": "Office TV", "input": ""}, "junk"]}
+
+    class App:
+        class state:
+            class governance:
+                functions = {"constellation": Policy}
+    assert constellation.tv_link(App, {"name": "TV PC", "hostname": "tv-pc"}) == {"tv": "Living room TV", "input": "HDMI 2"}
+    assert constellation.tv_link(App, {"name": "Desk", "hostname": "desk"}) is None          # no input set: nothing to do
+    assert constellation.tv_link(App, {"name": "Laptop", "hostname": "lap"}) is None
