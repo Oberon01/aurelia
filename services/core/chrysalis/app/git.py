@@ -59,9 +59,10 @@ class Git:
         return await self._run("show", f"{sha}:{path}")
 
     async def dirty(self) -> list[str]:
-        """Tracked files changed on the server (ignored files like .env don't count)."""
-        out = await self._run("status", "--porcelain", "--untracked-files=no")
-        return [line[3:] for line in out.splitlines() if line]
+        """Tracked files changed on the server, including permission changes
+        (ignored files like .env don't count)."""
+        out = await self._run("diff", "--name-only", "HEAD")
+        return [line for line in out.splitlines() if line]
 
     async def fast_forward(self, sha: str) -> None:
         await self._run("merge", "--ff-only", "--quiet", sha)
