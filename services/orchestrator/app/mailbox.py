@@ -68,6 +68,13 @@ class Batch(BaseModel):
 def validate(kind: str, proposal: dict[str, Any]) -> dict[str, Any]:
     """The proposal as it will be applied, or HTTP 400 in plain words."""
     p = dict(proposal)
+    if kind == "device":                     # a device asking to pair (auth.py)
+        try:
+            p["device_id"] = int(p.get("device_id"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "The request doesn't say which device.")
+        p["name"] = " ".join(str(p.get("name") or "").split())[:60]
+        return p
     if kind == "about_you":                  # something Mnemosyne noticed about you
         from .profile import category
         fact = " ".join(str(p.get("fact") or "").split())
@@ -107,6 +114,9 @@ def validate(kind: str, proposal: dict[str, Any]) -> dict[str, Any]:
 
 async def apply(conn, item_id: int, kind: str, p: dict[str, Any]) -> str:
     """Make an approved proposal real. Returns what happened, in plain words."""
+    if kind == "device":
+        from . import auth
+        return await auth.approve(conn, p["device_id"], p.get("name") or None)
     if kind == "about_you":
         from . import profile
         user = "owner"
@@ -235,8 +245,14 @@ async def propose(p: Proposal, request: Request):
 
 # ---- deciding (Kentrell only, from the display) ----------------------------------------
 
-async def _decide(item_id: int, d: Decision) -> dict[str, Any]:
+async def _decide(item_id: int, d: Decision, batch: bool = False) -> dict[str, Any]:
     pool = db.pool()
+    if row := await pool.fetchrow("SELECT kind FROM mailbox_items WHERE id=$1", item_id):
+        if row["kind"] == "device":
+            from . import auth
+            await auth.expire_old()                     # an expired request can't be approved
+            if batch and d.action == "approve":
+                raise HTTPException(400, "Approve devices one at a time, after checking the code on each.")
     row = await pool.fetchrow("SELECT * FROM mailbox_items WHERE id=$1", item_id)
     if row is None:
         raise HTTPException(404, "No such mailbox item.")
@@ -252,9 +268,14 @@ async def _decide(item_id: int, d: Decision) -> dict[str, Any]:
                                "modified" if d.action == "modify" else "approved", json.dumps(final), d.user)
         return {"id": item_id, "status": "modified" if d.action == "modify" else "approved", "done": done}
     if d.action == "reject":
+        if row["kind"] == "device":
+            from . import auth
+            await auth.decline(pool, proposal["device_id"])
         await pool.execute("UPDATE mailbox_items SET status='rejected', reason=$2, decided_at=now(), decided_by=$3, "
                            "updated_at=now() WHERE id=$1", item_id, (d.reason or "").strip() or None, d.user)
-        return {"id": item_id, "status": "rejected", "done": "Declined. I won't suggest it again unless things change a lot."}
+        done = ("Declined. That device isn't paired." if row["kind"] == "device" else
+                "Declined. I won't suggest it again unless things change a lot.")
+        return {"id": item_id, "status": "rejected", "done": done}
     if d.action == "defer":
         until = datetime.now(timezone.utc) + timedelta(days=max(1, min(d.days, 60)))
         await pool.execute("UPDATE mailbox_items SET status='deferred', defer_until=$2, updated_at=now() WHERE id=$1",
@@ -282,7 +303,7 @@ async def decide_batch(b: Batch, request: Request):
     results = []
     for item_id in b.ids:
         try:
-            results.append(await _decide(item_id, Decision(action=b.action, user=b.user)))
+            results.append(await _decide(item_id, Decision(action=b.action, user=b.user), batch=True))
         except HTTPException as exc:
             results.append({"id": item_id, "error": exc.detail})
     await notify(request.app.state.redis)

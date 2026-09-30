@@ -5,11 +5,22 @@
 #
 # Keeps one conversation (session) while it runs, and asks you to approve any
 # action that needs confirmation.
+#
+# Needs a terminal key: on the server run ./scripts/pair.sh --terminal, then put the
+# key in $env:AURELIA_KEY or in %APPDATA%\aurelia\key on this machine.
 param(
     [Parameter(Position = 0)] [string] $Text,
     [string] $Url = "http://localhost:8080",
-    [string] $User = "owner"
+    [string] $User = "owner",
+    [string] $Key = $env:AURELIA_KEY
 )
+
+if (-not $Key) {
+    $keyFile = Join-Path $env:APPDATA "aurelia\key"
+    if (Test-Path $keyFile) { $Key = (Get-Content $keyFile -Raw).Trim() }
+}
+$script:Headers = @{}
+if ($Key) { $script:Headers.Authorization = "Bearer $Key" }
 
 $script:SessionId = $null
 
@@ -17,10 +28,15 @@ function Send-Ask([string] $request) {
     $body = @{ text = $request; user = $User }
     if ($script:SessionId) { $body.session_id = $script:SessionId }
     try {
-        $r = Invoke-RestMethod -Method Post "$Url/ask" -ContentType 'application/json' `
+        $r = Invoke-RestMethod -Method Post "$Url/ask" -ContentType 'application/json' -Headers $script:Headers `
              -Body ($body | ConvertTo-Json -Depth 5)
     } catch {
-        Write-Host "  ! $($_.Exception.Message)" -ForegroundColor Red
+        $code = $_.Exception.Response.StatusCode.value__
+        if ($code -in 401, 403) {
+            Write-Host "  ! This terminal isn't paired with Aurelia. On the server: ./scripts/pair.sh --terminal" -ForegroundColor Red
+        } else {
+            Write-Host "  ! $($_.Exception.Message)" -ForegroundColor Red
+        }
         return
     }
     $script:SessionId = $r.session_id
@@ -31,7 +47,7 @@ function Send-Ask([string] $request) {
     foreach ($action in $r.needs_confirmation) {
         $argsText = ($action.args | ConvertTo-Json -Compress)
         $answer = Read-Host "  Confirm $($action.tool) $argsText ? (y/n)"
-        $c = Invoke-RestMethod -Method Post "$Url/ask/confirm" -ContentType 'application/json' `
+        $c = Invoke-RestMethod -Method Post "$Url/ask/confirm" -ContentType 'application/json' -Headers $script:Headers `
              -Body (@{ action_id = $action.action_id; approve = ($answer -match '^y'); user = $User } | ConvertTo-Json)
         Write-Host "Aura: $($c.reply)" -ForegroundColor Cyan
     }

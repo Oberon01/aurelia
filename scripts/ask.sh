@@ -12,6 +12,9 @@ set -euo pipefail
 
 AURELIA_URL="${AURELIA_URL:-http://localhost:8080}"
 AURELIA_USER="${AURELIA_USER:-owner}"
+# This terminal's key (from ./scripts/pair.sh --terminal), unless AURELIA_KEY is set.
+KEY_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/aurelia/key"
+if [[ -z "${AURELIA_KEY:-}" && -r "$KEY_FILE" ]]; then AURELIA_KEY="$(tr -d '[:space:]' < "$KEY_FILE")"; fi
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/aurelia"
 SESSION_FILE="$STATE_DIR/session"
 mkdir -p "$STATE_DIR"
@@ -22,16 +25,18 @@ if [[ "${1:-}" == "--new" ]]; then
 fi
 
 ask() {
-  AURELIA_URL="$AURELIA_URL" AURELIA_USER="$AURELIA_USER" SESSION_FILE="$SESSION_FILE" \
+  AURELIA_URL="$AURELIA_URL" AURELIA_USER="$AURELIA_USER" SESSION_FILE="$SESSION_FILE" AURELIA_KEY="${AURELIA_KEY:-}" \
     python3 - "$1" <<'PY'
 import json, os, sys, urllib.error, urllib.request
 
 url, user, session_file = os.environ["AURELIA_URL"], os.environ["AURELIA_USER"], os.environ["SESSION_FILE"]
+key = os.environ.get("AURELIA_KEY", "")
 CYAN, GREY, RED, RESET = "\033[36m", "\033[90m", "\033[31m", "\033[0m"
 
 def post(path, body):
     req = urllib.request.Request(url + path, data=json.dumps(body).encode(),
-                                 headers={"content-type": "application/json"})
+                                 headers={"content-type": "application/json",
+                                          **({"authorization": f"Bearer {key}"} if key else {})})
     with urllib.request.urlopen(req, timeout=120) as r:
         return json.load(r)
 
@@ -41,6 +46,8 @@ if os.path.exists(session_file):
 try:
     r = post("/ask", body)
 except urllib.error.HTTPError as e:
+    if e.code in (401, 403):
+        print(f"{RED}  ! This terminal isn't paired with Aurelia. On the server: ./scripts/pair.sh --terminal{RESET}"); sys.exit(0)
     print(f"{RED}  ! {e.code}: {e.read().decode()[:300]}{RESET}"); sys.exit(0)
 except urllib.error.URLError as e:
     print(f"{RED}  ! can't reach Aurelia at {url}: {e.reason}{RESET}"); sys.exit(0)

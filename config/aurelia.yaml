@@ -152,6 +152,11 @@ fastpath:
       tool: kepler.recall
       args: { query: "{query}" }
       reply: "Here's what's in your library."
+    - name: devices
+      match: '^(?:(?:show|list|open)(?: me)? (?:my |the |all )?(?:paired )?devices|what(?:''s| is) paired(?: with you)?|which devices (?:are|can) (?:paired|reach you|connected))\??$'
+      tool: constellation.devices
+      args: {}
+      reply: "Here's everything paired with me."
     - name: whole-library
       match: '^(?:(?:what|which) topics (?:have|did) I (?:learn(?:ed|t)?|research(?:ed)?|stud(?:y|ied)|look(?:ed)? into)|what have I (?:learn(?:ed|t)|researched)(?: so far)?|what(?:''s| is) in my library|(?:show|open)(?: me)? (?:my|the) (?:research )?library)\??$'
       tool: kepler.recall

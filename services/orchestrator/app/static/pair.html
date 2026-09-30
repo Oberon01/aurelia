@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pair with Aurelia</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet">
+<!--
+  Pairing: this device asks for a key, shows a code, and waits. Kentrell approves the
+  code on a paired device's mailbox (or on the server: ./scripts/pair.sh CODE). The key
+  arrives as a cookie this page can't read, then the display opens.
+-->
+<style>
+:root{
+  --ground:#04070b; --ink:#d8f6fb; --ink-strong:#e9fbfe; --ink-dim:#9fc7cd; --ink-faint:#7fa7ae;
+  --cyan:#5fd4e6; --cyan-line:rgba(95,212,230,.55); --cyan-soft:rgba(95,212,230,.28); --cyan-fill:rgba(95,212,230,.07);
+  --bad:#ff8f8f;
+  --display:'Chakra Petch',sans-serif; --mono:'IBM Plex Mono',ui-monospace,monospace; --sans:'IBM Plex Sans',system-ui,sans-serif;
+}
+html,body{margin:0;min-height:100%;background:var(--ground);color:var(--ink);font-family:var(--sans)}
+body{display:grid;place-items:center;min-height:100vh;padding:24px 16px;box-sizing:border-box}
+.card{width:min(520px,100%);border:1px solid var(--cyan-soft);border-radius:16px;background:var(--cyan-fill);padding:32px 28px;box-sizing:border-box}
+.mark{font-family:var(--display);font-size:14px;letter-spacing:6px;color:var(--ink-faint)}
+h1{font-family:var(--display);font-weight:600;font-size:28px;color:var(--ink-strong);margin:14px 0 8px}
+p{margin:8px 0;line-height:1.55;color:var(--ink-dim)}
+label{display:block;font-family:var(--mono);font-size:12px;letter-spacing:1.5px;color:var(--ink-faint);margin:22px 0 6px;text-transform:uppercase}
+input{width:100%;box-sizing:border-box;background:transparent;border:1px solid var(--cyan-soft);border-radius:10px;color:var(--ink-strong);
+      font:inherit;font-size:16px;padding:12px 14px;outline:none}
+input:focus{border-color:var(--cyan)}
+button{margin-top:20px;font:inherit;font-size:15px;font-weight:500;padding:12px 18px;border-radius:10px;border:1px solid var(--cyan);
+       background:var(--cyan);color:var(--ground);cursor:pointer}
+button.ghost{background:transparent;color:var(--ink)}
+button:disabled{opacity:.6;cursor:default}
+.code{font-family:var(--mono);font-size:44px;letter-spacing:8px;color:var(--ink-strong);margin:18px 0 6px;text-align:center}
+.how{font-size:14px}
+code{font-family:var(--mono);font-size:13px;color:var(--ink);background:rgba(95,212,230,.12);padding:2px 6px;border-radius:6px;word-break:break-all}
+.wait{font-family:var(--mono);font-size:12px;letter-spacing:1px;color:var(--ink-faint);margin-top:18px;text-align:center}
+.bad{color:var(--bad)}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main class="card">
+  <div class="mark">AURELIA</div>
+
+  <section id="ask">
+    <h1>Pair this device</h1>
+    <p>This device isn't paired yet. Ask for access, then approve it from a device that already is, or on the server.</p>
+    <label for="name">Name for this device</label>
+    <input id="name" maxlength="60" autocomplete="off">
+    <button id="go" type="button">Ask for access</button>
+    <p id="err" class="bad" hidden></p>
+  </section>
+
+  <section id="waiting" hidden>
+    <h1>Approve this code</h1>
+    <div class="code" id="code"></div>
+    <p class="how">Open the mailbox on a paired device and approve the card showing this code. Only approve it if the codes match.</p>
+    <p class="how">No paired device yet? On the server, run <code id="cmd"></code></p>
+    <div class="wait" id="wait">WAITING FOR APPROVAL</div>
+  </section>
+
+  <section id="ended" hidden>
+    <h1 id="endTitle"></h1>
+    <p id="endText"></p>
+    <button class="ghost" id="again" type="button">Ask again</button>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const KEY = "aurelia.pairing";
+
+function guessName() {
+  const ua = navigator.userAgent;
+  const os = /Windows/.test(ua) ? "Windows" : /Android/.test(ua) ? "Android" : /iPhone|iPad/.test(ua) ? "iPhone"
+           : /Mac OS X/.test(ua) ? "Mac" : /Linux/.test(ua) ? "Linux" : "";
+  const br = /Edg\//.test(ua) ? "Edge" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome"
+           : /Safari\//.test(ua) ? "Safari" : "Browser";
+  return { os, browser: br, name: os ? `${br} on ${os}` : br };
+}
+
+function next() {
+  const n = new URLSearchParams(location.search).get("next") || "/view";
+  return n.startsWith("/") && !n.startsWith("//") && !n.startsWith("/pair") ? n : "/view";
+}
+
+function show(which) { ["ask", "waiting", "ended"].forEach(s => $(s).hidden = s !== which); }
+
+function save(p) { try { sessionStorage.setItem(KEY, JSON.stringify(p)); } catch (e) {} }
+function load() { try { return JSON.parse(sessionStorage.getItem(KEY) || "null"); } catch (e) { return null; } }
+function clear() { try { sessionStorage.removeItem(KEY); } catch (e) {} }
+
+let timer = null;
+async function poll(p) {
+  show("waiting");
+  $("code").textContent = p.code;
+  $("cmd").textContent = `./scripts/pair.sh ${p.code}`;
+  clearTimeout(timer);
+  try {
+    const r = await fetch("/pair/status", { method: "POST", headers: { "Content-Type": "application/json" },
+                                             body: JSON.stringify({ device_id: p.device_id, claim: p.claim }) });
+    if (r.status === 404) return ended("That request is gone", "Ask again to get a new code.");
+    const s = await r.json();
+    if (s.status === "approved") { clear(); $("wait").textContent = "APPROVED · OPENING"; location.replace(next()); return; }
+    if (s.status === "declined") return ended("Not approved", "This device wasn't approved. Ask again if that was a mistake.");
+    if (s.status === "expired") return ended("That code expired", "Codes last 15 minutes. Ask again for a new one.");
+    if (s.status === "revoked") return ended("Not approved", "This request was cancelled.");
+  } catch (e) { $("wait").textContent = "CAN'T REACH AURELIA · RETRYING"; }
+  timer = setTimeout(() => poll(p), 2000);
+}
+
+function ended(title, text) {
+  clear(); clearTimeout(timer);
+  $("endTitle").textContent = title; $("endText").textContent = text; show("ended");
+}
+
+async function ask() {
+  const g = guessName();
+  $("go").disabled = true; $("err").hidden = true;
+  try {
+    const r = await fetch("/pair/request", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "browser", name: $("name").value.trim() || g.name,
+                             info: { os: g.os || null, browser: g.browser } }) });
+    const out = await r.json();
+    if (!r.ok) throw new Error(out.detail || "That didn't work.");
+    const p = { device_id: out.device_id, claim: out.claim, code: out.code };
+    save(p); poll(p);
+  } catch (e) {
+    $("err").textContent = e.message || "Can't reach Aurelia."; $("err").hidden = false;
+  } finally { $("go").disabled = false; }
+}
+
+$("name").value = guessName().name;
+$("go").addEventListener("click", ask);
+$("name").addEventListener("keydown", e => { if (e.key === "Enter") ask(); });
+$("again").addEventListener("click", () => show("ask"));
+const pending = load();
+if (pending) poll(pending); else show("ask");
+</script>
+</body>
+</html>

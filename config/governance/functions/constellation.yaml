@@ -1,9 +1,11 @@
-# Constellation — your devices and shared computer access. Draft policy;
-# takes effect when the node agent is built.
+# Constellation — your devices and shared computer access. Part of the orchestrator.
+# Phase 7 step 1: devices (the paired-devices panel). The node tools below take
+# effect as the node agent is built.
 function: constellation
 enabled: true
 
 tools:
+  devices:         { tier: reference }   # list what's paired; pairing and revoking happen only on the display
   search_files:    { tier: reference }
   list_processes:  { tier: reference }
   browser_history: { tier: reference }

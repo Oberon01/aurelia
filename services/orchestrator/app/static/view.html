@@ -206,6 +206,14 @@ td .clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;o
 .mb-title{font-family:var(--display);font-size:18px;font-weight:600;color:var(--ink-strong)}
 .mb-conf{font-family:var(--mono);font-size:11px;color:var(--ink-faint);white-space:nowrap}
 .mb-sum{font-size:14px;line-height:1.45;color:var(--ink-dim)}
+.mb-code{font-family:var(--mono);font-size:30px;letter-spacing:6px;color:var(--ink-strong);padding:6px 0}
+/* devices (Constellation) */
+.pdev{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 16px;align-items:center;padding:10px 0;border-top:1px solid rgba(95,212,230,.12)}
+.pdev:first-child{border-top:0}
+.pdev .dn{font-size:15px;color:var(--ink-strong)}.pdev .dn small{font-family:var(--mono);font-size:11px;color:var(--cyan);margin-left:8px;letter-spacing:1px}
+.pdev .dm{grid-column:1;font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
+.pdev .db{grid-column:2;grid-row:1 / span 2;display:flex;gap:8px;align-items:center}
+.pdev.pending .dn{color:var(--warn)}.pdev.revoked{opacity:.55}
 .mb-effect{font-size:13px;line-height:1.45;color:var(--ink)}
 .mb-effect b{font-family:var(--mono);font-size:11px;letter-spacing:1px;font-weight:400;color:var(--cyan)}
 details.mb-ev summary{cursor:pointer;font-family:var(--mono);font-size:12px;color:var(--ink-faint)}
@@ -395,6 +403,14 @@ button.gl:hover{color:var(--ink-strong)}
 </div>
 
 <script>
+// If this browser's key is revoked (or it was never paired), every call answers 401: go pair.
+const _fetch = window.fetch.bind(window);
+window.fetch = async (...args) => {
+  const r = await _fetch(...args);
+  if (r.status === 401) location.replace("/pair?next=" + encodeURIComponent(location.pathname + location.search));
+  return r;
+};
+
 "use strict";
 // ---------------------------------------------------------------- setup
 const stage = document.getElementById("stage");
@@ -427,6 +443,7 @@ const TITLES = {
   "mnemosyne.forget": "Forget",
   "kepler.research": "Research", "kepler.recall": "Library", "kepler.topic": "Topic", "kepler.explain": "Explanation",
   "kepler.quiz": "Quiz", "kepler.read_pdf": "PDF", "kepler.forget": "Forget",
+  "constellation.devices": "Devices",
 };
 function titleFor(tool) {
   if (TITLES[tool]) return TITLES[tool];
@@ -941,6 +958,7 @@ function body(tool, d) {
   if (Array.isArray(d.functions)) { wrap.append(functionCards(d.functions)); used.add("functions"); }
   if (d.research && typeof d.research === "object") { wrap.append(researchView(d.research)); used.add("research"); used.add("headline"); }
   if (d.library && typeof d.library === "object") { wrap.append(libraryView(d.library)); used.add("library"); }
+  if (Array.isArray(d.paired)) { wrap.append(devicesView(d.paired)); used.add("paired"); used.add("headline"); }
   if (d.topic && typeof d.topic === "object") { wrap.append(topicView(d.topic)); used.add("topic"); used.add("headline"); }
   if (d.explain && typeof d.explain === "object") { wrap.append(explainView(d.explain)); used.add("explain"); used.add("headline"); }
   if (d.quiz && typeof d.quiz === "object") { wrap.append(quizView(d.quiz)); used.add("quiz"); used.add("headline"); }
@@ -1096,6 +1114,47 @@ function researchView(r) {
   }
   return box;
 }
+// ---------------------------------------------------------------- devices (Constellation)
+// Pairing and revoking happen only here, from your click; Aurelia can list devices but has no tool to let one in or out.
+function devicesView(list) {
+  const box = el("div");
+  if (!list.length) { box.append(el("div", "lib-note", "Nothing paired yet.")); return box; }
+  const KIND = { browser: "browser", node: "computer", terminal: "terminal" };
+  const rows = new Map();
+  list.forEach(d => {
+    const row = el("div", "pdev " + d.status);
+    const name = el("span", "dn", d.name);
+    const bits = [KIND[d.kind] || d.kind, d.os, d.browser && d.kind === "browser" ? null : d.hostname,
+                  d.status === "pending" ? `waiting · code ${d.code}` : d.status === "revoked" ? "revoked" :
+                  d.last_seen ? `seen ${d.last_seen}` : "not seen yet"].filter(Boolean);
+    const btns = el("span", "db");
+    if (d.status === "approved") {
+      const rv = el("button", "btn quiet", "Revoke"); rv.type = "button";
+      rv.addEventListener("click", async () => {
+        if (rv.dataset.sure !== "1") { rv.dataset.sure = "1"; rv.textContent = `Revoke ${d.name}?`; rv.classList.add("primary");
+                                       setTimeout(() => { if (rv.isConnected && !rv.disabled) { rv.dataset.sure = ""; rv.textContent = "Revoke"; rv.classList.remove("primary"); } }, 5000);
+                                       return; }
+        rv.disabled = true;
+        try {
+          const r = await fetch(`/devices/${d.id}/revoke`, { method: "POST" });
+          if (!r.ok) throw new Error();
+          row.className = "pdev revoked"; rv.remove(); row.querySelector(".dm").textContent = `${KIND[d.kind] || d.kind} · revoked just now`;
+          say(`${d.name} is revoked. It can't reach me anymore.`);
+        } catch (e) { rv.disabled = false; say("Couldn't revoke it."); }
+      });
+      btns.append(rv);
+    }
+    row.append(name, el("span", "dm", bits.join(" · ")), btns);
+    rows.set(d.id, { row, name });
+    box.append(row);
+  });
+  fetch("/devices").then(r => r.ok ? r.json() : null).then(out => {       // mark the device you're looking from
+    const me = out && (out.devices || []).find(x => x.this_device);
+    if (me && rows.has(me.id)) rows.get(me.id).name.append(el("small", null, "THIS DEVICE"));
+  }).catch(() => {});
+  return box;
+}
+
 function libraryView(l) {
   const box = el("div"); box.style.display = "flex"; box.style.flexDirection = "column"; box.style.gap = "14px";
   if (!l.topics.length && !l.research.length) box.append(el("div", "lib-note", l.message || "Nothing in your library yet."));
@@ -1296,7 +1355,7 @@ function linkView(link) {
 // ---------------------------------------------------------------- mailbox
 // Deciding happens only here, from your click: there is no tool for it, so
 // Aurelia can show you her ideas but never approve them herself.
-const KIND_LABEL = { about_you: "About you", automation: "Automations", criticality: "What matters most", retention: "Keep longer" };
+const KIND_LABEL = { device: "Waiting to pair", about_you: "About you", automation: "Automations", criticality: "What matters most", retention: "Keep longer" };
 const CATEGORY_LABEL = { communication: "How to talk to you", mood: "Mood patterns", interests: "Interests", goals: "Goals",
   life: "What's going on", people: "People", learning: "What you know and are learning", rhythms: "Rhythms",
   work: "Work", preferences: "Preferences", general: "Other" };
@@ -1319,7 +1378,7 @@ function mailboxView(items) {
   for (const [kind, list] of Object.entries(groups).sort((a, b) => order(a[0]) - order(b[0]))) {
     const g = el("div", "mb-group");
     const head = el("div", "mb-ghead"); head.append(el("span", null, `${KIND_LABEL[kind] || kind} · ${list.length}`));
-    if (list.length > 1) {
+    if (list.length > 1 && kind !== "device") {                // each device is approved on its own, code checked
       const all = el("button", "btn quiet", `Approve all ${list.length}`); all.type = "button";
       all.addEventListener("click", async () => {
         all.disabled = true;
@@ -1349,9 +1408,12 @@ function settle(card, text, bad) {
 function mailboxItem(item) {
   const c = el("div", "mb-item" + (item.urgent ? " urgent" : ""));
   const top = el("div", "mb-top");
-  top.append(el("span", "mb-title", item.title), el("span", "mb-conf", `${Math.round(item.confidence * 100)}% sure · ${item.age}`));
+  top.append(el("span", "mb-title", item.title),
+             el("span", "mb-conf", item.kind === "device" ? `asked ${item.age}` : `${Math.round(item.confidence * 100)}% sure · ${item.age}`));
   c.append(top);
-  if (item.kind === "about_you") {
+  if (item.kind === "device") {
+    c.append(el("div", "mb-code", (item.proposal || {}).code || ""), el("div", "mb-sum", item.summary));
+  } else if (item.kind === "about_you") {
     const pp = item.proposal || {};
     c.append(el("div", "mb-sum", `${CATEGORY_LABEL[pp.category] || "Other"}${pp.core ? " · core profile" : ""} · ${item.summary}`));
   } else if (item.summary) c.append(el("div", "mb-sum", item.summary));
@@ -1390,6 +1452,11 @@ function mailboxItem(item) {
     const coreLabel = el("label", null, "Core (always on my mind)"); coreLabel.htmlFor = core.id;
     form.append(text, sel, core, coreLabel);
     changes = () => ({ fact: text.value, category: sel.value, core: core.checked });
+  } else if (item.kind === "device") {
+    const text = el("input"); text.type = "text"; text.value = p.name || ""; text.maxLength = 60;
+    text.setAttribute("aria-label", "Name");
+    form.append(el("label", null, "Name"), text);
+    changes = () => ({ name: text.value });
   } else if (item.kind === "retention") {
     const n = el("input"); n.type = "number"; n.min = "1"; n.max = "365"; n.value = p.hot_days || 30; n.style.width = "90px";
     n.setAttribute("aria-label", "Days");
@@ -1405,7 +1472,7 @@ function mailboxItem(item) {
   const btns = el("div", "btns");
   const mk = (text, cls) => { const b = el("button", "btn " + (cls || ""), text); b.type = "button"; return b; };
   const approve = mk("Approve", "primary"), change = mk("Change"), later = mk("Not now", "quiet"), no = mk("Decline", "quiet");
-  btns.append(approve, change, later, no);
+  btns.append(approve, change, ...(item.kind === "device" ? [] : [later]), no);   // a pairing request expires; no "not now"
   c.append(btns);
 
   const act = async (body, ok) => {

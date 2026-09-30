@@ -19,7 +19,7 @@ space-themed name. Tools are addressed as `<function>.<tool>`.
 | `mnemosyne` | The record: past conversations and facts you asked her to keep (part of Aurelia, served by the orchestrator) | `mnemosyne.recall`, `mnemosyne.facts`, `mnemosyne.remember`, `mnemosyne.forget` | Built |
 | `probe` | Diagnostics, testing Aurelia herself | `probe.echo`, `probe.functions`, `probe.function` | Built (reference) |
 | `nebula` | The web: search (web and YouTube), read pages, download files, open links | `nebula.search`, `nebula.youtube`, `nebula.read`, `nebula.download`, `nebula.open` | Built |
-| `constellation` | Devices and shared computer access | `constellation.search_files`, `constellation.open` | Planned, policy drafted |
+| `constellation` | His devices and the machines she runs on (part of Aurelia, served by the orchestrator). Phase 7 in progress: pairing and the devices panel built; the node agent next | `constellation.devices` | Building |
 | `orbit` | Smart home: SmartRent (locks, lights, thermostat, sensors) and Roku TVs | `orbit.status`, `orbit.lock`, `orbit.unlock`, `orbit.light`, `orbit.thermostat`, `orbit.login`, `orbit.alias`, `orbit.tv_power`, `orbit.tv_input`, `orbit.tv_inputs`, `orbit.tv_app`, `orbit.tv_remote`, `orbit.tv_mute` | Built |
 | `kepler` | Research and learning: cited answers from several sources, a library of topics that grows, explanations at your level, quizzes; written to Trilium | `kepler.research`, `kepler.recall`, `kepler.topic`, `kepler.explain`, `kepler.quiz`, `kepler.read_pdf`, `kepler.forget` | Built |
 | `nova` | Developer: code in a sandbox | | Planned |
@@ -46,6 +46,50 @@ progress in real units; honour cancel; report a result (partial if cancelled).
 | `probe` | Reference function with one tool, `echo`. |
 | `orbit` | Smart home through SmartRent. |
 | `chrysalis` | Update system (home server only): watches GitHub, tests, deploys, rolls back. Also a function: `status`, `releases`, `rollback`, `approve`. |
+
+## Pairing and access
+
+Every device that talks to Aurelia has its own key: each browser, the phone,
+each computer running her node, each terminal. Without one, nothing gets past
+the proxy (Traefik asks `/auth/check` first). Services inside the stack talk to
+each other directly and don't need keys.
+
+**Pairing a browser.** Open the display on it. An unpaired browser lands on a
+pairing page and shows a code like `K7P-4QX`. Approve it one of two ways:
+
+- from the mailbox on any device that's already paired (the card shows the same
+  code: only approve if they match), or
+- on the server: `./scripts/pair.sh K7P-4QX`. That's how the very first device
+  gets in, and it works any time.
+
+The browser then gets its key as a cookie the page itself can't read, and the
+display opens. Codes expire after 15 minutes; at most 5 can wait at once.
+
+**Terminals.** `./scripts/pair.sh --terminal` gives the server's terminal a key
+(saved to `~/.config/aurelia/key`), which `scripts/ask.sh` uses. For
+`ask.ps1` on Windows, put that key in `%APPDATA%\aurelia\key` or `$env:AURELIA_KEY`.
+
+**What each key reaches.** A browser key reaches everything the display does.
+A node key reaches only the node connection (`/nodes/…`): it can't approve,
+decide or revoke anything. A terminal key reaches only `/ask`.
+
+**Devices.** "Show my devices" lists everything paired, with when each was last
+seen; **Revoke** on a row cuts that device off at once. On the server:
+`./scripts/pair.sh --list` and `./scripts/pair.sh --revoke ID`. Aurelia can list
+devices but can never pair, approve or revoke one.
+
+**Reaching her from other devices: Tailscale Serve.** The proxy stays bound to
+the server's localhost. Tailscale publishes it to your tailnet only, with
+HTTPS (which the phone's installable app needs), never to your LAN:
+
+```bash
+sudo tailscale serve --bg --https=443 http://127.0.0.1:8080
+tailscale serve status        # shows the address, e.g. https://atlas-ai.<your-tailnet>.ts.net
+```
+
+Open that address on any device in your tailnet and pair it. The SSH tunnel
+(`ssh -L 8080:localhost:8080 server`, then `http://localhost:8080`) keeps
+working too; it's just another browser to pair.
 
 ## Talk to her
 
@@ -616,9 +660,10 @@ narrow, never widen, a function's policy.
 - A task running inside a function container that gets replaced is cut off
   after the 20 s grace period. Checkpoint-and-resume arrives with the first
   long-running tool.
-- No auth yet. Keep port 8080 on your LAN only (remote access: Tailscale).
-- The proxy only listens on `localhost`. Open it to the network (`"8080:80"`)
-  on the home box once authentication exists.
+- The proxy only listens on `localhost`; other devices reach it through
+  Tailscale Serve (see Pairing and access). Don't publish port 8080 to the LAN.
+- Every device is the owner for now: a second person would get their own user
+  in the charter and their own devices.
 - The display is the minimal web view; the mailbox and digest come in
   Phase 4 (see the phase table in the design doc).
 - Daily stats use the database's clock (UTC in the container), so a "day"
@@ -632,6 +677,7 @@ config/governance/           charter + one policy per function (hot-reloaded)
 config/identity.md           Aurelia's personality and rules for the model (hot-reloaded)
 scripts/ask.sh               talk to Aurelia on the server (bash)
 scripts/ask.ps1              talk to Aurelia from PowerShell
+scripts/pair.sh              pair a device from the server, list or revoke devices, key for this terminal
 scripts/deploy.sh            zero-downtime update of one service
 services/orchestrator/       the brain (FastAPI)
   app/llm/                   provider interface: Claude, Ollama (+ scripted, tests only)

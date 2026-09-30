@@ -10,7 +10,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
-from . import assistant, db, digest, glance, learning, llm_api, mailbox, memory, mnemosyne, registry, releases, tasks
+from . import (assistant, auth, constellation, db, digest, glance, learning, llm_api, mailbox, memory, mnemosyne,
+               registry, releases, tasks)
 from .config import ConfigStore
 from .events import CHANNEL
 from .governance import GovernanceStore
@@ -35,6 +36,7 @@ async def lifespan(app: FastAPI):
     maintenance = asyncio.create_task(memory.maintenance_loop(app))
     record = asyncio.create_task(mnemosyne.record_loop(app))
     mnemo = asyncio.create_task(mnemosyne.register_loop(app))
+    stars = asyncio.create_task(constellation.register_loop(app))
     log.info("orchestrator ready")
     try:
         yield
@@ -47,6 +49,7 @@ async def lifespan(app: FastAPI):
         maintenance.cancel()
         record.cancel()
         mnemo.cancel()
+        stars.cancel()
         await db.close()
         await app.state.redis.aclose()
         log.info("orchestrator stopped")
@@ -63,6 +66,8 @@ app.include_router(mnemosyne.router)
 app.include_router(glance.router)
 app.include_router(llm_api.router)
 app.include_router(learning.router)
+app.include_router(auth.router)
+app.include_router(constellation.router)
 
 
 VIEW = Path(__file__).parent / "static" / "view.html"
@@ -79,12 +84,16 @@ def _view() -> tuple[str, str]:
 
 
 @app.get("/view", include_in_schema=False)
-async def view():
+async def view(request: Request):
     """The surgical view: a page that only renders panel events from /ws and
     sends what you type to /ask. It holds no logic of its own. It carries its
     version so it can reload itself when a newer one goes live."""
     html, version = _view()
-    return HTMLResponse(html.replace("__VIEW_VERSION__", version), headers={"Cache-Control": "no-cache"})
+    out = HTMLResponse(html.replace("__VIEW_VERSION__", version), headers={"Cache-Control": "no-cache"})
+    key = request.cookies.get(auth.COOKIE)
+    if key and await auth.device_for(key):
+        auth.set_cookie(out, key)              # a paired browser stays paired as long as it's used
+    return out
 
 
 @app.get("/view/version", include_in_schema=False)
