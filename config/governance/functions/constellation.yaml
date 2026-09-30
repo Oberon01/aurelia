@@ -1,6 +1,6 @@
 # Constellation — your devices and shared computer access. Part of the orchestrator.
-# Phase 7 step 1: devices (the paired-devices panel). The node tools below take
-# effect as the node agent is built.
+# Phase 7: devices (step 1), the node agent (2), her shell (3), and seeing and using
+# the page on a screen (4). Tools not built yet take effect as they are.
 function: constellation
 enabled: true
 
@@ -8,6 +8,14 @@ tools:
   devices:         { tier: reference }   # list what's paired; pairing and revoking happen only on the display
   apps:            { tier: reference }   # what's installed on one of his computers
   home:            { tier: act }         # close what she opened on a screen; back to her view
+  look:            { tier: read }        # the page on a screen running her shell, numbered (step 4)
+  click:           { tier: act }         # click by number or words; buy/send/delete-looking ones come back as submit
+  type:            { tier: act }         # into a text box; never password or payment boxes (the node refuses)
+  press:           { tier: act }         # a key (enter, escape, arrows…); Enter that would send comes back as submit
+  scroll:          { tier: act }
+  back:            { tier: act }
+  media:           { tier: act }         # play, pause, seek, volume, speed, full screen
+  submit:          { tier: change }      # the press that buys, pays, sends, posts or deletes: always confirmed
   search_files:    { tier: reference }
   list_processes:  { tier: reference }
   browser_history: { tier: reference }
@@ -47,6 +55,10 @@ rules:
   updates:                             # Kentrell's standing decision (Sep 29): nodes keep their agent current
     automatic: true                    # without asking; only released code (tested by Chrysalis) is served
     max_attempts: 3                    # then it stops trying that version and a mailbox card tells him
+  screen:                              # step 4: seeing and using the page on a screen
+    # A click (or Enter) whose label has one of these words waits for his OK (as submit).
+    confirm_before: [buy, buy now, purchase, pay, pay now, checkout, check out, place order, order now, rent,
+                     subscribe, donate, tip, transfer, send, post, reply, comment, submit, delete, confirm]
   targeting:
     default_target: requesting_node
     quiet_hours: []                    # e.g. { node: bedroom-tv, from: "22:00", to: "07:00" }

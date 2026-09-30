@@ -13,9 +13,13 @@ tailnet with its own key (approved in her mailbox), says what it is, then waits 
 commands (long polling) and reports how each went.
 
 What it will do is fixed here, not decided by the server: open an http(s) page,
-launch an installed app by name, list installed apps, describe this machine, and
-bring its screen back to Aurelia. Anything else is refused. Nothing is ever run
-through a shell, and only paths it found itself (installed apps) are launched.
+launch an installed app by name, list installed apps, describe this machine, bring
+its screen back to Aurelia, and see and use the page on her screen (number what can
+be clicked, click, type, press a key, scroll, go back, control a video). Anything
+else is refused. Nothing is ever run through a shell, and only paths it found itself
+(installed apps) are launched. The page script is fixed here too; it won't type into
+password or payment boxes, and a click (or Enter) that looks like it buys, pays,
+sends, posts or deletes comes back to Aurelia for his confirmation instead.
 
 The shell: with `shell on`, the agent keeps a kiosk browser (Chrome, Chromium or
 Edge) filling the screen with Aurelia's view, signed in as this computer's screen.
@@ -33,6 +37,7 @@ After max_attempts failures it stops and tells her, once.
 from __future__ import annotations
 
 import argparse
+import base64
 import configparser
 import ctypes
 import hashlib
@@ -51,7 +56,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 IS_WINDOWS = platform.system() == "Windows"
 EXIT_REVOKED = 3                                   # the service manager doesn't restart after this
 EXIT_UPDATED = 75                                  # restart me: a new version is in place
@@ -281,6 +286,8 @@ def execute(cmd: dict) -> dict:
         return {"ok": False, "error": f"this node doesn't do '{cmd.get('kind')}'"}
     try:
         return {"ok": True, "data": fn(cmd.get("args") or {})}
+    except NeedsConfirmation as exc:                         # nothing was pressed; he decides
+        return {"ok": False, "error": str(exc), "data": {"confirm": exc.label, "what": exc.what}}
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
     except Exception as exc:
@@ -319,6 +326,8 @@ class Shell:
         self.note = "starting"
         self.stop_event = threading.Event()
         self.changed = threading.Event()                 # tell Aurelia soon (the devices panel shows it)
+        self.current: str | None = None                  # the page in front (the last one she opened)
+        self.token = ""                                  # this look's numbers (see page_look)
 
     def wanted(self) -> bool:
         if IS_WINDOWS:
@@ -412,7 +421,15 @@ class Shell:
         return t.get("url", "").startswith(self.server)
 
     def open(self, url: str) -> None:
-        self.cdp("/json/new?" + urllib.parse.quote(url, safe=""), "PUT")    # quoted whole: keeps ?a=1&b=2#t
+        t = self.cdp("/json/new?" + urllib.parse.quote(url, safe=""), "PUT")    # quoted whole: keeps ?a=1&b=2#t
+        self.current = t.get("id") if isinstance(t, dict) else None
+
+    def page(self) -> dict:
+        """The page on the screen now: the last one she opened, or the newest that isn't her."""
+        pages = [t for t in self.pages() if not self.is_hers(t)]
+        if not pages:
+            raise ValueError("nothing is open on this screen (it's showing me)")
+        return next((t for t in pages if t["id"] == self.current), pages[0])
 
     def home(self) -> int:
         pages = self.pages()
@@ -421,6 +438,7 @@ class Shell:
             if not self.is_hers(t):
                 self.cdp(f"/json/close/{t['id']}")
                 closed += 1
+        self.current = None
         hers = [t for t in pages if self.is_hers(t)]
         if hers:
             self.cdp(f"/json/activate/{hers[0]['id']}")
@@ -428,6 +446,555 @@ class Shell:
 
 
 SHELL: Shell | None = None
+
+
+# ---- seeing and using the page on her screen ---------------------------------------------------
+#
+# Through the kiosk browser's control port (DevTools protocol, 127.0.0.1 only). Everything the
+# page script can do is below, fixed in this file; the server only picks an operation and gives
+# it data (a number, some text). The script runs in an isolated world: it shares the page's
+# elements but not its JavaScript, so the page can't change what the script sees or does.
+# Page content that goes back to Aurelia is data, never instructions (she treats it that way).
+
+class NeedsConfirmation(ValueError):
+    """The thing to press looks like it buys, pays, sends, posts or deletes: he decides."""
+
+    def __init__(self, label: str, what: str = "click"):
+        super().__init__(f"needs confirmation: {label}")
+        self.label, self.what = label, what
+
+
+DEFAULT_CONFIRM = ["buy", "buy now", "purchase", "pay", "pay now", "checkout", "check out", "place order", "order now",
+                   "rent", "subscribe", "donate", "tip", "transfer", "send", "post", "reply", "comment", "submit",
+                   "delete", "confirm"]
+
+PAGE_JS = r"""
+async (op, a) => {
+  const D = document, W = window, ATTR = "data-aurelia-n";
+  const all = (root, sel, out = []) => {                        // querySelectorAll, into open shadow roots
+    root.querySelectorAll(sel).forEach(e => out.push(e));
+    root.querySelectorAll("*").forEach(e => { if (e.shadowRoot) all(e.shadowRoot, sel, out); });
+    return out;
+  };
+  const clean = s => String(s || "").replace(/\s+/g, " ").trim();
+  const norm = s => clean(s).toLowerCase();
+  const deepActive = () => { let e = D.activeElement; while (e && e.shadowRoot && e.shadowRoot.activeElement) e = e.shadowRoot.activeElement; return e; };
+  const contains = (outer, inner) => { for (let n = inner; n; n = n.parentNode || n.host) if (n === outer) return true; return false; };
+  const deepAt = (x, y) => { let e = D.elementFromPoint(x, y);
+    while (e && e.shadowRoot) { const i = e.shadowRoot.elementFromPoint(x, y); if (!i || i === e) break; e = i; } return e; };
+  const tag = e => e.tagName.toLowerCase();
+  const isField = e => !!e && (e.isContentEditable || tag(e) === "textarea" ||
+    (tag(e) === "input" && ["", "text", "search", "email", "url", "tel", "number"].includes((e.getAttribute("type") || "").toLowerCase())) ||
+    ["textbox", "searchbox", "combobox"].includes(e.getAttribute("role")));
+  const labelOf = e => {
+    let s = e.getAttribute("aria-label") || "";
+    const by = e.getAttribute("aria-labelledby");
+    if (!s && by) s = by.split(/\s+/).map(id => { const r = e.getRootNode(); const t = (r.getElementById && r.getElementById(id)) || D.getElementById(id); return t ? t.textContent : ""; }).join(" ");
+    if (!s && ["input", "textarea", "select"].includes(tag(e))) {
+      if (e.labels && e.labels.length) s = e.labels[0].textContent;
+      s = s || e.getAttribute("placeholder") || (["submit", "button", "reset"].includes(e.type) ? e.value : "") || e.getAttribute("title") || e.name || "";
+    }
+    if (!clean(s)) s = e.innerText || e.textContent || "";
+    if (!clean(s)) { const img = e.querySelector && e.querySelector("img[alt]"); s = (img && img.alt) || e.getAttribute("title") || ""; }
+    if (!clean(s) && tag(e) === "video") s = "video";
+    return clean(s).slice(0, 100);
+  };
+  const roleOf = e => {
+    const r = e.getAttribute("role"); if (r) return r;
+    const t = tag(e);
+    if (t === "a") return "link";
+    if (t === "input") { const ty = (e.type || "").toLowerCase(); return ["submit", "button", "reset", "image"].includes(ty) ? "button" : ["checkbox", "radio"].includes(ty) ? ty : "text box"; }
+    if (t === "textarea" || e.isContentEditable) return "text box";
+    if (t === "select") return "list"; if (t === "video") return "video";
+    return (t === "button" || t === "summary") ? "button" : "item";
+  };
+  const shown = e => { const r = e.getBoundingClientRect();
+    if (r.width < 4 || r.height < 4 || r.bottom <= 0 || r.right <= 0 || r.top >= innerHeight || r.left >= innerWidth) return null;
+    const cs = getComputedStyle(e); if (cs.visibility === "hidden" || cs.display === "none" || parseFloat(cs.opacity) === 0) return null; return r; };
+  const reach = (e, r) => {                                      // a point where a click lands on it
+    for (const [fx, fy] of [[.5, .5], [.3, .5], [.7, .5], [.5, .3], [.5, .7], [.15, .5]]) {
+      const x = r.left + r.width * fx, y = r.top + r.height * fy;
+      if (x < 1 || y < 1 || x >= innerWidth - 1 || y >= innerHeight - 1) continue;
+      const hit = deepAt(x, y); if (hit && (contains(e, hit) || contains(hit, e))) return [Math.round(x), Math.round(y)];
+    } return null; };
+  const SEL = 'a[href],button,input:not([type=hidden]),select,textarea,summary,video,[role=button],[role=link],[role=tab],' +
+    '[role=menuitem],[role=option],[role=checkbox],[role=radio],[role=switch],[role=combobox],[role=searchbox],[role=textbox],' +
+    '[contenteditable=""],[contenteditable=true],[onclick],[tabindex]:not([tabindex="-1"])';
+  const OUTER = e => ["a", "button", "summary"].includes(tag(e)) || ["button", "link", "menuitem", "tab", "option"].includes(e.getAttribute("role"));
+  const candidates = () => {
+    const seen = new Set(), out = [], area = innerWidth * innerHeight;
+    for (const e of all(D, SEL)) {
+      if (seen.has(e) || e.id === "__aurelia_marks") continue; seen.add(e);
+      if (e.disabled || e.getAttribute("aria-disabled") === "true" || e.getAttribute("aria-hidden") === "true") continue;
+      const r = shown(e); if (!r) continue;
+      const role = roleOf(e), label = labelOf(e);
+      if (role === "item" && (!label || r.width * r.height > area * 0.5)) continue;     // a big focusable wrapper
+      const p = reach(e, r); if (!p) continue;
+      out.push({ e, r, p, role, label });
+    }
+    const kept = out.filter(c => !out.some(o => o !== c && OUTER(o.e) && contains(o.e, c.e)));
+    kept.sort((x, y) => (Math.round(x.r.top / 24) - Math.round(y.r.top / 24)) || (x.r.left - y.r.left));
+    return kept;
+  };
+  const words = new RegExp("(?:^|[^a-z])(?:" + ((a.words && a.words.length) ? a.words : ["buy"]).map(w =>
+    String(w).toLowerCase().trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+")).join("|") + ")(?![a-z])", "i");
+  const risky = e => { const t = [labelOf(e), e.value, e.getAttribute && e.getAttribute("title")].filter(Boolean).join(" ");
+    return words.test(t) ? (labelOf(e) || clean(e.value) || "that button") : null; };
+  const secret = e => { const auto = (e.getAttribute("autocomplete") || "").toLowerCase();
+    const said = [e.name, e.id, e.getAttribute("aria-label"), e.getAttribute("placeholder"), labelOf(e)].join(" ");
+    return (e.getAttribute("type") || "").toLowerCase() === "password" || /password|cc-|one-time-code/.test(auto) ||
+      /pass(?:word|code)?\b|\bpin\b|cvv|cvc|security code|card ?number|\bssn\b|social security/i.test(said); };
+  const enterRisk = e => {                                      // would Enter here send something?
+    if (!e) return null;
+    if (!isField(e)) return risky(e);                            // Enter on a focused button presses it
+    const ty = (e.getAttribute("type") || "").toLowerCase(), role = e.getAttribute("role");
+    if (ty === "search" || role === "searchbox" || role === "combobox") return null;
+    if (e.form) { for (const b of e.form.querySelectorAll('button,input[type=submit]')) { if ((b.type || "submit") === "submit" && risky(b)) return labelOf(e) || "that box"; } return null; }
+    if (tag(e) === "textarea" || e.isContentEditable) return labelOf(e) || "that box";   // a message box: Enter sends
+    return null; };
+  const clearMarks = () => { all(D, "[" + ATTR + "]").forEach(e => e.removeAttribute(ATTR)); const b = D.getElementById("__aurelia_marks"); if (b) b.remove(); };
+  const draw = items => {
+    const old = D.getElementById("__aurelia_marks"); if (old) old.remove();
+    const box = D.createElement("div"); box.id = "__aurelia_marks";
+    box.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:2147483647";
+    for (const it of items) {
+      const b = D.createElement("div"); b.textContent = it.n;
+      const edge = it.r.left < 18 || it.r.top < 14;                // on the corner, mostly outside, so it hides little
+      b.style.cssText = "position:fixed;left:" + Math.max(0, it.r.left) + "px;top:" + Math.max(0, it.r.top) + "px;" +
+        (edge ? "" : "transform:translate(-65%,-60%);") +
+        "min-width:18px;padding:0 5px;border-radius:5px;background:#04121a;color:#e9fbfe;border:2px solid #5fd4e6;" +
+        "font:700 15px/1.25 ui-monospace,Menlo,Consolas,monospace;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.6)";
+      box.append(b);
+    }
+    (D.fullscreenElement || D.documentElement).append(box);
+    const gone = () => box.remove();
+    setTimeout(() => { W.addEventListener("scroll", gone, { once: true }); W.addEventListener("wheel", gone, { once: true }); }, 400);
+    setTimeout(gone, 120000);
+  };
+  const videos = () => {
+    const vs = all(D, "video").map(v => ({ v, r: v.getBoundingClientRect() })).filter(x => x.r.width > 40 && x.r.height > 40);
+    vs.sort((x, y) => ((!y.v.paused) - (!x.v.paused)) || (y.r.width * y.r.height - x.r.width * x.r.height));
+    return vs.length ? vs[0].v : null; };
+  const vstate = v => v ? { paused: v.paused, time: Math.round(v.currentTime || 0), live: v.duration === Infinity,
+    duration: isFinite(v.duration) ? Math.round(v.duration) : null, muted: v.muted, volume: Math.round(v.volume * 100),
+    speed: v.playbackRate, fullscreen: !!D.fullscreenElement } : null;
+  const find = n => all(D, "[" + ATTR + '="' + a.token + ":" + n + '"]')[0] || null;
+  const byText = t => { const want = norm(t); const cs = candidates();
+    for (const test of [c => norm(c.label) === want, c => norm(c.label).startsWith(want), c => norm(c.label).includes(want)]) {
+      const hits = cs.filter(test); if (hits.length) return { e: hits[0].e, others: hits.length - 1 }; } return null; };
+  const point = e => { let r = shown(e);
+    if (!r || r.top < 0 || r.bottom > innerHeight) { e.scrollIntoView({ block: "center", inline: "center" }); r = shown(e); }
+    return r ? reach(e, r) : null; };
+
+  if (op === "look") {
+    clearMarks();
+    const cs = candidates(), items = cs.slice(0, 90);
+    items.forEach((c, i) => { c.n = i + 1; c.e.setAttribute(ATTR, a.token + ":" + c.n); });
+    const text = clean(D.body ? D.body.innerText : "").slice(0, 2500);
+    draw(items);
+    return { title: clean(D.title), url: location.href, items: items.map(c => ({ n: c.n, role: c.role, label: c.label })),
+             more: cs.length - items.length, text, video: vstate(videos()) };
+  }
+  if (op === "clear") { clearMarks(); return {}; }
+  if (op === "hide") { const b = D.getElementById("__aurelia_marks"); if (b) b.remove(); return {}; }   // numbers stay usable
+  if (op === "state") return { title: clean(D.title), url: location.href, video: vstate(videos()) };
+  if (op === "viewport") return { w: innerWidth, h: innerHeight, x: scrollX, y: scrollY };
+  if (op === "click" || op === "focus") {
+    let e = null, others = 0;
+    if (a.n) { e = find(a.n); if (!e) return { error: "stale" }; }
+    else if (a.text) { const f = byText(a.text); if (f) { e = f.e; others = f.others; } }
+    if (!e) return { error: "notfound" };
+    const label = labelOf(e);
+    if (a.expect && norm(label) !== norm(a.expect)) return { error: "changed", label };
+    if (op === "focus" && tag(e) === "input" && secret(e)) return { error: "secret", label };
+    if (op === "focus" && !isField(e)) return { error: "notfield", label };
+    if (op === "click" && !a.allow) { const r = risky(e); if (r) return { risky: r }; }
+    const p = point(e);
+    if (!p) { e.focus && e.focus(); if (op === "click") e.click(); return { label, others, done: true }; }
+    return { label, others, x: p[0], y: p[1] };
+  }
+  if (op === "field") {
+    const e = deepActive();
+    if (!isField(e)) return { error: "nofield" };
+    if (secret(e)) return { error: "secret" };
+    if (a.clear) { if (e.isContentEditable) D.execCommand("selectAll"); else if (e.select) e.select(); }
+    return { label: labelOf(e), enter_risk: enterRisk(e) };
+  }
+  if (op === "enter") {
+    const e = deepActive(), label = e ? labelOf(e) : "";
+    if (a.expect && norm(label) !== norm(a.expect)) return { error: "changed", label };
+    const r = a.allow ? null : enterRisk(e);
+    return r ? { risky: r } : { label };
+  }
+  if (op === "scroll_to") {
+    let s = D.scrollingElement;
+    if (!s || s.scrollHeight <= s.clientHeight + 10) {
+      let best = null; for (const e of all(D, "*")) { if (e.scrollHeight > e.clientHeight + 10 && /(auto|scroll)/.test(getComputedStyle(e).overflowY))
+        if (!best || e.clientHeight * e.clientWidth > best.clientHeight * best.clientWidth) best = e; }
+      s = best || s; }
+    if (s) s.scrollTo({ top: a.to === "top" ? 0 : s.scrollHeight, behavior: "instant" });
+    return {};
+  }
+  if (op === "media") {
+    const v = videos(); if (!v) return { error: "novideo" };
+    const act = a.action, s = Number(a.seconds || 0);
+    const play = () => Promise.race([v.play().then(() => null, e => e.name), new Promise(r => setTimeout(() => r(null), 3000))]);
+    let problem = null;
+    if (act === "play") problem = await play();
+    else if (act === "pause") v.pause();
+    else if (act === "toggle") { if (v.paused) problem = await play(); else v.pause(); }
+    else if (act === "forward" || act === "back") {
+      const to = v.currentTime + (act === "forward" ? s : -s);
+      v.currentTime = Math.max(0, isFinite(v.duration) ? Math.min(to, v.duration - 1) : to); }
+    else if (act === "seek") v.currentTime = Math.max(0, isFinite(v.duration) ? Math.min(s, v.duration - 1) : s);
+    else if (act === "restart") v.currentTime = 0;
+    else if (act === "mute") v.muted = true;
+    else if (act === "unmute") v.muted = false;
+    else if (act === "volume") { v.volume = Math.min(1, Math.max(0, Number(a.level) / 100)); if (v.volume > 0) v.muted = false; }
+    else if (act === "speed") v.playbackRate = Math.min(4, Math.max(0.25, Number(a.rate) || 1));
+    else if (act === "fullscreen") {
+      if (!D.fullscreenElement) {                                 // the player (video plus its controls), not the bare video
+        const r = v.getBoundingClientRect(); let t = v;
+        for (let p = v.parentElement; p && p !== D.body; p = p.parentElement) {
+          const q = p.getBoundingClientRect();
+          if (Math.abs(q.width - r.width) <= 4 && Math.abs(q.height - r.height) <= 4) t = p; else break; }
+        try { await t.requestFullscreen(); } catch (e) { problem = e.name; } } }
+    else if (act === "exit_fullscreen") { if (D.fullscreenElement) try { await D.exitFullscreen(); } catch (e) { problem = e.name; } }
+    else return { error: "action" };
+    await new Promise(r => setTimeout(r, 300));
+    return { title: clean(D.title), video: vstate(v), problem };
+  }
+  return { error: "op" };
+}
+"""
+
+CDP_KEYS = {"enter": ("Enter", "Enter", 13, "\r"), "escape": ("Escape", "Escape", 27, ""), "tab": ("Tab", "Tab", 9, ""),
+            "space": (" ", "Space", 32, " "), "backspace": ("Backspace", "Backspace", 8, ""),
+            "up": ("ArrowUp", "ArrowUp", 38, ""), "down": ("ArrowDown", "ArrowDown", 40, ""),
+            "left": ("ArrowLeft", "ArrowLeft", 37, ""), "right": ("ArrowRight", "ArrowRight", 39, ""),
+            "page up": ("PageUp", "PageUp", 33, ""), "page down": ("PageDown", "PageDown", 34, ""),
+            "home": ("Home", "Home", 36, ""), "end": ("End", "End", 35, "")}
+
+
+class CDPError(ValueError):
+    pass
+
+
+class Tab:
+    """One page in her shell, over the browser's control port: a minimal WebSocket client
+    (standard library only) speaking the DevTools protocol."""
+    GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+    def __init__(self, target: dict, timeout: float = 15):
+        u = urllib.parse.urlsplit(target["webSocketDebuggerUrl"])
+        if u.hostname not in ("127.0.0.1", "localhost"):
+            raise CDPError("the browser's control port isn't local")
+        self.id, self.buf, self.next_id = target["id"], b"", 0
+        self.sock = socket.create_connection((u.hostname, u.port or 80), timeout=timeout)
+        key = base64.b64encode(os.urandom(16)).decode()
+        self.sock.sendall((f"GET {u.path} HTTP/1.1\r\nHost: {u.hostname}:{u.port}\r\nUpgrade: websocket\r\n"
+                           f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
+        head = self._until(b"\r\n\r\n")
+        accept = base64.b64encode(hashlib.sha1((key + self.GUID).encode()).digest())
+        if b" 101 " not in head.split(b"\r\n", 1)[0] or accept not in head:
+            self.sock.close()
+            raise CDPError("the browser refused the control connection")
+        self.ctx: int | None = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+    def _until(self, marker: bytes) -> bytes:
+        while marker not in self.buf:
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                raise CDPError("the page closed its connection")
+            self.buf += chunk
+        head, _, self.buf = self.buf.partition(marker)
+        return head
+
+    def _read(self, n: int) -> bytes:
+        while len(self.buf) < n:
+            chunk = self.sock.recv(max(65536, n - len(self.buf)))
+            if not chunk:
+                raise CDPError("the page closed its connection")
+            self.buf += chunk
+        out, self.buf = self.buf[:n], self.buf[n:]
+        return out
+
+    @staticmethod
+    def _mask(data: bytes, mask: bytes) -> bytes:
+        n = len(data)
+        return (int.from_bytes(data, "big") ^ int.from_bytes((mask * (n // 4 + 1))[:n], "big")).to_bytes(n, "big")
+
+    def _send(self, opcode: int, payload: bytes) -> None:
+        n, mask = len(payload), os.urandom(4)
+        head = bytes([0x80 | opcode])
+        if n < 126:
+            head += bytes([0x80 | n])
+        elif n < 65536:
+            head += bytes([0x80 | 126]) + n.to_bytes(2, "big")
+        else:
+            head += bytes([0x80 | 127]) + n.to_bytes(8, "big")
+        self.sock.sendall(head + mask + (self._mask(payload, mask) if n else b""))
+
+    def _recv(self) -> str:
+        parts = []
+        while True:
+            b1, b2 = self._read(2)
+            op, n = b1 & 0x0F, b2 & 0x7F
+            if n == 126:
+                n = int.from_bytes(self._read(2), "big")
+            elif n == 127:
+                n = int.from_bytes(self._read(8), "big")
+            mask = self._read(4) if b2 & 0x80 else None
+            data = self._read(n) if n else b""
+            if mask and data:
+                data = self._mask(data, mask)
+            if op == 8:
+                raise CDPError("the page closed")
+            if op == 9:
+                self._send(10, data)
+                continue
+            if op == 10:
+                continue
+            parts.append(data)
+            if b1 & 0x80:
+                return b"".join(parts).decode("utf-8", "replace")
+
+    def call(self, method: str, **params) -> dict:
+        self.next_id += 1
+        mid = self.next_id
+        self._send(1, json.dumps({"id": mid, "method": method, "params": params}).encode())
+        while True:
+            msg = json.loads(self._recv())
+            if msg.get("id") == mid:
+                if "error" in msg:
+                    raise CDPError(str(msg["error"].get("message") or "the browser said no"))
+                return msg.get("result") or {}
+
+    def close(self) -> None:
+        try:
+            self._send(8, b"")
+        except OSError:
+            pass
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+    def run(self, op: str, args: dict | None = None):
+        """The page script, in an isolated world (fresh after each navigation)."""
+        for attempt in (1, 2):
+            if self.ctx is None:
+                frame = self.call("Page.getFrameTree")["frameTree"]["frame"]["id"]
+                self.ctx = self.call("Page.createIsolatedWorld", frameId=frame, worldName="aurelia")["executionContextId"]
+            try:
+                res = self.call("Runtime.evaluate", expression=f"({PAGE_JS})({json.dumps(op)}, {json.dumps(args or {})})",
+                                contextId=self.ctx, returnByValue=True, awaitPromise=True, userGesture=True)
+            except CDPError as exc:
+                if attempt == 1 and "context" in str(exc).lower():
+                    self.ctx = None                                  # the page navigated; make a new world
+                    continue
+                raise
+            if res.get("exceptionDetails"):
+                d = res["exceptionDetails"]
+                raise CDPError(f"the page script failed ({(d.get('exception') or {}).get('description', d.get('text', ''))[:200]})")
+            return (res.get("result") or {}).get("value")
+
+    def click(self, x: int, y: int) -> None:
+        self.call("Input.dispatchMouseEvent", type="mouseMoved", x=x, y=y)
+        self.call("Input.dispatchMouseEvent", type="mousePressed", x=x, y=y, button="left", clickCount=1)
+        self.call("Input.dispatchMouseEvent", type="mouseReleased", x=x, y=y, button="left", clickCount=1)
+
+    def key(self, name: str) -> None:
+        key, code, vk, text = CDP_KEYS[name]
+        down = {"type": "keyDown", "text": text} if text else {"type": "rawKeyDown"}
+        self.call("Input.dispatchKeyEvent", key=key, code=code, windowsVirtualKeyCode=vk, nativeVirtualKeyCode=vk, **down)
+        self.call("Input.dispatchKeyEvent", type="keyUp", key=key, code=code, windowsVirtualKeyCode=vk, nativeVirtualKeyCode=vk)
+
+    def wheel(self, dy: int) -> None:
+        vp = self.run("viewport")
+        self.call("Input.dispatchMouseEvent", type="mouseWheel", x=vp["w"] // 2, y=vp["h"] // 2, deltaX=0, deltaY=dy)
+
+    def shot(self, width: int = 1280) -> str:
+        """What the screen shows (with her numbers on it), as a JPEG in base64."""
+        vp = self.run("viewport")
+        scale = min(1.0, width / max(1, vp["w"]))
+        return self.call("Page.captureScreenshot", format="jpeg", quality=60,
+                         clip={"x": vp["x"], "y": vp["y"], "width": vp["w"], "height": vp["h"], "scale": scale})["data"]
+
+
+def _tab() -> Tab:
+    if not (SHELL and SHELL.running()):
+        raise ValueError("her shell isn't running on this computer, so I can't see its screen")
+    return Tab(SHELL.page())
+
+
+def _clicked(tab: Tab, r: dict) -> None:
+    if "x" in r:
+        tab.click(r["x"], r["y"])
+
+
+def _page_error(r: dict, n=None, text=None) -> None:
+    err = r.get("error")
+    if err == "stale":
+        raise ValueError(f"there's no number {n} on the screen now (the page changed); look again for new numbers")
+    if err == "notfound":
+        raise ValueError(f"I don't see \"{text}\" on the screen" if text else "say which one, by its number")
+    if err == "changed":
+        raise ValueError(f"the page changed (that's \"{r.get('label')}\" now), so I didn't press anything")
+    if err == "secret":
+        raise ValueError("that's a password or payment box; I don't type into those")
+    if err == "notfield":
+        raise ValueError(f"number {n} (\"{r.get('label')}\") isn't a text box")
+    if err:
+        raise ValueError(f"that didn't work on this page ({err})")
+
+
+def _words(args: dict) -> list:
+    w = args.get("confirm_words")
+    return [str(x) for x in w][:100] if isinstance(w, list) and w else DEFAULT_CONFIRM
+
+
+def _settle(tab: Tab, wait: float = 0.9) -> dict:
+    time.sleep(wait)
+    try:
+        return tab.run("state") or {}
+    except CDPError:                                               # mid-navigation
+        time.sleep(1)
+        tab.ctx = None
+        try:
+            return tab.run("state") or {}
+        except CDPError:
+            return {}
+
+
+def do_page_look(args: dict) -> dict:
+    with _tab() as tab:
+        SHELL.token = os.urandom(4).hex()
+        out = tab.run("look", {"token": SHELL.token})
+        time.sleep(0.15)
+        try:
+            out["shot"] = tab.shot()
+        except CDPError:
+            pass
+        return out
+
+
+def do_page_click(args: dict) -> dict:
+    n = int(args["n"]) if str(args.get("n") or "").strip().isdigit() else None
+    text = " ".join(str(args.get("text") or "").split())[:200] or None
+    if not (n or text):
+        raise ValueError("say which one: its number, or the words on it")
+    with _tab() as tab:
+        r = tab.run("click", {"token": SHELL.token, "n": n, "text": text, "words": _words(args),
+                              "allow": bool(args.get("allow")), "expect": args.get("expect")})
+        if r.get("risky"):
+            raise NeedsConfirmation(r["risky"], "click")
+        _page_error(r, n, text)
+        _clicked(tab, r)
+        return {"clicked": r["label"], "others": r.get("others", 0), **_settle(tab)}
+
+
+def do_page_type(args: dict) -> dict:
+    text = str(args.get("text") or "")[:2000]
+    if not text:
+        raise ValueError("what should I type?")
+    n = int(args["n"]) if str(args.get("n") or "").strip().isdigit() else None
+    with _tab() as tab:
+        if n:
+            r = tab.run("focus", {"token": SHELL.token, "n": n})
+            _page_error(r, n)
+            _clicked(tab, r)
+            time.sleep(0.2)
+        f = tab.run("field", {"clear": args.get("clear", True) is not False, "words": _words(args)})
+        if f.get("error") == "nofield":
+            raise ValueError("no text box is selected; say which one (by its number)")
+        if f.get("error") == "secret":
+            raise ValueError("that's a password or payment box; I don't type into those")
+        _page_error(f)
+        tab.call("Input.insertText", text=text)
+        out = {"typed": text, "into": f.get("label") or "the text box"}
+        if args.get("enter"):
+            if f.get("enter_risk"):
+                raise NeedsConfirmation(f["enter_risk"], "enter")
+            tab.key("enter")
+            out.update(_settle(tab))
+        return out
+
+
+def do_page_key(args: dict) -> dict:
+    name = " ".join(str(args.get("key") or "").lower().replace("pageup", "page up").replace("pagedown", "page down").split())
+    name = {"return": "enter", "esc": "escape", "spacebar": "space", "delete": "backspace"}.get(name, name)
+    if name not in CDP_KEYS:
+        raise ValueError(f"I can press {', '.join(CDP_KEYS)}")
+    with _tab() as tab:
+        if name == "enter":
+            r = tab.run("enter", {"words": _words(args), "allow": bool(args.get("allow")), "expect": args.get("expect")})
+            if r.get("risky"):
+                raise NeedsConfirmation(r["risky"], "enter")
+            _page_error(r)
+        tab.key(name)
+        return {"pressed": name, **_settle(tab, 0.5)}
+
+
+def do_page_scroll(args: dict) -> dict:
+    where = str(args.get("direction") or "down").lower()
+    where = {"to the top": "top", "to the bottom": "bottom", "top": "top", "bottom": "bottom", "up": "up"}.get(where, "down")
+    with _tab() as tab:
+        if where in ("up", "down"):
+            vp = tab.run("viewport")
+            tab.wheel(int(vp["h"] * 0.8) * (-1 if where == "up" else 1))
+        else:
+            tab.run("scroll_to", {"to": where})
+        time.sleep(0.8)
+        SHELL.token = os.urandom(4).hex()
+        return {"scrolled": where, **tab.run("look", {"token": SHELL.token})}
+
+
+def do_page_back(args: dict) -> dict:
+    with _tab() as tab:
+        h = tab.call("Page.getNavigationHistory")
+        i = int(h.get("currentIndex", 0))
+        if i <= 0:
+            raise ValueError("there's no earlier page here; say \"go home\" to close it")
+        entry = h["entries"][i - 1]
+        tab.call("Page.navigateToHistoryEntry", entryId=entry["id"])
+        time.sleep(1.2)
+        return {"title": entry.get("title") or "", "url": entry.get("url") or ""}
+
+
+MEDIA = ("play", "pause", "toggle", "forward", "back", "seek", "restart", "mute", "unmute", "volume", "speed",
+         "fullscreen", "exit_fullscreen")
+
+
+def do_page_media(args: dict) -> dict:
+    action = str(args.get("action") or "")
+    if action not in MEDIA:
+        raise ValueError(f"I can {', '.join(MEDIA)}")
+    with _tab() as tab:
+        tab.run("hide")
+        r = tab.run("media", {"action": action, "seconds": float(args.get("seconds") or 0),
+                              "level": args.get("level"), "rate": args.get("rate")})
+        if r.get("error") == "novideo":
+            raise ValueError("there's no video on this page")
+        _page_error(r)
+        return r
+
+
+def do_page_clear(args: dict) -> dict:
+    with _tab() as tab:
+        tab.run("clear")
+        return {}
+
+
+COMMANDS.update({"page_look": do_page_look, "page_click": do_page_click, "page_type": do_page_type,
+                 "page_key": do_page_key, "page_scroll": do_page_scroll, "page_back": do_page_back,
+                 "page_media": do_page_media, "page_clear": do_page_clear})
 
 
 # ---- updating itself (Kentrell's standing decision) ---------------------------------------------

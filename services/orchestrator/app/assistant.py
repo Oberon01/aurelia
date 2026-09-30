@@ -150,9 +150,35 @@ async def _run_fastpath(app, body: Ask, fp, resolved) -> dict[str, Any]:
     result = await wait_for_result(task_id, app.state.config.current.llm.wait_for_result_seconds)
     if result and result["status"] == "failed":
         out["reply"] = f"That didn't work: {result.get('error') or 'the tool failed'}"
+    elif (why := await _follow_up(app, body.user, resolved.qualified_name, result, out)):
+        out["reply"] = why
     else:
         out["reply"] = fastpath.render_reply(fp.pattern, fp.groups)
     return out
+
+
+async def _follow_up(app, user: str, tool: str, result: dict | None, out: dict) -> str | None:
+    """A tool that stopped short of something he has to decide (e.g. a click that would buy or
+    send) returns `confirm`: the same function's tool and args to run if he says yes. It's held
+    like any change-tier action (and governance still decides when it runs)."""
+    if not result or result.get("status") != "completed":
+        return None
+    data = result.get("result")
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except ValueError:
+            return None
+    c = data.get("confirm") if isinstance(data, dict) else None
+    if not isinstance(c, dict) or not isinstance(c.get("tool"), str):
+        return None
+    if c["tool"].split(".", 1)[0] != tool.split(".", 1)[0]:        # only its own function's tools
+        return None
+    reason = str(c.get("reason") or "That needs your confirmation.")[:300]
+    action = await _hold(app, c["tool"], dict(c.get("args") or {}), user, reason,
+                         reply=str(c["reply"])[:200] if c.get("reply") else None)
+    out["needs_confirmation"].append(action)
+    return reason
 
 
 # ---- LLM loop -----------------------------------------------------------------
@@ -245,6 +271,10 @@ async def _run_tool_call(app, user: str, qualified: str | None, args: dict, out:
         return _data({"status": "error", "error": "no such tool"}), True
     args = dict(args or {})
     display = "brief" if args.pop(DISPLAY_ARG, None) == "brief" else "panel"
+    if display == "brief":
+        resolved = await registry.resolve(app.state.redis, qualified)
+        if resolved and resolved.tool.display == "panel":     # always shown: a library, a quiz, a topic…
+            display = "panel"
     try:
         task_id = await launch(app, StartTask(tool=qualified, args=args, user=user, display=display))
     except HTTPException as exc:
@@ -259,6 +289,10 @@ async def _run_tool_call(app, user: str, qualified: str | None, args: dict, out:
     if result is None:
         return _data({"status": "running", "task_id": task_id,
                       "note": "Still running; progress is shown on the display."}), False
+    why = await _follow_up(app, user, qualified, result, out)
+    if why:
+        return _data({"status": "needs_confirmation", "reason": why,
+                      "note": "Nothing was pressed. Tell the user what's waiting; they confirm on the display."}), False
     return _data({"status": result["status"], "partial": result["partial"],
                   "result": result["result"], "error": result["error"]}), result["status"] == "failed"
 
@@ -288,7 +322,7 @@ async def _tool_defs(app, user: str) -> tuple[list[ToolDef], dict[str, str], lis
             q = f"{fn.name}.{tool.name}"
             note = " Requires the user's confirmation." if gov.decide(fn.name, tool.name, user, False).needs_confirmation else ""
             defs.append(ToolDef(name=api_name(q), description=f"[{fn.name.capitalize()}] {tool.description}{note}",
-                                input_schema=_with_display(tool.input_schema)))
+                                input_schema=tool.input_schema if tool.display == "panel" else _with_display(tool.input_schema)))
             by_api[api_name(q)] = q
             visible.append(tool.name)
         if visible:

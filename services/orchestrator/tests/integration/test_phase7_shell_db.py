@@ -87,11 +87,17 @@ def cdp(port, path):
 
 @pytest.fixture
 def display():
-    n = 90 + os.getpid() % 9
-    x = subprocess.Popen(["Xvfb", f":{n}", "-screen", "0", "1280x720x24"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(0.8)
+    """A virtual screen on a display number Xvfb picks itself (free, even right after another test's)."""
+    r, w = os.pipe()
+    x = subprocess.Popen(["Xvfb", "-displayfd", str(w), "-screen", "0", "1280x720x24"], pass_fds=(w,),
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    os.close(w)
+    with os.fdopen(r) as f:
+        n = f.readline().strip()
+    assert n.isdigit(), "Xvfb didn't start"
     yield f":{n}"
     x.kill()
+    x.wait(10)
 
 
 def test_the_shell_is_her_screen(stack, tmp_path, display):

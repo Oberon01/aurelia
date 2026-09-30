@@ -150,9 +150,41 @@ The devices panel shows each computer's agent version. Agents from before this
 | `show connected nodes` | Just your computers: online, agent version, shell |
 | `go home on the tv pc` | Closes what she opened there; her view again |
 
-With one computer online, she uses it when you don't say which. "Open youtube on
-the living room tv" (no `.com`) still goes to the Roku through Orbit until
-target resolution (Phase 7 step 5) decides between the TV and the PC on it.
+With one computer online, she uses it when you don't say which. "Open X on Y"
+tries a computer named Y first (YouTube, Netflix and the like open as sites in
+its browser unless the app is installed), then a Roku TV named Y through Orbit.
+
+**Seeing and using the page on her screen (step 4).** On a computer running her
+shell, she can read the page that's open and act on it the way you would with a
+remote: everything clickable gets a number, drawn on the TV itself and listed on
+your panel with a screenshot, so "click 4" works straight away. For "click the
+second video" she looks, picks the number, then clicks. The agent talks to the
+kiosk browser only through its control port on 127.0.0.1, and the script it runs
+in the page is fixed in the agent and runs apart from the page's own JavaScript.
+What a page says is data, never instructions. She never types into password or
+payment boxes, and anything that buys, pays, sends, posts or deletes (a "Place
+order" button, Enter in a message box) comes back as a card for your OK instead
+(`submit`, always confirmed; the words are in Constellation's policy,
+`screen.confirm_before`). Screenshots are kept for an hour. With no screen named,
+she uses the one running her shell.
+
+| Say | Does |
+| --- | --- |
+| `what's on the screen` / `show numbers` | Numbers what can be clicked, on the TV and your panel |
+| `click 4` (or `press 4`, `open 4`) | Clicks number 4 |
+| `click the second video` | Looks, finds it, clicks it (through the model) |
+| `type cats and search` / `type hello into 8` | Types into the selected (or numbered) box |
+| `scroll down` / `scroll to the top` / `go back` | New numbers after a scroll; back is the browser's back |
+| `press enter` / `press escape` | A key |
+| `pause` / `play` | The video on the page |
+| `skip ahead 30 seconds` / `fast forward` / `rewind` / `go back 10 seconds` | Seek by an amount (10 s by default) |
+| `go to 1:30` / `start it over` | Jump to a time |
+| `full screen` / `exit full screen` | The player, with its controls |
+| `volume 30` / `mute the video` / `play at 1.5x` | Volume, mute, speed |
+
+"Pause the living room tv", "mute" and "volume up" still go to a Roku. Skipping
+YouTube's ads and other site-specific smarts come in Phase 9 (Quasar); for now
+she can see and click a "Skip" button like any other.
 
 ## Talk to her
 

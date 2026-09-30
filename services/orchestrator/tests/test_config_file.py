@@ -18,3 +18,35 @@ def test_the_config_file_loads_and_every_fast_path_compiles():
     assert len(names) == len(set(names)), "two fast paths share a name"
     for p in cfg.fastpath.patterns:
         re.compile(p.match)
+
+
+@pytest.mark.skipif(not CONFIG.exists(), reason="the repo's config isn't in the test image")
+@pytest.mark.parametrize("said,tool,args", [
+    ("what's on the TV PC screen", "constellation.look", {"target": "TV PC"}),
+    ("click 3", "constellation.click", {"n": "3", "target": ""}),
+    ("press 4 on the tv pc", "constellation.click", {"n": "4", "target": "tv pc"}),
+    ("type cats and search", "constellation.type", {"text": "cats", "n": "", "enter": "true"}),
+    ("type hello mom into 8", "constellation.type", {"text": "hello mom", "n": "8"}),
+    ('type "Hello Mom"', "constellation.type", {"text": "Hello Mom"}),
+    ("type 2 diabetes symptoms", None, None),                      # not a command: the model decides
+    ("scroll to the top", "constellation.scroll", {"direction": "to the top", "target": ""}),
+    ("go back", "constellation.back", {"target": ""}),
+    ("go back home on the TV PC", "constellation.home", {"target": "TV PC"}),
+    ("go back 10 seconds", "constellation.media", {"action": "back", "amount": "10 seconds", "target": ""}),
+    ("skip ahead 30 seconds", "constellation.media", {"action": "forward", "amount": "30 seconds", "target": ""}),
+    ("go to 1:30", "constellation.media", {"action": "seek", "amount": "1:30", "target": ""}),
+    ("pause", "constellation.media", {"action": "pause", "target": ""}),
+    ("full screen on the tv pc", "constellation.media", {"action": "fullscreen", "target": "tv pc"}),
+    ("pause the living room tv", "orbit.tv_remote", {"name": "living room tv", "keys": "pause"}),   # Roku keeps its own
+    ("mute", "orbit.tv_mute", {"name": "", "muted": "true"}),
+    ("volume up", "orbit.tv_remote", {"name": "", "keys": "volume_up", "repeat": "3"}),
+])
+def test_screen_phrases_reach_the_right_tool(said, tool, args):
+    from app import fastpath
+    from app.config import RuntimeConfig
+    cfg = RuntimeConfig.model_validate(yaml.safe_load(CONFIG.read_text()))
+    m = fastpath.match(said, cfg.fastpath.patterns)
+    if tool is None:
+        assert m is None or not m.pattern.tool.startswith("constellation.")
+        return
+    assert m and m.pattern.tool == tool and m.args == args

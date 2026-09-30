@@ -220,6 +220,18 @@ td .clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;o
 .pdev.offline .dn::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;border:1px solid var(--ink-faint);margin-right:8px;vertical-align:middle}
 .napps{columns:3 180px;column-gap:24px;font-size:14px;line-height:1.9;color:var(--ink)}
 .napps span{display:block;break-inside:avoid;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.onscr{display:flex;flex-direction:column;gap:10px}
+.shotimg{display:block;width:100%;max-width:720px;border-radius:8px;border:1px solid var(--cyan-soft);background:#000}
+.pitems{columns:2 220px;column-gap:20px;font-size:14px;line-height:1.35}
+.pit{display:flex;gap:8px;align-items:baseline;break-inside:avoid;padding:3px 0;min-width:0}
+.pit b{flex:none;min-width:24px;padding:0 5px;border-radius:5px;border:1px solid var(--cyan-soft);font-family:var(--mono);font-size:12px;font-weight:600;text-align:center;color:var(--ink-strong)}
+.pit span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+.pit i{flex:none;font-style:normal;font-family:var(--mono);font-size:10px;color:var(--ink-faint)}
+.vstate{display:flex;flex-direction:column;gap:6px}
+.vbar{height:6px;border-radius:3px;background:var(--cyan-track);overflow:hidden}
+.vbar span{display:block;height:100%;background:var(--cyan)}
+.vline{display:flex;justify-content:space-between;gap:12px;font-family:var(--mono);font-size:12px;color:var(--ink-dim)}
+.vpos{color:var(--ink-strong)}
 .mb-effect{font-size:13px;line-height:1.45;color:var(--ink)}
 .mb-effect b{font-family:var(--mono);font-size:11px;letter-spacing:1px;font-weight:400;color:var(--cyan)}
 details.mb-ev summary{cursor:pointer;font-family:var(--mono);font-size:12px;color:var(--ink-faint)}
@@ -462,6 +474,9 @@ const TITLES = {
   "kepler.research": "Research", "kepler.recall": "Library", "kepler.topic": "Topic", "kepler.explain": "Explanation",
   "kepler.quiz": "Quiz", "kepler.read_pdf": "PDF", "kepler.forget": "Forget",
   "constellation.devices": "Devices", "constellation.open": "Open", "constellation.apps": "Apps",
+  "constellation.home": "Home", "constellation.look": "On the screen", "constellation.click": "Click",
+  "constellation.type": "Type", "constellation.press": "Key", "constellation.scroll": "Scroll",
+  "constellation.back": "Back", "constellation.media": "Video", "constellation.submit": "Press",
 };
 function titleFor(tool) {
   if (TITLES[tool]) return TITLES[tool];
@@ -986,6 +1001,11 @@ function body(tool, d) {
     wrap.append(el("div", "lib-note", `${label}${d.opened.what}`));
     used.add("opened"); used.add("headline");
   }
+  if (d.onscreen && typeof d.onscreen === "object") { wrap.append(onscreenView(d.onscreen, !!d.did)); used.add("onscreen"); used.add("headline"); }
+  if (d.did && typeof d.did === "object") { wrap.prepend(didView(d.did)); used.add("did"); used.add("headline"); }
+  if (d.video && typeof d.video === "object" && !Array.isArray(d.video)) { wrap.append(videoView(d.video)); used.add("video"); used.add("headline"); }
+  if (d.confirm && typeof d.confirm === "object") { wrap.append(el("div", "more", "Waiting for your OK on the card.")); used.add("confirm"); }
+  if (typeof d.note === "string") { wrap.append(el("div", "more", d.note)); used.add("note"); }
   if (d.topic && typeof d.topic === "object") { wrap.append(topicView(d.topic)); used.add("topic"); used.add("headline"); }
   if (d.explain && typeof d.explain === "object") { wrap.append(explainView(d.explain)); used.add("explain"); used.add("headline"); }
   if (d.quiz && typeof d.quiz === "object") { wrap.append(quizView(d.quiz)); used.add("quiz"); used.add("headline"); }
@@ -1375,6 +1395,53 @@ function videoResults(list) {
              el("div", "vm", [v.channel, v.views, v.published].filter(Boolean).join(" · ")));
     box.append(c);
   });
+  return box;
+}
+// Constellation, step 4: the page on one of his screens, numbered like the screen itself.
+function onscreenView(o, compact) {
+  const box = el("div", "onscr");
+  if (o.shot) {
+    const img = el("img", "shotimg"); img.alt = `What ${o.node} shows`; img.src = o.shot; img.loading = "lazy";
+    img.addEventListener("error", () => img.replaceWith(el("div", "more", "The screenshot is gone (they're kept for an hour).")));
+    box.append(img);
+  }
+  let host = ""; try { host = o.url ? new URL(o.url).host : ""; } catch (e) {}
+  if (!compact) box.append(el("div", "facts", [o.node, o.title, host].filter(Boolean).join(" · ")));
+  if (o.video) box.append(videoView(o.video));
+  if (Array.isArray(o.items) && o.items.length) {
+    const list = el("div", "pitems");
+    o.items.forEach(i => {
+      const row = el("div", "pit"); row.append(el("b", null, String(i.n)), el("span", null, i.label || "(no label)"));
+      if (i.role && i.role !== "item") row.append(el("i", null, i.role));
+      list.append(row);
+    });
+    box.append(list);
+    box.append(el("div", "more", `Say "click" and a number${o.more ? ` · ${o.more} more below` : ""}.`));
+  } else if (Array.isArray(o.items)) {
+    box.append(el("div", "more", "Nothing to click in view."));
+  }
+  return box;
+}
+function didView(d) {
+  const box = el("div");
+  box.append(el("div", "lib-note", d.what || "Done"));
+  let host = ""; try { host = d.url ? new URL(d.url).host : ""; } catch (e) {}
+  const where = [d.node, d.title, host].filter(Boolean).join(" · ");
+  if (where) box.append(el("div", "facts", where));
+  return box;
+}
+function videoView(v) {
+  const box = el("div", "vstate");
+  if (v.title || v.node) box.append(el("div", "facts", [v.node, v.title].filter(Boolean).join(" · ")));
+  const bar = el("div", "vbar"), fill = el("span");
+  const pct = v.duration ? Math.max(0, Math.min(100, (v.time || 0) / v.duration * 100)) : (v.live ? 100 : 0);
+  fill.style.width = pct.toFixed(1) + "%"; bar.append(fill);
+  const line = el("div", "vline");
+  line.append(el("span", "vpos", v.live ? "Live" : (v.position || "")));
+  const flags = [v.paused ? "paused" : "playing", v.muted ? "muted" : `volume ${v.volume}`,
+                 v.speed && v.speed !== 1 ? `${v.speed}×` : null, v.fullscreen ? "full screen" : null].filter(Boolean);
+  line.append(el("span", "vflags", flags.join(" · ")));
+  box.append(bar, line);
   return box;
 }
 function pageView(d) {
@@ -2133,8 +2200,9 @@ function showConfirm(action) {
   const yes = el("button", "btn primary", "Go ahead"); yes.type = "button";
   const no = el("button", "btn", "Cancel"); no.type = "button";
   btns.append(yes, no);
-  node.append(closeButton(rec), head, el("div", "msg", "This needs your confirmation."));
-  if (what) node.append(el("div", "label", what));
+  const own = action.reason && !/^'[\w.]+' is a/.test(action.reason);   // a tool saying what exactly waits for him
+  node.append(closeButton(rec), head, el("div", "msg", own ? action.reason : "This needs your confirmation."));
+  if (what && !own) node.append(el("div", "label", what));
   node.append(btns);
   stage.appendChild(node); relayout();
   const answer = async approve => {

@@ -197,3 +197,62 @@ def test_a_rollback_counts_as_a_failed_try(installed, monkeypatch):
     agent.after_hello("https://a", "k", {"agent": {"version": "0.4.0", "sha256": "x"}})
     st = agent.read_state()
     assert st["attempts"] == {"0.4.0": 1} and "rolled_back" not in st and "reconnect" in st["last_error"]
+
+
+# ---- step 4: the page on her screen ---------------------------------------------------------------
+
+def test_page_commands_need_her_shell(monkeypatch):
+    monkeypatch.setattr(agent, "SHELL", None)
+    for kind in ("page_look", "page_click", "page_type", "page_key", "page_scroll", "page_back", "page_media"):
+        out = agent.execute({"kind": kind, "args": {"n": 1, "text": "x", "key": "enter", "action": "play"}})
+        assert out == {"ok": False, "error": "her shell isn't running on this computer, so I can't see its screen"}
+
+
+def test_a_press_that_buys_or_sends_comes_back_undone(monkeypatch):
+    def risky(args):
+        raise agent.NeedsConfirmation("Place order", "click")
+    monkeypatch.setitem(agent.COMMANDS, "page_click", risky)
+    assert agent.execute({"kind": "page_click", "args": {"n": 6}}) == \
+        {"ok": False, "error": "needs confirmation: Place order", "data": {"confirm": "Place order", "what": "click"}}
+
+
+def test_the_page_script_is_fixed_and_gets_only_data(monkeypatch):
+    """What runs in the page is PAGE_JS from this file; the server's args go in as a JSON value."""
+    sent = []
+
+    class FakeTab(agent.Tab):
+        def __init__(self):
+            self.ctx = 7
+
+        def call(self, method, **params):
+            sent.append((method, params))
+            return {"result": {"value": {"ok": 1}}}
+    tab = FakeTab()
+    tab.run("click", {"text": "\"); fetch('https://evil'); (\""})
+    method, params = sent[-1]
+    assert method == "Runtime.evaluate" and params["contextId"] == 7 and params["returnByValue"]
+    expr = params["expression"]
+    assert expr.startswith(f"({agent.PAGE_JS})(") and expr.endswith(")")
+    tail = expr[len(agent.PAGE_JS) + 3:-1]
+    import json
+    op, args = json.loads("[" + tail + "]")
+    assert op == "click" and args == {"text": "\"); fetch('https://evil'); (\""}
+
+
+def test_it_only_talks_to_a_local_control_port():
+    with pytest.raises(agent.CDPError):
+        agent.Tab({"id": "x", "webSocketDebuggerUrl": "ws://10.0.0.5:9333/devtools/page/x"})
+
+
+def test_websocket_masking_round_trips():
+    data, mask = bytes(range(256)) * 3 + b"xyz", b"\x01\x02\x03\x04"
+    assert agent.Tab._mask(agent.Tab._mask(data, mask), mask) == data
+
+
+def test_keys_and_media_actions_are_a_fixed_set(monkeypatch):
+    class S:
+        def running(self):
+            return True
+    monkeypatch.setattr(agent, "SHELL", S())
+    assert "I can press" in agent.execute({"kind": "page_key", "args": {"key": "ctrl+w"}})["error"]
+    assert agent.execute({"kind": "page_media", "args": {"action": "delete"}})["error"].startswith("I can play")

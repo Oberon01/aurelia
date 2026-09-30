@@ -100,6 +100,114 @@ fastpath:
       tool: nebula.download
       args: { url: "{url}" }
       reply: "Downloading."
+    # Constellation, step 4: the page on a screen running her shell ("on the …" names it; with no
+    # name, the one screen running her shell). Clicking by description ("the second video") goes
+    # through the model, which looks first and picks the number.
+    - name: screen-look
+      match: '^(?:what(?:''s| is) on|look at|show me|read) (?:the |my )?(?:(?P<target>.+?)(?:''s)? )?screen$'
+      tool: constellation.look
+      args: { target: "{target}" }
+      reply: "Here's what's on it. Say \"click\" and a number."
+    - name: screen-numbers
+      match: '^(?:show|draw) (?:me )?(?:the )?numbers(?:\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?))?$'
+      tool: constellation.look
+      args: { target: "{target}" }
+      reply: "Numbers are up. Say \"click\" and one."
+    - name: screen-click
+      match: '^(?:click|select|tap|press|choose|pick|open)\s+(?:on\s+)?(?:number\s+|#\s*)?(?P<n>\d{1,3})(?:\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?))?$'
+      tool: constellation.click
+      args: { n: "{n}", target: "{target}" }
+      reply: "Clicked {n}."
+    - name: screen-type-enter
+      match: '^type\s+(?P<text>.+?)(?:\s+(?:in|into)\s+(?:box\s+|number\s+|#)?(?P<n>\d{1,3}))?\s+and\s+(?:press enter|hit enter|search|go)$'
+      tool: constellation.type
+      args: { text: "{text}", n: "{n}", enter: "true" }
+      reply: "Typed it and pressed Enter."
+    - name: screen-type-into
+      match: '^type\s+(?P<text>.+?)\s+(?:in|into)\s+(?:box\s+|number\s+|#)?(?P<n>\d{1,3})$'
+      tool: constellation.type
+      args: { text: "{text}", n: "{n}" }
+      reply: "Typed it."
+    - name: screen-type-quoted
+      match: '^type\s+["“''](?P<text>[^"”]+?)["”'']$'
+      tool: constellation.type
+      args: { text: "{text}" }
+      reply: "Typed it."
+    - name: screen-key
+      match: '^(?:press|hit)\s+(?P<key>enter|escape|esc|tab|space|backspace|up|down|left|right|page up|page down|home|end)(?:\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?))?$'
+      tool: constellation.press
+      args: { key: "{key}", target: "{target}" }
+      reply: "Pressed {key}."
+    - name: screen-scroll
+      match: '^scroll(?:\s+(?P<direction>down|up|to the top|to the bottom))?(?:\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?))?$'
+      tool: constellation.scroll
+      args: { direction: "{direction|down}", target: "{target}" }
+      reply: "Scrolled {direction|down}."
+    - name: screen-back
+      match: '^go back(?: (?:a|one) page| to the (?:last|previous) page)?(?:\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?))?$'
+      tool: constellation.back
+      args: { target: "{target}" }
+      reply: "Went back."
+    - name: video-play-pause
+      match: '^(?P<action>pause|play|resume|unpause)(?:\s+(?:it|the video|that|this))?(?:\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?))?$'
+      tool: constellation.media
+      args: { action: "{action}", target: "{target}" }
+      reply: "Done."
+    - name: video-forward
+      match: '^(?:fast[- ]?forward|skip (?:ahead|forward)|jump (?:ahead|forward)|go forward)(?:\s+(?:by\s+)?(?P<amount>\d+(?:[:.]\d+)*\s*(?:s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?)?))?(?:\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?))?$'
+      tool: constellation.media
+      args: { action: "forward", amount: "{amount}", target: "{target}" }
+      reply: "Skipped ahead."
+    - name: video-skip-by
+      match: '^skip\s+(?:by\s+)?(?P<amount>\d+(?:[:.]\d+)*\s*(?:s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?)?)(?:\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?))?$'
+      tool: constellation.media
+      args: { action: "forward", amount: "{amount}", target: "{target}" }
+      reply: "Skipped ahead {amount}."
+    - name: video-rewind
+      match: '^(?:rewind|skip back(?:wards?)?|jump back|back up)(?:\s+(?:by\s+)?(?P<amount>\d+(?:[:.]\d+)*\s*(?:s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?)?))?(?:\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?))?$'
+      tool: constellation.media
+      args: { action: "back", amount: "{amount}", target: "{target}" }
+      reply: "Went back."
+    - name: video-go-back-by
+      match: '^go back\s+(?:by\s+)?(?P<amount>\d+(?:[:.]\d+)*\s*(?:s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?)?)(?:\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?))?$'
+      tool: constellation.media
+      args: { action: "back", amount: "{amount}", target: "{target}" }
+      reply: "Went back {amount}."
+    - name: video-seek
+      match: '^(?:go|jump|skip|seek) to\s+(?P<amount>\d{1,2}:\d{2}(?::\d{2})?|\d+\s*(?:s|secs?|seconds?|m|mins?|minutes?))(?:\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?))?$'
+      tool: constellation.media
+      args: { action: "seek", amount: "{amount}", target: "{target}" }
+      reply: "Jumped to {amount}."
+    - name: video-restart
+      match: '^(?:start (?:it |the video )?over|restart (?:it|the video))(?:\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?))?$'
+      tool: constellation.media
+      args: { action: "restart", target: "{target}" }
+      reply: "From the start."
+    - name: video-fullscreen
+      match: '^(?:(?:go|make it|make the video|put it|put the video)\s+)?(?:in\s+)?full[- ]?screen(?:\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?))?$'
+      tool: constellation.media
+      args: { action: "fullscreen", target: "{target}" }
+      reply: "Full screen."
+    - name: video-exit-fullscreen
+      match: '^(?:exit|leave|get out of|close|turn off)\s+full[- ]?screen(?:\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?))?$'
+      tool: constellation.media
+      args: { action: "exit_fullscreen", target: "{target}" }
+      reply: "Out of full screen."
+    - name: video-mute
+      match: '^(?P<action>mute|unmute)\s+(?:(?:the video|it|the page)(?:\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?))?|on\s+(?:the\s+|my\s+)?(?P<target2>.+?))$'
+      tool: constellation.media
+      args: { action: "{action}", target: "{target}{target2}" }
+      reply: "Done."
+    - name: video-volume
+      match: '^(?:set (?:the )?volume to|volume(?: to)?)\s+(?P<level>\d{1,3})(?:\s*%|\s+percent)?(?:\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?))?$'
+      tool: constellation.media
+      args: { action: "volume", level: "{level}", target: "{target}" }
+      reply: "Volume {level}."
+    - name: video-speed
+      match: '^(?:(?:set )?(?:the )?(?:playback )?speed (?:to )?|play (?:it )?at )(?P<rate>\d(?:\.\d+)?)\s*(?:x|times)?(?: speed)?(?:\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?))?$'
+      tool: constellation.media
+      args: { action: "speed", rate: "{rate}", target: "{target}" }
+      reply: "Speed {rate}×."
     # Constellation: open something on one of his computers ("on the …" names the computer).
     - name: open-url-on
       match: '^open\s+(?P<url>(?:https?://)?[\w-]+(?:\.[\w-]+)+(?:/\S*)?)\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?)\.?$'
