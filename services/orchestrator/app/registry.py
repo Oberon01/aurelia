@@ -27,6 +27,9 @@ class ToolSpec(BaseModel):
     # Look-ups this action changes, e.g. orbit.lock → ["orbit.status"]. The display
     # refreshes those panels in place when the action finishes, if they're open.
     refreshes: list[str] = []
+    # "choice": the model decides per call between a panel and a brief answer (_display).
+    # "panel": always opens a panel (the result is something to look at, e.g. a library or a quiz).
+    display: str = "choice"
 
 
 class FunctionRegistration(BaseModel):
