@@ -40,7 +40,7 @@ async def learning(pool, user: str, question: str, limit: int = 6) -> list[str]:
 async def find_topic(pool, user: str, text: str, embedding: list[float] | None, join_at: float,
                      words_at: float = 0.34) -> dict[str, Any] | None:
     """The topic this belongs to, if any: by name first (asking about "azure landing zones" means that topic),
-    then by meaning, or by shared words without embeddings."""
+    then by meaning, then by shared words."""
     rows = await pool.fetch(f"SELECT {TOPIC_COLS} FROM kepler_topics WHERE user_id=$1", user)
     named = max(rows, key=lambda r: R.word_match(text, r["name"]), default=None)
     if named is not None and R.word_match(text, named["name"]) >= 0.6:
@@ -51,13 +51,39 @@ async def find_topic(pool, user: str, text: str, embedding: list[float] | None, 
             "WHERE user_id=$1 AND embedding IS NOT NULL ORDER BY embedding <=> $2::vector LIMIT 1", user, vec(embedding))
         if r and r["score"] >= join_at:
             return topic_view(r)
-        return None
-    best, score = None, 0.0
+    best, score = None, 0.0     # no embeddings, or not close enough in meaning: shared words
     for r in rows:
         s = max(R.word_match(text, r["name"]), R.word_match(text, r["summary"][:400]))
         if s > score:
             best, score = r, s
     return topic_view(best) if best is not None and score >= words_at else None
+
+
+async def topic_names(pool, user: str, limit: int = 40) -> list[str]:
+    """His topics' names, most recently grown first (so the writer can reuse one)."""
+    return [r["name"] for r in await pool.fetch(
+        "SELECT name FROM kepler_topics WHERE user_id=$1 ORDER BY updated_at DESC LIMIT $2", user, limit)]
+
+
+async def topic_for_research(pool, user: str, name: str, doc_embedding: list[float] | None,
+                             join_at: float) -> dict[str, Any] | None:
+    """After the answer is written: the topic it names (same name, or nearly), else the topic whose
+    summary is closest in meaning to the whole piece of research (document to document)."""
+    rows = await pool.fetch(f"SELECT {TOPIC_COLS} FROM kepler_topics WHERE user_id=$1", user)
+    key = " ".join(name.lower().split())
+    for r in rows:
+        if " ".join(r["name"].lower().split()) == key:
+            return topic_view(r)
+    named = max(rows, key=lambda r: R.word_match(name, r["name"]), default=None)
+    if named is not None and name and R.word_match(name, named["name"]) >= 0.6:
+        return topic_view(named)
+    if doc_embedding:
+        r = await pool.fetchrow(
+            f"SELECT {TOPIC_COLS}, 1 - (embedding <=> $2::vector) AS score FROM kepler_topics "
+            "WHERE user_id=$1 AND embedding IS NOT NULL ORDER BY embedding <=> $2::vector LIMIT 1", user, vec(doc_embedding))
+        if r and r["score"] >= join_at:
+            return topic_view(r)
+    return None
 
 
 async def topic_by_id(pool, user: str, topic_id: int) -> dict[str, Any] | None:

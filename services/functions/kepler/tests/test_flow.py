@@ -50,6 +50,10 @@ class Fake:
         if system.startswith("You plan"):
             return '{"queries": ["azure landing zones overview", "landing zone design areas"]}'
         if system.startswith("You are Kepler, Aurelia's researcher"):
+            if prompt.startswith("Question: How do management groups inherit"):
+                named = "Azure landing zones" if "His existing topics: " in prompt and "Azure landing zones" in prompt else "Management groups"
+                return json.dumps({"headline": "Policy flows down the hierarchy [1]", "answer": "Assignments at a group apply below it [1].",
+                                   "key_points": ["Inheritance [1]"], "disagreements": [], "topic": named})
             if prompt.startswith("Question: What are the design") or prompt.startswith("Question: Azure landing zone design"):
                 return json.dumps({"headline": "Landing zones cover identity, networking and governance [2]",
                                    "answer": "They are organized into design areas [2], adopted gradually [3]. A blog says [7].",
@@ -210,6 +214,15 @@ def test_without_embeddings_topics_match_by_words(env):
     assert b["topic"]["joined"] and b["topic"]["id"] == a["topic"]["id"]
     found = env["call"]("recall", {"query": "landing zone"})["library"]
     assert found["matched_by"] == "words" and len(found["research"]) == 2
+
+
+def test_research_joins_the_topic_the_answer_names(env):
+    """A follow-up that shares no words with the topic: the writer is shown his topics and names the one it belongs to."""
+    a = env["call"]("research", {"question": "What is an Azure landing zone?"})["research"]
+    b = env["call"]("research", {"question": "How do management groups inherit policy?"})["research"]
+    assert b["topic"]["joined"] and b["topic"]["id"] == a["topic"]["id"] and b["topic"]["research_count"] == 2
+    prompt = next(p for s, p in reversed(env["fake"].prompts) if s.startswith("You are Kepler, Aurelia's researcher"))
+    assert "His existing topics: Azure landing zones" in prompt
 
 
 def test_forgetting_updates_the_library_and_trilium(env):

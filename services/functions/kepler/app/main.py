@@ -221,10 +221,15 @@ async def research(ctx: TaskContext) -> dict:
     learning = await store.learning(pool, ctx.user, question)
     q_vec = (await o.embed([question]) or [None])[0]
     topic = await store.find_topic(pool, ctx.user, question, q_vec, float(ru["topic_join"]))
+    topics = [] if topic else await store.topic_names(pool, ctx.user)
     answer = R.read_answer(await o.llm(R.WRITE, R.write_prompt(question, sources, depth, learning,
-                                                               topic["summary"] if topic else None)),
+                                                               topic["summary"] if topic else None, topics)),
                            {s["n"] for s in sources})
     srcs = R.cited(answer, sources)
+    doc_vec = (await o.embed([" ".join([question, answer["headline"], answer["answer"][:1500]])]) or [None])[0]
+    if not topic and topics:
+        # The question alone didn't find it: try the topic the answer names, then the whole research's meaning.
+        topic = await store.topic_for_research(pool, ctx.user, answer["topic"], doc_vec, float(ru["topic_join"]))
 
     # 5. File it: into its topic (merging what's known), then the one-way Trilium note.
     await ctx.progress(want + 3, total, "Adding to your library")
@@ -236,7 +241,8 @@ async def research(ctx: TaskContext) -> dict:
         merged = {"summary": R.first_summary(answer), "whats_new": "", "disagreements": answer["disagreements"]}
         earlier = []
     name = topic["name"] if topic else (answer["topic"] or question[:60])
-    vecs = await o.embed([" ".join([question, answer["headline"], answer["answer"][:1500]]), f"{name}. {merged['summary']}"])
+    topic_vec = (await o.embed([f"{name}. {merged['summary']}"]) or [None])[0]
+    vecs = [doc_vec, topic_vec] if doc_vec or topic_vec else []
     rid, tid = await store.save(pool, ctx.user, topic, name, merged, question, answer, srcs, depth, ctx.task_id,
                                 vecs[0] if vecs else None, vecs[1] if vecs else None)
     note = await sync_note(pool, ctx.user, tid)
@@ -308,7 +314,7 @@ async def show_topic(ctx: TaskContext) -> dict:
 
 async def _grounding(ctx: TaskContext, subject: str) -> tuple[dict | None, list[str]]:
     vec = (await ctx.orch.embed([subject]) or [None])[0]
-    t = await store.find_topic(app.state.db, ctx.user, subject, vec, 0.7, 0.3)
+    t = await store.find_topic(app.state.db, ctx.user, subject, vec, 0.62, 0.3)
     points = [p for r in (await store.research_in(app.state.db, t["id"], 6) if t else []) for p in r["key_points"]]
     return t, points
 
