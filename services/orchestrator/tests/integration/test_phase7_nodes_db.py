@@ -133,3 +133,14 @@ def test_the_agent_and_installer_are_served_without_a_key(stack):
     assert inst.status_code == 200 and "systemctl --user" in inst.text
     for path in ("/node/agent.py", "/node/install-linux.sh"):
         assert httpx.get(f"{orch}/auth/check", headers={"X-Forwarded-Uri": path}).status_code == 200
+
+
+def test_constellation_answers_its_health_check(node):
+    """Chrysalis checks every registered function's /health after a deploy."""
+    fns = httpx.get(f"{node['orch']}/registry/functions").json()
+    fns = fns.get("functions", fns) if isinstance(fns, dict) else fns
+    for f in fns:
+        if f["name"] in ("constellation", "mnemosyne"):
+            r = httpx.get(f"{f['url'].rstrip('/')}/health")
+            assert r.status_code == 200 and r.json()["status"] == "ok", f["name"]
+    assert httpx.get(f"{node['orch']}/constellation/health").json()["online"] == 1

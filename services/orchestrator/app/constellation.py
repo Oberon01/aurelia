@@ -144,6 +144,18 @@ async def register_loop(app) -> None:
         await asyncio.sleep(max(3, ttl // 3))
 
 
+@router.get("/health")
+async def health(request: Request):
+    """What Chrysalis and Probe check, like any function's /health."""
+    try:
+        rows = await db.pool().fetch("SELECT id, kind FROM devices WHERE status='approved'")
+    except Exception as exc:
+        return {"status": "error", "database": f"unreachable ({exc.__class__.__name__})"}
+    ids = [r["id"] for r in rows if r["kind"] == "node"]
+    live = sum([1 for i in ids if await nodes.online(request.app, i)])
+    return {"status": "ok", "paired": len(rows), "computers": len(ids), "online": live}
+
+
 class Invoke(BaseModel):
     task_id: str
     args: dict = {}
