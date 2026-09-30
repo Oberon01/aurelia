@@ -117,6 +117,11 @@ fastpath:
       tool: constellation.open
       args: { what: "{what}", target: "{target}" }
       reply: "Opening {what} on the {target}."
+    - name: screen-home
+      match: '^(?:go (?:back )?home|back to (?:aurelia|you|home)|close (?:that|it|everything|the page|the video)|show (?:aurelia|yourself))\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?)\.?$'
+      tool: constellation.home
+      args: { target: "{target}" }
+      reply: "The {target} is back to me."
     - name: node-apps
       match: '^(?:what(?:''s| is) installed|what apps are(?: installed)?|which apps are(?: installed)?|list (?:the )?apps) on (?:the |my )?(?P<target>.+?)\??$'
       tool: constellation.apps

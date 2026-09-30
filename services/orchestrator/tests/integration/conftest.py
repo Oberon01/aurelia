@@ -67,7 +67,7 @@ def stack(tmp_path_factory):
         "  max_core: 2\n  recall_min_score: 0.1\n")
     (tmp / "gov" / "functions" / "orbit.yaml").write_text("function: orbit\ntools:\n  tv_app: {tier: act}\n")
     (tmp / "gov" / "functions" / "constellation.yaml").write_text(
-        "function: constellation\ntools:\n  devices: {tier: reference}\n  open: {tier: act}\n  apps: {tier: reference}\n")
+        "function: constellation\ntools:\n  devices: {tier: reference}\n  open: {tier: act}\n  apps: {tier: reference}\n  home: {tier: act}\n")
     (tmp / "aurelia.yaml").write_text(
         f"llm:\n  providers:\n    ollama: {{base_url: 'http://127.0.0.1:{fn_port}'}}\n"
         "memory:\n  maintenance_minutes: 60\n"

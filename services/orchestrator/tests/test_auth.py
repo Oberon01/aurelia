@@ -25,3 +25,11 @@ def test_what_a_device_says_about_itself_is_trimmed():
     info = auth.clean_info({"os": "Windows 11", "nested": {"x": 1}, "long": "y" * 999, **{f"k{i}": i for i in range(40)}})
     assert info["os"] == "Windows 11" and "nested" not in info and len(info["long"]) == 200 and len(info) <= 20
     assert auth.clean_info("nope") == {} and auth.clean_name("  a   b ", "x") == "a b" and auth.clean_name("", "x") == "x"
+
+
+def test_a_screen_shows_her_but_decides_nothing():
+    for path in ("/view", "/ws", "/ask", "/glance", "/tasks", "/mailbox", "/mailbox/3"):
+        assert auth.allowed("screen", path), path
+    for path in ("/mailbox/3/decide", "/mailbox/decide-batch", "/devices", "/devices/2/revoke", "/devices/2/rename",
+                 "/nodes/hello", "/nodes/commands"):
+        assert not auth.allowed("screen", path), path

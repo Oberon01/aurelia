@@ -7,6 +7,7 @@ enabled: true
 tools:
   devices:         { tier: reference }   # list what's paired; pairing and revoking happen only on the display
   apps:            { tier: reference }   # what's installed on one of his computers
+  home:            { tier: act }         # close what she opened on a screen; back to her view
   search_files:    { tier: reference }
   list_processes:  { tier: reference }
   browser_history: { tier: reference }
@@ -43,6 +44,9 @@ rules:
     browser_history: { enabled: true, retain_days: 90 }
   enrollment:
     requires_approval: true            # new nodes wait in the mailbox
+  updates:                             # Kentrell's standing decision (Sep 29): nodes keep their agent current
+    automatic: true                    # without asking; only released code (tested by Chrysalis) is served
+    max_attempts: 3                    # then it stops trying that version and a mailbox card tells him
   targeting:
     default_target: requesting_node
     quiet_hours: []                    # e.g. { node: bedroom-tv, from: "22:00", to: "07:00" }

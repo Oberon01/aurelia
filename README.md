@@ -114,8 +114,32 @@ curl -fsSL https://atlas-ai.<tailnet>.ts.net:8443/node/install-linux.sh | bash -
 ```
 
 It shows a code: approve it in the mailbox. A systemd user service keeps it
-running (`journalctl --user -u aurelia-node -f` for its log). Run the same line
-again to update the agent. Revoking the computer on the devices panel stops it.
+running through its guard (`journalctl --user -u aurelia-node -f` for its log).
+Revoking the computer on the devices panel stops it.
+
+**Her shell: the computer's screen is her.** Add `--shell` to the install line
+(it asks for sudo once):
+
+```bash
+curl -fsSL https://…:8443/node/install-linux.sh | bash -s -- https://…:8443 "TV PC" --shell
+```
+
+That adds an "Aurelia" login session and makes it the automatic login: no
+desktop, just her view full screen in a kiosk browser (Chromium is installed if
+there's no Chrome, Chromium or Edge). The screen signs itself in with a key its
+agent gets from Aurelia; that key shows her but can't decide mailbox items or
+touch devices, and it's revoked with its computer. Pages she opens there open
+inside it; "go home on the TV PC" closes them. GNOME stays on the login screen
+as a way back in; `--no-shell` returns to it at the next login.
+
+**Updates (your standing decision, Constellation's policy `updates`).** Nodes keep
+their agent current without asking: each check-in compares versions, and a newer
+one Aurelia serves (only ever from a release) is downloaded, checked against its
+checksum, compiled, and swapped in with the old one kept. The guard, which never
+updates itself, puts the old one back if the new one doesn't reconnect. After
+three failed tries it stops and a mailbox card tells you; **Retry** starts over.
+The devices panel shows each computer's agent version. Agents from before this
+(0.2.x) can't update themselves: run the install line once more on them.
 
 | Say | Does |
 | --- | --- |
@@ -123,6 +147,8 @@ again to update the agent. Revoking the computer on the devices panel stops it.
 | `open the vlc app on the living room tv` | Starts an installed app by name |
 | `what's installed on the living room tv` | The apps a person would launch there |
 | `show my devices` | Every paired device; computers show online or offline |
+| `show connected nodes` | Just your computers: online, agent version, shell |
+| `go home on the tv pc` | Closes what she opened there; her view again |
 
 With one computer online, she uses it when you don't say which. "Open youtube on
 the living room tv" (no `.com`) still goes to the Roku through Orbit until

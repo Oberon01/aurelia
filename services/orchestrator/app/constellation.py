@@ -45,6 +45,11 @@ TOOLS = [
             "url": {"type": "string"}, "app": {"type": "string", "description": "an installed app, by name"}}},
         cancellable=False),
     registry.ToolSpec(
+        name="home", description="Bring one of his screens back to you: close what you opened there (pages) and show "
+                                 "your view again. For 'go home', 'back to Aurelia', 'close that' on a computer running "
+                                 "your shell.",
+        input_schema={"type": "object", "properties": {"target": {"type": "string"}}}, cancellable=False),
+    registry.ToolSpec(
         name="apps", description="The apps installed on one of his computers (target: its name).",
         input_schema={"type": "object", "properties": {"target": {"type": "string"}}},
         cancellable=False, freshness_seconds=300),
@@ -53,9 +58,12 @@ TOOLS = [
 
 async def devices(app, user: str, args: dict) -> dict:
     items = await auth.listing()
+    current = nodes.agent_release()["version"]
     for d in items:
         if d["kind"] == "node" and d["status"] == "approved":
             d["online"] = await nodes.online(app, d["id"])
+            if d.get("agent_version") and d["agent_version"] != current:
+                d["outdated"] = current
     if args.get("computers") in (True, "true", "yes", 1):
         comps = [d for d in items if d["kind"] == "node" and d["status"] in ("approved", "pending")]
         on = sum(1 for d in comps if d.get("online"))
@@ -204,6 +212,14 @@ async def _roku(app, user: str, tv_name: str, app_name: str) -> dict | None:
     return {"headline": f"Opened on {tv}", "opened": {"node": tv, "what": data.get("app") or app_name, "kind": "tv"}}
 
 
+async def home(app, user: str, args: dict) -> dict:
+    node = await target(app, args.get("target"))
+    data = await _ask_node(app, node, "home", {})
+    n = int(data.get("closed") or 0)
+    return {"headline": f"{node['name']} is back to me", "opened": {"node": node["name"], "kind": "home",
+            "what": f"Closed {n} page{'s' if n != 1 else ''}" if n else "Nothing was open"}}
+
+
 async def apps(app, user: str, args: dict) -> dict:
     node = await target(app, args.get("target"))
     data = await _ask_node(app, node, "list_apps", {}, 30)
@@ -211,7 +227,7 @@ async def apps(app, user: str, args: dict) -> dict:
     return {"headline": f"{len(items)} apps on {node['name']}", "apps": {"node": node["name"], "items": items[:400]}}
 
 
-HANDLERS = {"devices": devices, "open": open_, "apps": apps}
+HANDLERS = {"devices": devices, "open": open_, "apps": apps, "home": home}
 
 
 async def register_loop(app) -> None:

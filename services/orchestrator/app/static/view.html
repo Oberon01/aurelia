@@ -382,6 +382,14 @@ button.gl:hover{color:var(--ink-strong)}
   .rail{flex-direction:row;overflow-x:auto;overflow-y:hidden}.rail-head{display:none}.qchip{width:170px}
 }
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+/* ---- screen mode: a computer running her shell (the TV). Nobody types here; it shows her. ---- */
+body.screen .said,body.screen .slot,body.screen #form,body.screen .mailchip,body.screen .conn{display:none!important}
+body.screen .top{justify-content:center}
+body.screen .brand{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;pointer-events:none}
+body.screen .mark{font-size:22px;letter-spacing:14px;color:var(--ink-dim)}
+body.screen .clock{font-family:var(--display);font-size:clamp(64px,11vw,168px);letter-spacing:2px;color:var(--ink-strong)}
+body.screen .clock .date{display:block!important;font-family:var(--mono);font-size:clamp(14px,1.6vw,22px);letter-spacing:3px;color:var(--ink-dim);text-align:center;margin-top:6px}
+body.screen .glance{font-size:15px}
 </style>
 </head>
 <body>
@@ -409,11 +417,15 @@ button.gl:hover{color:var(--ink-strong)}
 </div>
 
 <script>
+// Screen mode: /view?screen=<node> is a computer running her shell (signed in by its own agent).
+const SCREEN = new URLSearchParams(location.search).get("screen");
+if (SCREEN) document.body.classList.add("screen");
+
 // If this browser's key is revoked (or it was never paired), every call answers 401: go pair.
 const _fetch = window.fetch.bind(window);
 window.fetch = async (...args) => {
   const r = await _fetch(...args);
-  if (r.status === 401) location.replace("/pair?next=" + encodeURIComponent(location.pathname + location.search));
+  if (r.status === 401 && !SCREEN) location.replace("/pair?next=" + encodeURIComponent(location.pathname + location.search));
   return r;
 };
 
@@ -970,7 +982,8 @@ function body(tool, d) {
     wrap.append(list); used.add("apps"); used.add("headline");
   }
   if (d.opened && typeof d.opened === "object") {
-    wrap.append(el("div", "lib-note", `${d.opened.kind === "app" ? "App" : "Page"}: ${d.opened.what}`));
+    const label = { app: "App: ", page: "Page: ", tv: "On the TV: ", home: "" }[d.opened.kind] ?? "";
+    wrap.append(el("div", "lib-note", `${label}${d.opened.what}`));
     used.add("opened"); used.add("headline");
   }
   if (d.topic && typeof d.topic === "object") { wrap.append(topicView(d.topic)); used.add("topic"); used.add("headline"); }
@@ -1158,6 +1171,8 @@ function devicesView(list) {
     const name = el("span", "dn"); name.append(document.createTextNode(d.name));
     const bits = [KIND[d.kind] || d.kind, d.os, d.browser && d.kind === "browser" ? null : d.hostname,
                   d.status === "pending" ? `waiting · code ${d.code}` : d.status === "revoked" ? "revoked" :
+                  d.kind === "node" && d.agent_version ? `agent ${d.agent_version}${d.outdated ? ` (updating to ${d.outdated})` : ""}` : null,
+                  d.kind === "node" && d.shell === "on" ? "shell on" : null,
                   d.kind === "node" && d.online ? "online" :
                   d.last_seen ? `${d.kind === "node" ? "offline · " : ""}seen ${d.last_seen}` : "not seen yet"].filter(Boolean);
     const btns = el("span", "db");
@@ -1391,7 +1406,7 @@ function linkView(link) {
 // ---------------------------------------------------------------- mailbox
 // Deciding happens only here, from your click: there is no tool for it, so
 // Aurelia can show you her ideas but never approve them herself.
-const KIND_LABEL = { device: "Waiting to pair", about_you: "About you", automation: "Automations", criticality: "What matters most", retention: "Keep longer" };
+const KIND_LABEL = { device: "Waiting to pair", node_update: "Computers", about_you: "About you", automation: "Automations", criticality: "What matters most", retention: "Keep longer" };
 const CATEGORY_LABEL = { communication: "How to talk to you", mood: "Mood patterns", interests: "Interests", goals: "Goals",
   life: "What's going on", people: "People", learning: "What you know and are learning", rhythms: "Rhythms",
   work: "Work", preferences: "Preferences", general: "Other" };
@@ -1445,7 +1460,8 @@ function mailboxItem(item) {
   const c = el("div", "mb-item" + (item.urgent ? " urgent" : ""));
   const top = el("div", "mb-top");
   top.append(el("span", "mb-title", item.title),
-             el("span", "mb-conf", item.kind === "device" ? `asked ${item.age}` : `${Math.round(item.confidence * 100)}% sure · ${item.age}`));
+             el("span", "mb-conf", item.kind === "device" ? `asked ${item.age}` : item.kind === "node_update" ? item.age
+                                 : `${Math.round(item.confidence * 100)}% sure · ${item.age}`));
   c.append(top);
   if (item.kind === "device") {
     c.append(el("div", "mb-code", (item.proposal || {}).code || ""), el("div", "mb-sum", item.summary));
@@ -1508,7 +1524,9 @@ function mailboxItem(item) {
   const btns = el("div", "btns");
   const mk = (text, cls) => { const b = el("button", "btn " + (cls || ""), text); b.type = "button"; return b; };
   const approve = mk("Approve", "primary"), change = mk("Change"), later = mk("Not now", "quiet"), no = mk("Decline", "quiet");
-  btns.append(approve, change, ...(item.kind === "device" ? [] : [later]), no);   // a pairing request expires; no "not now"
+  if (item.kind === "node_update") { approve.textContent = "Retry"; no.textContent = "Leave it"; }
+  const noChange = item.kind === "node_update";
+  btns.append(approve, ...(noChange ? [] : [change]), ...(item.kind === "device" ? [] : [later]), no);   // a pairing request expires; no "not now"
   c.append(btns);
 
   const act = async (body, ok) => {
@@ -1775,6 +1793,7 @@ function flash(rec) {
 // ---------------------------------------------------------------- events
 function onEvent(ev) {
   const id = ev.task_id, d = ev.data || {};
+  if (SCREEN && String(d.screen || "") !== SCREEN) return;      // a screen shows only what's sent to it
   if (ev.type === "mailbox.changed") {               // the chip, and an open mailbox panel, stay current
     updateChip(d);
     refreshOpen(["parallax.mailbox"], new Set());
@@ -1891,6 +1910,10 @@ async function reloadIfUpdated() {
     location.reload();
   } catch (e) { /* try again on the next reconnect */ }
 }
+// Also check now and then, and when the screen comes back into view: a release can land while the
+// connection never dropped (it reconnected to the old copy during the swap), and nobody hard-refreshes a TV.
+setInterval(reloadIfUpdated, 5 * 60 * 1000);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") reloadIfUpdated(); });
 function reopenAfterReload() {
   let list = [];
   try { list = JSON.parse(sessionStorage.getItem("aurelia.reopen") || "[]"); sessionStorage.removeItem("aurelia.reopen"); } catch (e) {}
@@ -2072,7 +2095,7 @@ function tick() {
   const now = new Date();
   const c = document.getElementById("clock");
   c.replaceChildren(el("b", null, now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })),
-                    el("span", "date", "  ·  " + now.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })));
+                    el("span", "date", (SCREEN ? "" : "  ·  ") + now.toLocaleDateString([], { weekday: SCREEN ? "long" : "short", month: SCREEN ? "long" : "short", day: "numeric" })));
 }
 tick(); setInterval(tick, 10000);
 function say(text) {                            // a reply that isn't to something you typed (a confirmation)

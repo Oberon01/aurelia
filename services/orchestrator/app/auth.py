@@ -16,6 +16,9 @@ effect within KEY_CACHE_SECONDS everywhere, at once here.
 
 What each kind of key may reach (least privilege):
   browser   everything the display does (including mailbox decisions and devices)
+  screen    a node's own screen (its shell): the display, but it can't decide mailbox
+            items or touch devices. Made by the node itself, never paired by hand, and
+            revoked with its node.
   node      only the node API (/nodes/…) — a node can't approve, decide or revoke
   terminal  only /ask (scripts/ask.sh)
 """
@@ -42,14 +45,14 @@ log = logging.getLogger("aurelia.auth")
 router = APIRouter(tags=["auth"])
 
 COOKIE = "aurelia_key"
-KINDS = ("browser", "node", "terminal")
+KINDS = ("browser", "node", "terminal", "screen")
 CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"      # no 0/O, 1/I/L: read aloud or off a TV
 PENDING_MINUTES = 15                                    # a request not approved by then expires
 MAX_PENDING = 5                                         # at most this many waiting at once
 KEY_CACHE_SECONDS = 30
 SEEN_EVERY_SECONDS = 60
-PUBLIC = {"/pair", "/pair/request", "/pair/status", "/health", "/favicon.ico",
-          "/node/agent.py", "/node/install-linux.sh"}          # the node agent: code, no secrets
+PUBLIC = {"/pair", "/pair/request", "/pair/status", "/pair/screen", "/health", "/favicon.ico",
+          "/node/agent.py", "/node/guard.py", "/node/install-linux.sh"}   # the node agent: code, no secrets
 SCOPES = {"node": ("/nodes/",), "terminal": ("/ask",)}  # prefixes; browser keys aren't limited
 
 _cache: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -74,7 +77,12 @@ def new_key() -> str:
     return "aur_" + secrets.token_urlsafe(32)
 
 
+SCREEN_DENIED = re.compile(r"^/(?:devices(?:/.*)?|mailbox/\d+/decide|mailbox/decide-batch)$")
+
+
 def allowed(kind: str, path: str) -> bool:
+    if kind == "screen":                        # a TV in the living room shows her, but decides nothing
+        return not SCREEN_DENIED.match(path) and not path.startswith("/nodes/")
     prefixes = SCOPES.get(kind)
     if prefixes is None:
         return True
@@ -251,6 +259,40 @@ def set_cookie(response: Response, key: str) -> None:
     response.set_cookie(COOKIE, key, max_age=365 * 86400, httponly=True, secure=True, samesite="strict", path="/")
 
 
+SCREEN_LOGIN = "aurelia:screenlogin:{}"
+
+
+async def screen_login(redis, node: dict[str, Any]) -> str:
+    """For a node's shell: a one-time link (a minute) that signs its own kiosk browser in as its
+    screen. A new key each time; nobody types anything on the TV."""
+    row = await db.pool().fetchrow("SELECT id FROM devices WHERE kind='screen' AND status='approved' "
+                                   "AND info->>'node_id' = $1", str(node["id"]))
+    screen_id = row["id"] if row else await db.pool().fetchval(
+        "INSERT INTO devices (kind, name, status, approved_at, info) VALUES ('screen', $1, 'approved', now(), $2::jsonb) "
+        "RETURNING id", clean_name(f"{node['name']} screen", "Screen"), json.dumps({"node_id": str(node["id"])}))
+    token = secrets.token_urlsafe(24)
+    await redis.set(SCREEN_LOGIN.format(digest(token)), json.dumps({"screen": screen_id, "node": node["id"]}), ex=60)
+    return f"/pair/screen?t={token}"
+
+
+@router.get("/pair/screen", include_in_schema=False)
+async def pair_screen(t: str, request: Request):
+    raw = await request.app.state.redis.getdel(SCREEN_LOGIN.format(digest(t or "")))
+    if not raw:
+        return HTMLResponse("<!doctype html><title>Aurelia</title><p>That sign-in link was already used or expired.</p>",
+                            status_code=404)
+    got = json.loads(raw)
+    key = new_key()
+    ok = await db.pool().fetchval("UPDATE devices SET key_hash=$2, key_issued_at=now(), last_seen=now() "
+                                  "WHERE id=$1 AND status='approved' RETURNING id", got["screen"], digest(key))
+    if not ok:
+        return HTMLResponse("<!doctype html><title>Aurelia</title><p>This screen isn't allowed anymore.</p>", status_code=403)
+    to = f"/view?screen={got['node']}"
+    out = HTMLResponse(f'<!doctype html><meta http-equiv="refresh" content="0;url={to}"><title>Aurelia</title>')
+    set_cookie(out, key)
+    return out
+
+
 @router.get("/pair", include_in_schema=False)
 async def pair_page():
     return HTMLResponse((Path(__file__).parent / "static" / "pair.html").read_text(encoding="utf-8"),
@@ -287,6 +329,12 @@ async def revoke(dev_id: int) -> dict[str, Any]:
         raise HTTPException(404, "No such device, or it's already revoked.")
     if row["key_hash"]:
         _cache.pop(row["key_hash"], None)
+    screens = await db.pool().fetch(                                   # its screen goes with it
+        "UPDATE devices SET status='revoked', revoked_at=now() WHERE kind='screen' AND status='approved' "
+        "AND info->>'node_id' = $1 RETURNING key_hash", str(dev_id))
+    for s_ in screens:
+        if s_["key_hash"]:
+            _cache.pop(s_["key_hash"], None)
     log.info("device %s (%s) revoked", row["id"], row["name"])
     return {"id": row["id"], "name": row["name"], "status": "revoked"}
 
@@ -303,7 +351,8 @@ def _ago(ts: datetime | None) -> str | None:
 async def listing(current: int | None = None) -> list[dict[str, Any]]:
     await expire_old()
     rows = await db.pool().fetch(
-        "SELECT * FROM devices WHERE status IN ('approved','pending') OR revoked_at > now() - interval '7 days' "
+        "SELECT * FROM devices WHERE kind <> 'screen' AND (status IN ('approved','pending') "
+        "OR revoked_at > now() - interval '7 days') "
         "ORDER BY status='approved' DESC, last_seen DESC NULLS LAST, requested_at DESC")
     out = []
     for r in rows:
@@ -311,6 +360,7 @@ async def listing(current: int | None = None) -> list[dict[str, Any]]:
         out.append({"id": r["id"], "kind": r["kind"], "name": r["name"], "status": r["status"],
                     "os": " ".join(str(info[k]) for k in ("os", "os_version") if info.get(k)) or None,
                     "browser": info.get("browser"), "hostname": info.get("hostname"),
+                    "agent_version": info.get("agent_version"), "shell": info.get("shell"),
                     "code": r["pair_code"] if r["status"] == "pending" else None,
                     "last_seen": _ago(r["last_seen"]), "paired": _ago(r["approved_at"]),
                     "this_device": r["id"] == current})

@@ -5,6 +5,10 @@ A node never opens a port. It calls out, over the tailnet, with its own key:
   POST /nodes/hello                  what it is (OS, version, screens, what it can do)
   GET  /nodes/commands?wait=25       waits for work (long poll); this is also its heartbeat
   POST /nodes/commands/{id}/result   how a command went
+  POST /nodes/screen                 a one-time sign-in link for its own shell (kiosk browser)
+  POST /nodes/update-failed          its agent couldn't update after max_attempts tries
+Each hello answers with the agent version Aurelia serves: nodes update themselves
+(Kentrell's standing decision, in Constellation's policy: updates.automatic).
 Commands are queued per node in Redis. A node is online while it keeps polling
 (offline_after_seconds, from Constellation's policy).
 
@@ -15,8 +19,10 @@ Serving the agent itself (/node/agent.py, /node/install-linux.sh) needs no key: 
 code, no secrets, and a machine can't have a key before it pairs.
 """
 import asyncio
+import hashlib
 import json
 import logging
+import re
 import time
 import uuid
 from pathlib import Path
@@ -34,9 +40,35 @@ router = APIRouter(tags=["nodes"])
 QUEUE = "aurelia:node:{}:commands"
 ONLINE = "aurelia:node:{}:online"
 RESULT = "aurelia:nodecmd:{}:result"
+RETRY = "aurelia:node:{}:retry_update"
 COMMAND_TTL = 120                     # a command nobody picked up in 2 minutes is dropped, never run late
 DEFAULT_OFFLINE_AFTER = 45
 AGENT_DIR = Path(__file__).resolve().parent / "node_agent"
+
+
+def policy_rules(app) -> dict:
+    policy = app.state.governance.functions.get("constellation")
+    return (policy.rules if policy else None) or {}
+
+
+def update_rules(app) -> dict:
+    u = policy_rules(app).get("updates") or {}
+    return {"automatic": bool(u.get("automatic", True)), "max_attempts": int(u.get("max_attempts", 3))}
+
+
+_release: tuple[float, dict] = (0.0, {})
+
+
+def agent_release() -> dict:
+    """The agent Aurelia serves right now: its version and checksum (cached until the file changes)."""
+    global _release
+    path = AGENT_DIR / "aurelia_node.py"
+    mtime = path.stat().st_mtime
+    if _release[0] != mtime:
+        data = path.read_bytes()
+        m = re.search(rb'^VERSION = "([^"]+)"', data, re.M)
+        _release = (mtime, {"version": m.group(1).decode() if m else "?", "sha256": hashlib.sha256(data).hexdigest()})
+    return _release[1]
 
 
 def offline_after(app) -> int:
@@ -65,8 +97,48 @@ async def hello(body: Hello, request: Request):
     await db.pool().execute("UPDATE devices SET info = info || $2::jsonb, last_seen=now() WHERE id=$1",
                             dev["id"], json.dumps(info))
     await request.app.state.redis.set(ONLINE.format(dev["id"]), "1", ex=offline_after(request.app))
-    log.info("node %s (%s) says hello: %s", dev["id"], dev["name"], info.get("os"))
-    return {"id": dev["id"], "name": dev["name"], "poll_seconds": max(5, offline_after(request.app) - 20)}
+    log.info("node %s (%s) says hello: %s, agent %s", dev["id"], dev["name"], info.get("os"), info.get("agent_version"))
+    out = {"id": dev["id"], "name": dev["name"], "poll_seconds": max(5, offline_after(request.app) - 20)}
+    rules = update_rules(request.app)
+    if rules["automatic"]:
+        out["agent"] = {**agent_release(), "max_attempts": rules["max_attempts"]}
+        if await request.app.state.redis.getdel(RETRY.format(dev["id"])):
+            out["retry_update"] = True                  # he pressed Retry on the mailbox card
+    return out
+
+
+@router.post("/nodes/screen")
+async def screen(request: Request):
+    """A one-time link that signs this node's own kiosk browser in as its screen."""
+    dev = await node_from(request)
+    return {"login": await auth.screen_login(request.app.state.redis, dev)}
+
+
+class UpdateFailed(BaseModel):
+    version: str
+    error: str = ""
+    attempts: int = 0
+
+
+@router.post("/nodes/update-failed")
+async def update_failed(body: UpdateFailed, request: Request):
+    """After max_attempts, the node stops trying that version and he hears about it once."""
+    from . import mailbox
+    dev = await node_from(request)
+    running = (await db.pool().fetchval("SELECT info->>'agent_version' FROM devices WHERE id=$1", dev["id"])) or "its current version"
+    version, error = body.version[:40], " ".join(body.error.split())[:300] or "no reason given"
+    item = await db.pool().fetchval(
+        "INSERT INTO mailbox_items (kind, fingerprint, source, title, summary, proposal, evidence, strength, confidence, "
+        "effect, urgent) SELECT 'node_update', $1, 'constellation', $2, $3, $4::jsonb, $5::jsonb, 1, 1, $6, true "
+        "WHERE NOT EXISTS (SELECT 1 FROM mailbox_items WHERE fingerprint=$1 AND status IN ('waiting','deferred')) RETURNING id",
+        f"node_update:{dev['id']}:{version}", f"{dev['name']} couldn't update its agent",
+        f"It tried version {version} {body.attempts or 'several'} times and stopped. It's still working on {running}.",
+        json.dumps({"device_id": dev["id"], "version": version}), json.dumps([f"Last error: {error}"]),
+        "It tries the update again at its next check-in (within a minute).")
+    if item:
+        log.warning("node %s gave up updating to %s: %s", dev["id"], version, error)
+        await mailbox.notify(request.app.state.redis)
+    return {"ok": True}
 
 
 @router.get("/nodes/commands")
@@ -129,6 +201,12 @@ async def send(app, node_id: int, kind: str, args: dict[str, Any], timeout: floa
 @router.get("/node/agent.py", include_in_schema=False)
 async def agent_file():
     return PlainTextResponse((AGENT_DIR / "aurelia_node.py").read_text(encoding="utf-8"),
+                             headers={"Cache-Control": "no-store"})
+
+
+@router.get("/node/guard.py", include_in_schema=False)
+async def guard_file():
+    return PlainTextResponse((AGENT_DIR / "aurelia_node_guard.py").read_text(encoding="utf-8"),
                              headers={"Cache-Control": "no-store"})
 
 

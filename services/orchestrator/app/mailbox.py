@@ -68,6 +68,13 @@ class Batch(BaseModel):
 def validate(kind: str, proposal: dict[str, Any]) -> dict[str, Any]:
     """The proposal as it will be applied, or HTTP 400 in plain words."""
     p = dict(proposal)
+    if kind == "node_update":                # a computer's agent couldn't update itself (nodes.py)
+        try:
+            p["device_id"] = int(p.get("device_id"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "The card doesn't say which computer.")
+        p["version"] = str(p.get("version") or "")[:40]
+        return p
     if kind == "device":                     # a device asking to pair (auth.py)
         try:
             p["device_id"] = int(p.get("device_id"))
@@ -117,6 +124,11 @@ async def apply(conn, item_id: int, kind: str, p: dict[str, Any]) -> str:
     if kind == "device":
         from . import auth
         return await auth.approve(conn, p["device_id"], p.get("name") or None)
+    if kind == "node_update":
+        from . import nodes
+        from .main import app as _app
+        await _app.state.redis.set(nodes.RETRY.format(p["device_id"]), "1", ex=86400)
+        return "It will try the update again at its next check-in."
     if kind == "about_you":
         from . import profile
         user = "owner"
@@ -274,6 +286,7 @@ async def _decide(item_id: int, d: Decision, batch: bool = False) -> dict[str, A
         await pool.execute("UPDATE mailbox_items SET status='rejected', reason=$2, decided_at=now(), decided_by=$3, "
                            "updated_at=now() WHERE id=$1", item_id, (d.reason or "").strip() or None, d.user)
         done = ("Declined. That device isn't paired." if row["kind"] == "device" else
+                "Left as is. It keeps its current version until the next release." if row["kind"] == "node_update" else
                 "Declined. I won't suggest it again unless things change a lot.")
         return {"id": item_id, "status": "rejected", "done": done}
     if d.action == "defer":
