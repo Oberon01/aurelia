@@ -18,6 +18,8 @@ log = logging.getLogger("aurelia.config")
 class DisplayConfig(BaseModel):
     live_mode_threshold_seconds: float = 30
     action_panel_seconds: float = 12         # finished actions (lock, lights...) fade after this; look-ups stay
+    reply_panel_sentences: int = 3           # a reply this long (or longer than reply_panel_chars) opens as a panel
+    reply_panel_chars: int = 320
 
 
 class AmbientConfig(BaseModel):

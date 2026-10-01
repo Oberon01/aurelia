@@ -443,6 +443,9 @@ body.ambient.busy .brand{opacity:0}                        /* panels up: the clo
 body.screen .panel.present{font-size:118%}
 body.screen .panel.present .headline{font-size:clamp(26px,2.6vw,40px)}
 .sentfrom{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--ink-faint);text-transform:uppercase}
+.answer{display:flex;flex-direction:column;gap:10px;font-size:16px;line-height:1.55;color:var(--ink);overflow:auto}
+.answer p{margin:0}.answer ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+body.screen .answer{font-size:22px}
 .note-text{font-size:20px;line-height:1.45;color:var(--ink-strong);white-space:pre-wrap;overflow-wrap:anywhere}
 </style>
 </head>
@@ -524,7 +527,7 @@ if (!session || !/^[A-Za-z0-9_-]{8,64}$/.test(session)) {
 let focused = null;                             // the panel you clicked: what you type is about it
 const cmd = document.getElementById("cmd");
 
-const TITLES = {
+const TITLES = { "aurelia.reply": "Aurelia",
   "orbit.status": "Home", "orbit.lock": "Lock", "orbit.unlock": "Unlock", "orbit.light": "Light",
   "orbit.thermostat": "Thermostat", "orbit.login": "SmartRent sign-in", "orbit.alias": "Nickname",
   "orbit.aliases": "Nicknames", "orbit.forget_alias": "Nickname", "orbit.tv_status": "TV",
@@ -1054,6 +1057,7 @@ function body(tool, d) {
   if (Array.isArray(d.videos)) { wrap.append(videoResults(d.videos)); ["videos", "query"].forEach(k => used.add(k)); }
   if (typeof d.text === "string" && (d.url || typeof d.pages === "number")) { wrap.append(pageView(d)); ["title", "url", "site", "words", "text", "truncated"].forEach(k => used.add(k)); }
   if (d.link && d.link.url) { wrap.append(linkView(d.link)); used.add("link"); }
+  if (typeof d.answer === "string") { wrap.append(answerView(d.answer, d.headline)); ["answer", "asked", "headline"].forEach(k => used.add(k)); }
   if (d.note && typeof d.note === "object") { wrap.append(noteView(d.note)); used.add("note"); used.add("headline"); }
   if (typeof d.saved_to === "string") { wrap.append(downloadView(d)); ["file", "size", "saved_to", "type", "quarantined"].forEach(k => used.add(k)); }
   if (Array.isArray(d.mailbox)) { wrap.append(mailboxView(d.mailbox)); used.add("mailbox"); used.add("counts"); }
@@ -1626,6 +1630,21 @@ function downloadView(d) {
   box.append(top, el("div", "facts", [d.size, d.type].filter(Boolean).join(" · ")), el("div", "facts", `On the server: ${d.saved_to}`));
   return box;
 }
+function answerView(text, headline) {             // her longer replies: paragraphs, and lists kept as lists
+  const box = el("div", "answer");
+  let body = String(text).trim();
+  if (headline && body.startsWith(headline)) body = body.slice(headline.length).trim();   // already the headline
+  body.split(/\n{2,}/).forEach(block => {
+    const lines = block.split("\n").map(l => l.trim()).filter(Boolean);
+    if (lines.length > 1 && lines.every(l => /^([-•*]|\d+[.)])\s+/.test(l))) {
+      const ul = el("ul");
+      lines.forEach(l => ul.append(el("li", null, l.replace(/^([-•*]|\d+[.)])\s+/, ""))));
+      box.append(ul);
+    } else lines.forEach(l => box.append(el("p", null, l)));
+  });
+  return box;
+}
+
 function noteView(n) {                             // something sent here: a note, a link, or both
   const box = el("div"); box.style.display = "flex"; box.style.flexDirection = "column"; box.style.gap = "12px";
   if (n.text) box.append(el("div", "note-text", n.text));
@@ -2365,7 +2384,8 @@ async function ask(text) {
     return;
   }
   if (!r.ok) { done(out.detail ? String(out.detail) : `Something went wrong (error ${r.status}).`); return; }
-  done(out.reply || "");
+  // A long answer opened as its own panel: the top line keeps just its first sentence.
+  done(out.reply_panel && out.reply_short ? `${out.reply_short} ↓` : (out.reply || ""));
   (out.needs_confirmation || []).forEach(showConfirm);
 }
 

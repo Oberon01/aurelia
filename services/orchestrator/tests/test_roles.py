@@ -71,3 +71,17 @@ def test_quiet_hours():
     assert not in_quiet("23:00-07:00", time(7, 0)) and not in_quiet("23:00-07:00", time(12, 0))
     assert in_quiet("13:00-14:00", time(13, 15)) and not in_quiet("13:00-14:00", time(14, 15))
     assert not in_quiet("", time(3, 0)) and not in_quiet("nonsense", time(3, 0))
+
+
+def test_long_replies():
+    from types import SimpleNamespace
+    from app.assistant import first_sentence, long_reply
+    cfg = SimpleNamespace(reply_panel_sentences=3, reply_panel_chars=320)
+    assert not long_reply("The door is locked.", cfg)
+    assert not long_reply("It's locked. The lights are off too.", cfg)
+    assert long_reply("One. Two. Three.", cfg)
+    assert long_reply("x" * 321, cfg)
+    assert long_reply("Steps:\n1) this\n2) that", cfg)
+    assert not long_reply("", cfg)
+    assert first_sentence("Get the 4070 Ti Super. It has 16 GB. More here.") == "Get the 4070 Ti Super."
+    assert first_sentence("word " * 60).endswith("…") and len(first_sentence("word " * 60)) <= 160

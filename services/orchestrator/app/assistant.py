@@ -85,6 +85,14 @@ async def ask(body: Ask, request: Request):
     else:
         outcome = await _run_llm(app, body, history, request_id)
 
+    if outcome["route"] == "llm" and not outcome.pop("_panel_opened", False) and long_reply(outcome["reply"], cfg.display):
+        try:                                       # too much for the top line: it opens as a panel to read
+            outcome["reply_panel"] = await _reply_panel(app, body, outcome["reply"])
+            outcome["reply_short"] = first_sentence(outcome["reply"])
+        except Exception:
+            log.exception("couldn't open the reply as a panel")
+    outcome.pop("_panel_opened", None)
+
     latency = int((time.monotonic() - started) * 1000)
     await db.pool().execute(
         "INSERT INTO ask_requests (id, session_id, user_id, text, route, reply, task_ids, latency_ms, screen) "
@@ -310,6 +318,8 @@ async def _run_tool_call(app, user: str, qualified: str | None, args: dict, out:
             return _data({"status": "error", "error": str(exc)}), True
     try:
         task_id = await launch(app, StartTask(tool=qualified, args=args, user=user, display=display, device=device))
+        if display == "panel" and qualified not in QUIET_TOOLS:
+            out["_panel_opened"] = True                # the turn already has a panel: the reply stays short
     except HTTPException as exc:
         if exc.status_code == 409:
             action = await _hold(app, qualified, args, user, _reason(exc))
@@ -328,6 +338,58 @@ async def _run_tool_call(app, user: str, qualified: str | None, args: dict, out:
                       "note": "Nothing was pressed. Tell the user what's waiting; they confirm on the display."}), False
     return _data({"status": result["status"], "partial": result["partial"],
                   "result": result["result"], "error": result["error"]}), result["status"] == "failed"
+
+
+# ---- long replies open as a panel --------------------------------------------------------------
+
+REPLY_TOOL = "aurelia.reply"
+QUIET_TOOLS = {"constellation.send"}           # tools whose panel isn't something to read
+_SENTENCE = __import__("re").compile(r"(?<=[.!?])[\"')\]]*\s+(?=[A-Z0-9\"'(])")
+
+
+_ABBREV = ("Dr.", "Mr.", "Mrs.", "Ms.", "St.", "vs.", "e.g.", "i.e.", "etc.", "approx.", "No.")
+
+
+def sentences(text: str) -> list[str]:
+    out: list[str] = []
+    for part in _SENTENCE.split(" ".join((text or "").split())):
+        if out and out[-1].endswith(_ABBREV):
+            out[-1] += " " + part                    # "Dr. Smith" is one sentence
+        elif part.strip():
+            out.append(part)
+    return out
+
+
+def long_reply(text: str, display_cfg) -> bool:
+    text = (text or "").strip()
+    return bool(text) and (len(sentences(text)) >= display_cfg.reply_panel_sentences
+                           or len(text) > display_cfg.reply_panel_chars or text.count("\n") >= 2)
+
+
+def first_sentence(text: str, limit: int = 160) -> str:
+    one = (sentences(text) or [text.strip()])[0]
+    return one if len(one) <= limit else one[:limit - 1].rsplit(" ", 1)[0] + "…"
+
+
+async def _reply_panel(app, body: Ask, text: str) -> str:
+    """Her whole answer as a panel on the display that asked: there to read, pin, or send on."""
+    from .events import PanelEvent, publish
+    task_id = str(uuid.uuid4())
+    args = {"asked": body.text[:200]}
+    data = {"headline": first_sentence(text), "answer": text, "asked": body.text[:200]}
+    await db.pool().execute(
+        "INSERT INTO task_runs (id, tool, args, trigger, user_id, tier, confirmed, device, status, result, "
+        "finished_at, duration_ms) VALUES ($1, $2, $3::jsonb, 'reply', $4, 'reference', false, $5, 'completed', "
+        "$6::jsonb, now(), 0)", uuid.UUID(task_id), REPLY_TOOL, json.dumps(args), body.user, body.device, json.dumps(data))
+    redis = app.state.redis
+    await publish(redis, PanelEvent(type="panel.open", task_id=task_id, tool=REPLY_TOOL, device=body.device, data={
+        "args": args, "user": body.user, "trigger": "reply", "tier": "said", "cancellable": False, "key": task_id,
+        "subtitle": "› " + body.text[:120]}))
+    await publish(redis, PanelEvent(type="panel.result", task_id=task_id, tool=REPLY_TOOL, device=body.device,
+                                    data={"status": "completed", "partial": False, **data}))
+    await publish(redis, PanelEvent(type="panel.close", task_id=task_id, tool=REPLY_TOOL, device=body.device,
+                                    data={"status": "completed", "has_result": True, "error": None}))
+    return task_id
 
 
 PANEL_TASK = "_panel_task"

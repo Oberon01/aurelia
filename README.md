@@ -337,6 +337,14 @@ fades when there's nothing to read, and a confirmation panel for anything that
 needs your go-ahead (unlock). Type into it like `ask.sh`: press `/`, type,
 Enter (Shift+Enter for a new line). Esc clears finished panels.
 
+**Long answers open as a panel.** When her reply runs past a couple of
+sentences (`display.reply_panel_sentences`, or `reply_panel_chars`), the whole
+answer opens as a panel on the display you asked from, and the top line keeps
+just its first sentence with an arrow. The panel stays like any look-up: pin
+it, send it to the TV, or ask about it ("summarize panel 2"). A turn that
+already opened a panel (search results, research) keeps its reply on the top
+line.
+
 **Each display keeps its own panels.** A panel opens only on the display that
 asked for it: what you ask on the phone stays on the phone, and the desk
 stays as it was. Panels nobody in particular asked for (a schedule, a request

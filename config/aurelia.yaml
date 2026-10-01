@@ -6,6 +6,10 @@ display:
   # Finished actions (lock, lights, TV...) fade after this many seconds; hovering
   # holds them. Look-ups (home status, releases) stay until you dismiss them.
   action_panel_seconds: 12
+  # A reply of this many sentences or more (or longer than reply_panel_chars) opens as a panel
+  # on the display that asked, so it stays to be read; the top line keeps just its first sentence.
+  reply_panel_sentences: 3
+  reply_panel_chars: 320
 
 # What a presentation display (the TV) shows when nothing's on it: a dim clock, the date, the
 # weather and anything worth a glance. Dark during quiet hours. Set latitude and longitude for
