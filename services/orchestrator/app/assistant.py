@@ -228,7 +228,13 @@ async def _run_llm(app, body: Ask, history: list[dict[str, Any]], request_id: st
     tools, by_api, functions = await _tool_defs(app, body.user)
     if body.screen and body.screen.panels:
         tools = tools + [PANEL_TOOL]
-    system = _system_prompt(app, functions, profile.core_prompt(await profile.core(body.user)))
+    from . import history as my_history
+    try:
+        about_me = await my_history.self_context(app)    # where I am on the roadmap, my latest releases
+    except Exception:
+        log.exception("couldn't read my own history for the prompt")
+        about_me = ""
+    system = _system_prompt(app, functions, profile.core_prompt(await profile.core(body.user)), about_me)
     if (extra := style.prompt(await style.current(app.state.redis, body.user))):
         system += "\n\n" + extra          # last, so the rest of the prompt stays cached
     # What's on screen, what earlier turns found, and what she knows about you that fits
@@ -539,7 +545,7 @@ def _with_display(schema: dict) -> dict:
     return s
 
 
-def _system_prompt(app, functions: list[dict], core: str = "") -> str:
+def _system_prompt(app, functions: list[dict], core: str = "", about_me: str = "") -> str:
     identity_path = Path(settings.config_path).parent / "identity.md"
     try:
         identity = identity_path.read_text().strip()
@@ -554,6 +560,8 @@ def _system_prompt(app, functions: list[dict], core: str = "") -> str:
         identity += "\n\nYour functions right now (online and permitted for this user):\n" + "\n".join(lines)
     else:
         identity += "\n\nNo functions are online right now, so you can talk but not act."
+    if about_me:
+        identity += "\n\n" + about_me
     # The core profile (Mnemosyne). It changes rarely, so the prompt stays cached.
     if core:
         identity += "\n\n" + core

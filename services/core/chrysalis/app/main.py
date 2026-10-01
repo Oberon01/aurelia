@@ -30,7 +30,9 @@ REGISTRATION = {
     "tools": [
         {"name": "status", "description": "Current version, whether an update is in progress, and dry-run mode.",
          "input_schema": {"type": "object", "properties": {}}},
-        {"name": "releases", "description": "Recent releases with what changed and how each went.",
+        {"name": "releases", "description": "Recent releases and how each deploy went (live, rolled back, held). "
+                                            "For what a release does, why, and what it lets you do, use "
+                                            "Mnemosyne's history.",
          "input_schema": {"type": "object", "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 20}}}},
         {"name": "rollback", "description": "Roll Aurelia back to the previous good release.",
          "input_schema": {"type": "object", "properties": {}}},
@@ -104,9 +106,13 @@ async def check_now():
 
 
 def _brief(r: dict[str, Any]) -> dict[str, Any]:
+    import json
+    notes = r.get("notes")
+    notes = json.loads(notes) if isinstance(notes, str) else notes
     return {"id": r["id"], "sha": r["sha"][:8], "message": r.get("message"), "author": r.get("author"),
             "services": r.get("services"), "status": r["status"], "detail": r.get("detail"),
-            "started_at": str(r.get("started_at")), "finished_at": str(r.get("finished_at"))}
+            "started_at": str(r.get("started_at")), "finished_at": str(r.get("finished_at")),
+            **({"purpose": notes.get("purpose"), "summary": notes.get("summary")} if isinstance(notes, dict) else {})}
 
 
 # ---- function contract (same shape as every Aurelia function) ----------------------

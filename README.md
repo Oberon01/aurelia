@@ -691,6 +691,30 @@ protected: Aurelia can't change it. Run a round now with
 `POST /mnemosyne/record` (`?quiet_minutes=0` records everything, even the
 conversation you're in). Code: `services/orchestrator/app/mnemosyne.py`.
 
+### Her own history and roadmap
+
+Every release changes her, so she keeps track of how. Chrysalis records each
+commit's **whole message** (subject and body) with the release, and fills in
+earlier releases from git when it starts. When a release goes live, she writes
+her own notes on it in the first person: what it did, why (the problem it
+solves), what she can do now or does better, which parts of her it touched, the
+roadmap phase, and anything you have to do (commit a governance file, run a
+command).
+
+- **"What did the last update do?"**, "what's new this week?", "what can you do
+  now that you couldn't before?", "what have we built in Kepler?": Mnemosyne's
+  `history` (one release in depth, or filtered by function or date). Notes for
+  older releases are written the first time she's asked.
+- **"What's next?"**, "where are we?", "when do you get voice?": Mnemosyne's
+  `roadmap`, read from `config/roadmap.md` (the phases, what each builds, when
+  it's done, and for the phase in progress what's built and what's left). It's
+  written in her voice. Update it with the release that changes a phase.
+- Every request carries a few lines about her own development: the phase she's
+  in, what's next, and her latest releases. Suggestions to improve herself are
+  grounded in what's built, what's planned and what's gone wrong.
+- Commit messages are what she understands a release from, so the body matters:
+  say what changed, why, and what it lets her do.
+
 ## Run it
 
 ```bash

@@ -75,11 +75,17 @@ class FakeVerifier:
 class MemoryStore:
     def __init__(self): self.rows: list[dict] = []
 
-    async def create(self, sha, prev, author, message, paths, plan, status):
+    async def create(self, sha, prev, author, message, paths, plan, status, commits=None):
         self.rows.append({"id": len(self.rows) + 1, "sha": sha, "prev_sha": prev, "author": author,
                           "message": message, "services": plan.get("services", []), "status": status,
-                          "detail": None, "plan": plan})
+                          "detail": None, "plan": plan, "commits": commits or []})
         return len(self.rows)
+
+    async def missing_commits(self, limit=40):
+        return [r for r in reversed(self.rows) if not r["commits"] and r["prev_sha"]][:limit]
+
+    async def set_commits(self, rid, commits):
+        self.rows[rid - 1]["commits"] = commits
 
     async def update(self, rid, status, detail=None, finished=False):
         self.rows[rid - 1]["status"] = status
@@ -357,3 +363,24 @@ def test_rollback_and_held_releases_are_reported(world):
     world["commit"]("config/aurelia.yaml", "llm: {max_tool_rounds: 2}\n", "aurelia idea", author="aurelia@local")
     run(world, ChrysalisConfig(dry_run=False, hold_authors=["aurelia@local"], verify=VerifyConfig(watch_seconds=0.2)))
     assert [s["outcome"] for s in rec.sent] == ["held"]
+
+
+def test_whole_commit_messages_are_kept(world):
+    """What a release does and why lives in the commit body: every commit's whole message is kept."""
+    world["commit"]("services/functions/probe/main.py", "v2\n",
+                    "Probe: say hello\n\nProbe answers 'hello' so she can check herself.\nLine two.")
+    sha = world["commit"]("services/functions/probe/main.py", "v3\n", "Probe: louder\n\nNow in capitals.")
+    assert run(world).startswith("live")
+    row = world["store"].rows[-1]
+    assert row["sha"] == sha and row["message"] == "Probe: louder"
+    assert [c["subject"] for c in row["commits"]] == ["Probe: louder", "Probe: say hello"]
+    assert row["commits"][1]["body"] == "Probe answers 'hello' so she can check herself.\nLine two."
+
+
+def test_earlier_releases_get_their_messages_filled_in(world):
+    sha = world["commit"]("services/functions/probe/main.py", "v2\n", "Probe v2\n\nWhy it matters.")
+    assert run(world).startswith("live")
+    world["store"].rows[-1]["commits"] = []                           # recorded before messages were kept
+    asyncio.run(world["c"].ensure_baseline())
+    assert world["store"].rows[-1]["commits"][0] == {"sha": sha, "author": "kentrell@example.com",
+                                                      "subject": "Probe v2", "body": "Why it matters."}

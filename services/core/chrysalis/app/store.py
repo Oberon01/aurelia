@@ -12,11 +12,31 @@ class Store:
         self.pool = pool
 
     async def create(self, sha: str, prev_sha: str | None, author: str, message: str,
-                     paths: list[str], plan: dict[str, Any], status: str) -> int:
-        return await self.pool.fetchval(
-            "INSERT INTO releases (sha, prev_sha, author, message, changed_paths, services, plan, status) "
-            "VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8) RETURNING id",
-            sha, prev_sha, author, message, paths, plan.get("services", []), json.dumps(plan), status)
+                     paths: list[str], plan: dict[str, Any], status: str, commits: list[dict] | None = None) -> int:
+        try:
+            return await self.pool.fetchval(
+                "INSERT INTO releases (sha, prev_sha, author, message, changed_paths, services, plan, status, commits) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb) RETURNING id",
+                sha, prev_sha, author, message, paths, plan.get("services", []), json.dumps(plan), status,
+                json.dumps(commits or []))
+        except asyncpg.UndefinedColumnError:          # the orchestrator's migration 0015 hasn't run yet
+            return await self.pool.fetchval(
+                "INSERT INTO releases (sha, prev_sha, author, message, changed_paths, services, plan, status) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8) RETURNING id",
+                sha, prev_sha, author, message, paths, plan.get("services", []), json.dumps(plan), status)
+
+    async def missing_commits(self, limit: int = 40) -> list[dict]:
+        """Recent releases recorded before whole commit messages were kept (to fill in from git)."""
+        try:
+            rows = await self.pool.fetch(
+                "SELECT id, sha, prev_sha FROM releases WHERE commits = '[]'::jsonb AND prev_sha IS NOT NULL "
+                "ORDER BY id DESC LIMIT $1", limit)
+        except asyncpg.UndefinedColumnError:
+            return []
+        return [dict(r) for r in rows]
+
+    async def set_commits(self, release_id: int, commits: list[dict]) -> None:
+        await self.pool.execute("UPDATE releases SET commits=$2::jsonb WHERE id=$1", release_id, json.dumps(commits))
 
     async def update(self, release_id: int, status: str, detail: str | None = None, finished: bool = False) -> None:
         await self.pool.execute(
@@ -43,8 +63,7 @@ class Store:
 
     async def recent(self, limit: int = 10) -> list[dict]:
         rows = await self.pool.fetch(
-            "SELECT id, sha, author, message, services, status, detail, started_at, finished_at "
-            "FROM releases ORDER BY id DESC LIMIT $1", limit)
+            "SELECT * FROM releases ORDER BY id DESC LIMIT $1", limit)
         return [dict(r) for r in rows]
 
     async def get(self, release_id: int) -> dict | None:

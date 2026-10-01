@@ -9,6 +9,8 @@ tools:
   facts:    { tier: reference }   # everything you asked her to remember
   remember: { tier: act }         # only when you ask; what she notices on her own goes to the mailbox
   forget:   { tier: change }      # always asks you first: forgetting can't be undone
+  history:  { tier: reference }   # her own releases: what each did, why, and what it lets her do
+  roadmap:  { tier: reference }   # the build phases (config/roadmap.md)
 
 rate_limit_per_minute: 30
 

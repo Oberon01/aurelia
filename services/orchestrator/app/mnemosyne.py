@@ -95,6 +95,26 @@ TOOLS = [
             "category": {"type": "string", "enum": list(profile.CATEGORIES)},
             "core": {"type": "boolean"}}, "required": ["fact"]}),
     registry.ToolSpec(
+        name="history", cancellable=False, display="panel", freshness_seconds=60,
+        description="Your own history: your releases, each with what it did, why (its purpose), what you can do now "
+                    "or do better because of it, the parts of you it touched, and anything Kentrell had to do. "
+                    "release: one in depth ('latest', its number, or the start of its commit). function: only "
+                    "releases that touched it (e.g. 'Constellation'). since: a date, a number of days, or 'this "
+                    "week'. Use for 'what changed in the last release', 'what's new', 'what can you do now that you "
+                    "couldn't before', 'what have we built in Kepler', and before suggesting improvements to "
+                    "yourself. Explain a release by its purpose and what it lets you do, not by its title.",
+        input_schema={"type": "object", "properties": {
+            "release": {"type": "string"}, "function": {"type": "string"}, "since": {"type": "string"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 30},
+            "include_failed": {"type": "boolean", "description": "also releases that failed or were rolled back"}}}),
+    registry.ToolSpec(
+        name="roadmap", cancellable=False, display="panel", freshness_seconds=300,
+        description="Your build plan: the phases in order, what each builds, when it counts as done, its status, and "
+                    "for the phase in progress what's built so far and what's left. phase: one phase by number or "
+                    "name. Use for 'what's next', 'where are we', 'what's left in this phase', 'when do you get "
+                    "voice', and to ground any suggestion about what to build or improve.",
+        input_schema={"type": "object", "properties": {"phase": {"type": "string"}}}),
+    registry.ToolSpec(
         name="forget", cancellable=False, refreshes=["mnemosyne.facts", "mnemosyne.recall"],
         description="Forget a remembered fact (fact_id) or a past conversation (record_id), using ids from recall or "
                     "facts results. Forgetting a conversation also removes what was said in it from the log.",
@@ -131,7 +151,7 @@ async def register_loop(app) -> None:
         ttl = app.state.config.current.registry.function_ttl_seconds
         try:
             await registry.register(app.state.redis, registry.FunctionRegistration(
-                name=NAME, description="The record: past conversations and the facts Kentrell asked Aurelia to remember.",
+                name=NAME, description="The record: past conversations, the facts Kentrell asked Aurelia to remember, and her own history (what each release did and why) and roadmap.",
                 url=f"{settings.self_url.rstrip('/')}/mnemosyne", tools=TOOLS), ttl)
         except Exception:
             log.exception("couldn't register Mnemosyne; will retry")
@@ -302,7 +322,9 @@ async def forget_record(app, record_id: int, user: str) -> str:
     return f"the conversation from {_when(row['started_at'], row['ended_at'], _tz(app))}"
 
 
-HANDLERS = {"recall": recall, "facts": facts, "remember": remember, "forget": forget}
+from . import history as _history  # noqa: E402  (her own releases and roadmap)
+HANDLERS = {"recall": recall, "facts": facts, "remember": remember, "forget": forget,
+            "history": _history.history, "roadmap": _history.roadmap}
 
 
 @router.delete("/facts/{fact_id}")

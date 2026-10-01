@@ -450,6 +450,12 @@ body.screen .panel.present .headline{font-size:clamp(26px,2.6vw,40px)}
 .pdev.chk details{grid-column:1;font-family:var(--mono);font-size:11px;color:var(--ink-dim)}
 .pdev.chk summary{cursor:pointer;color:var(--cyan)}
 .chklog{margin:6px 0 0;max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;line-height:1.45;color:var(--ink-dim)}
+.hist .label{margin-bottom:4px}.hist ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px;font-size:14px;color:var(--ink)}
+.hist-now{padding:4px 0 12px;border-bottom:1px solid rgba(95,212,230,.12)}.hist-sec{padding:6px 0}
+.hist-purpose{font-size:16px;line-height:1.5;color:var(--ink-strong)}
+.pdev.rel-note{width:100%;text-align:left;background:transparent;border:0;border-top:1px solid rgba(95,212,230,.12);color:inherit;font:inherit;cursor:pointer}
+.pdev.rel-note:hover .dn{color:var(--cyan)}.pdev.rel-note.bad .dn{color:var(--warn)}
+.scr-panels li.wrap{white-space:normal}
 .scr-panels{grid-column:1;margin:4px 0 0;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:3px;font-size:14px;color:var(--ink)}
 .scr-panels li{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .answer{display:flex;flex-direction:column;gap:10px;font-size:16px;line-height:1.55;color:var(--ink);overflow:auto}
@@ -1095,6 +1101,9 @@ function body(tool, d) {
   if (typeof d.text === "string" && (d.url || typeof d.pages === "number")) { wrap.append(pageView(d)); ["title", "url", "site", "words", "text", "truncated"].forEach(k => used.add(k)); }
   if (d.link && d.link.url) { wrap.append(linkView(d.link)); used.add("link"); }
   if (d.sent && typeof d.sent === "object") { wrap.append(sentView(d.sent, d.note)); ["sent", "note", "headline"].forEach(k => used.add(k)); }
+  if (Array.isArray(d.history)) { wrap.append(historyView(d.history, d.new_abilities)); ["history", "new_abilities", "headline"].forEach(k => used.add(k)); }
+  if (d.history_release && typeof d.history_release === "object") { wrap.append(releaseNotesView(d.history_release)); ["history_release", "headline"].forEach(k => used.add(k)); }
+  if (d.roadmap && typeof d.roadmap === "object") { wrap.append(roadmapView(d.roadmap)); used.add("roadmap"); }
   if (Array.isArray(d.checks)) { wrap.append(checksView(d.checks, d.uptime)); ["checks", "node", "uptime", "problems"].forEach(k => used.add(k)); }
   if (Array.isArray(d.screens)) { wrap.append(screensView(d.screens)); used.add("screens"); }
   if (typeof d.answer === "string") { wrap.append(answerView(d.answer, d.headline)); ["answer", "asked", "headline"].forEach(k => used.add(k)); }
@@ -1670,6 +1679,55 @@ function downloadView(d) {
   box.append(top, el("div", "facts", [d.size, d.type].filter(Boolean).join(" · ")), el("div", "facts", `On the server: ${d.saved_to}`));
   return box;
 }
+// Her own history: what each release did and what it lets her do.
+function historyView(list, abilities) {
+  const box = el("div", "devlist hist");
+  if ((abilities || []).length) {
+    const now = el("div", "hist-now"); now.append(el("div", "label", "What I can do now"));
+    const ul = el("ul"); abilities.slice(0, 8).forEach(a => ul.append(el("li", null, a))); now.append(ul); box.append(now);
+  }
+  list.forEach(r => {
+    const row = el("button", "pdev rel-note " + (r.status === "live" ? "" : "bad")); row.type = "button";
+    row.append(el("span", "dn", r.summary || r.title || r.sha),
+               el("span", "dm", [`#${r.id}`, r.when, (r.functions || []).slice(0, 3).join(", "), r.status !== "live" ? r.status.replace(/_/g, " ") : null].filter(Boolean).join(" · ")));
+    if (r.purpose) row.append(el("span", "dv", r.purpose));
+    row.addEventListener("click", () => ask(`tell me about release ${r.id}`));
+    box.append(row);
+  });
+  if (!list.length) box.append(el("div", "lib-note", "No releases yet."));
+  return box;
+}
+function releaseNotesView(r) {
+  const box = el("div", "devlist hist");
+  const sec = (label, items) => { if (!items || !items.length) return;
+    const d = el("div", "hist-sec"); d.append(el("div", "label", label));
+    const ul = el("ul"); items.forEach(x => ul.append(el("li", null, x))); d.append(ul); box.append(d); };
+  if (r.purpose) box.append(el("div", "hist-purpose", r.purpose));
+  sec("What I can do now", r.abilities);
+  sec("What changed", r.changes);
+  sec("For you to do", r.for_him);
+  box.append(el("div", "facts", [`#${r.id}`, r.sha, r.when, r.status.replace(/_/g, " "), r.phase ? `phase ${r.phase}` : null,
+                                  (r.functions || []).join(", "), r.commits ? `${r.commits} commit${r.commits === 1 ? "" : "s"}` : null].filter(Boolean).join(" · ")));
+  if (!r.notes) box.append(el("div", "lib-note", "I haven't written my notes on this one yet; this is its commit title."));
+  return box;
+}
+function roadmapView(rm) {
+  const box = el("div", "devlist road");
+  (rm.phases || []).forEach(p => {
+    const st = (p.status || "").toLowerCase();
+    const row = el("div", "pdev chk " + (st.startsWith("done") ? "ok" : st.startsWith("in progress") ? "warn" : "info"));
+    row.append(el("span", "dn", `${p.n}. ${p.name}`), el("span", "dm", p.status));
+    if (rm.phases.length === 1 || st.startsWith("in progress")) {
+      if (p.builds) row.append(el("span", "dv", p.builds));
+      if ((p.built || []).length) { const ul = el("ul", "scr-panels"); p.built.forEach(b => ul.append(el("li", "wrap", "✓ " + b))); row.append(ul); }
+      if (p.todo) row.append(el("span", "di", "Still to do: " + p.todo));
+      if (p.done_when) row.append(el("span", "dm", "Done when: " + p.done_when));
+    }
+    box.append(row);
+  });
+  return box;
+}
+
 function checksView(list, uptime) {                // a computer's own checks, worst first; tap one for its log
   const box = el("div", "devlist checks");
   list.forEach(c => {
@@ -1965,7 +2023,7 @@ function releases(list) {
     const row = el("div", "rel");
     const st = String(r.status || "");
     const firstLine = String(r.message || "").split("\n")[0];
-    const what = el("div", "what", firstLine || "(no message)"); what.title = r.message || "";
+    const what = el("div", "what", r.summary || firstLine || "(no message)"); what.title = r.purpose || r.message || "";
     row.append(el("div", "st " + tone(st), st.replace(/_/g, " ")), el("div", "sha", r.sha || ""), what,
                el("div", "when", when(r.finished_at && r.finished_at !== "None" ? r.finished_at : r.started_at)));
     if (Array.isArray(r.services) && r.services.length) row.append(el("div", "svc", r.services.join(" · ")));

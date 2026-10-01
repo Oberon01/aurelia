@@ -61,12 +61,24 @@ def events_for(state: ReleaseState, include_open: bool = True) -> list[PanelEven
     return out
 
 
+def seen_outcome(raw, body: ReleaseState) -> bool:
+    """This release's outcome was already reported (Chrysalis resends its whole state)."""
+    if raw is None:
+        return False
+    prev = json.loads(raw)
+    return prev.get("release_id") == body.release_id and prev.get("outcome") == body.outcome
+
+
 @router.post("/progress", status_code=204)
 async def progress(body: ReleaseState, request: Request):
     redis = request.app.state.redis
     raw = await redis.get(KEY)
     seen = raw is not None and json.loads(raw).get("release_id") == body.release_id
     await redis.set(KEY, body.model_dump_json(), ex=RUNNING_TTL if body.outcome is None else FINISHED_TTL)
+    if body.outcome == "live" and not seen_outcome(raw, body):
+        import asyncio
+        from . import history
+        asyncio.create_task(history.after_release(request.app, body.release_id))   # her notes on it
     for event in events_for(body, include_open=not seen):
         await publish(redis, event)
     return Response(status_code=204)

@@ -11,7 +11,11 @@ class GitError(Exception):
 class Commit:
     sha: str
     author: str
-    message: str
+    message: str          # the subject line
+    body: str = ""        # the rest of the message: what it does and why
+
+    def as_dict(self) -> dict:
+        return {"sha": self.sha, "author": self.author, "subject": self.message, "body": self.body}
 
 
 class Git:
@@ -47,12 +51,16 @@ class Git:
         out = await self._run("diff", "--name-only", old, new)
         return [line for line in out.splitlines() if line]
 
-    async def commits(self, old: str, new: str) -> list[Commit]:
-        out = await self._run("log", "--format=%H%x1f%ae%x1f%s", f"{old}..{new}")
+    async def commits(self, old: str | None, new: str) -> list[Commit]:
+        """Newest first, each with its whole message (subject and body)."""
+        out = await self._run("log", "--format=%H%x1f%ae%x1f%s%x1f%b%x1e", f"{old}..{new}" if old else f"-1", *([] if old else [new]))
         commits = []
-        for line in out.splitlines():
-            sha, author, message = line.split("\x1f", 2)
-            commits.append(Commit(sha, author, message))
+        for record in out.split("\x1e"):
+            record = record.strip("\n")
+            if not record.strip():
+                continue
+            sha, author, message, body = (record.split("\x1f", 3) + ["", "", "", ""])[:4]
+            commits.append(Commit(sha.strip(), author, message, body.strip()))
         return commits
 
     async def show(self, sha: str, path: str) -> str:

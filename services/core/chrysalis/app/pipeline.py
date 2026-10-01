@@ -75,6 +75,22 @@ class Chrysalis:
             if await self.docker.has_image(svc, sha):
                 saved.append(svc)
         log.info("live release %s: rollback images saved for %s", sha[:8], ", ".join(saved) or "nothing")
+        await self.fill_commits()
+
+    async def fill_commits(self) -> None:
+        """Releases recorded before whole commit messages were kept get them from git, so Aurelia
+        can read what each one did and why. Best effort: history that's gone is left alone."""
+        filled = 0
+        for r in await self.store.missing_commits():
+            try:
+                commits = await self.git.commits(r["prev_sha"], r["sha"])
+            except Exception:
+                continue
+            if commits:
+                await self.store.set_commits(r["id"], [c.as_dict() for c in commits])
+                filled += 1
+        if filled:
+            log.info("filled in whole commit messages for %d earlier release(s)", filled)
 
     # Kept for callers of the old name.
     adopt_baseline = ensure_baseline
@@ -97,6 +113,7 @@ class Chrysalis:
     async def cycle(self, cfg: ChrysalisConfig) -> str:
         """One check for new commits. Returns a short description of what happened."""
         async with self.lock:
+            self._commits = None
             await self.git.fetch(cfg.branch)
             local, remote = await self.git.head(), await self.git.remote_head(cfg.branch)
             if local == remote:
@@ -112,6 +129,7 @@ class Chrysalis:
                 raise RuntimeError(problem)
 
             commits = await self.git.commits(local, remote)
+            self._commits = [c.as_dict() for c in commits]          # recorded with the release, whole messages
             newest = commits[0] if commits else None
             author = newest.author if newest else ""
             message = newest.message if newest else ""
@@ -142,11 +160,13 @@ class Chrysalis:
                 return await self._record(remote, local, author, message, paths, plan, "dry_run",
                                           "Dry run: nothing changed. Plan: " + plan.summary())
 
-            rid = await self.store.create(remote, local, author, message, paths, plan.as_dict(), "planned")
+            rid = await self.store.create(remote, local, author, message, paths, plan.as_dict(), "planned",
+                                          getattr(self, "_commits", None))
             return await self._release(rid, local, remote, plan, cfg, author, message)
 
     async def _record(self, sha, prev, author, message, paths, plan: Plan, status, detail) -> str:
-        rid = await self.store.create(sha, prev, author, message, paths, plan.as_dict(), status)
+        rid = await self.store.create(sha, prev, author, message, paths, plan.as_dict(), status,
+                                      getattr(self, "_commits", None))
         await self.store.update(rid, status, detail, finished=True)
         log.info("%s %s: %s", status, sha[:8], detail)
         await self.reporter.release(rid, sha, author, message, plan.services).finish(status, detail)
