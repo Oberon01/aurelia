@@ -245,9 +245,9 @@ def test_forgetting_updates_the_library_and_trilium(env):
 
 def test_pdfs_from_downloads_stay_inside_the_folder(env):
     from app.research import KeplerError
-    with pytest.raises(KeplerError, match="inside your downloads"):
+    with pytest.raises(KeplerError, match="only read documents inside your downloads"):
         env["call"]("read_pdf", {"file": "../../etc/passwd.pdf"})
-    with pytest.raises(KeplerError, match="no guide.pdf"):
+    with pytest.raises(KeplerError, match="no guide.pdf in your downloads"):
         env["call"]("read_pdf", {"file": "guide.pdf"})
 
 
@@ -303,3 +303,18 @@ def test_the_library_keeps_everything_and_trilium_catches_up(env):
     calls = len(fake.trilium_calls)
     assert loop.run_until_complete(main.catch_up(pool)) == {"written": 0, "removed": 0}
     assert len(fake.trilium_calls) == calls                                                  # nothing waiting: Trilium isn't touched
+
+
+def test_reading_a_word_file_from_his_file_server(env, monkeypatch, tmp_path_factory):
+    from app import main
+    from tests.test_documents import docx, pdf
+    files = tmp_path_factory.mktemp("files")
+    (files / "School").mkdir()
+    docx(files / "School" / "Study Plan.docx", ["Week 1: networking", "Week 2: storage"])
+    pdf(env["tmp"] / "guide.pdf", "Downloaded guide")
+    monkeypatch.setattr(main.settings, "files_dir", str(files))
+    out = env["call"]("read_pdf", {"file": "study plan"})
+    assert out["site"] == "file server" and out["path"] == "School/Study Plan.docx" and out["title"] == "Study Plan.docx"
+    assert out["text"].startswith("Week 1: networking") and out["words"] == 6 and "pages" not in out
+    out = env["call"]("read_pdf", {"file": "guide"})
+    assert out["site"] == "downloads" and out["pages"] == 1 and "Downloaded guide" in out["text"]

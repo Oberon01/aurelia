@@ -161,7 +161,8 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       DOWNLOADS_DIR: /downloads
     volumes:
-      - ./data/downloads:/downloads:ro    # read_pdf reads PDFs you've downloaded; never writes there
+      - ./data/downloads:/downloads:ro    # read_pdf reads documents you've downloaded; never writes there
+      - ${AURELIA_FILES:-./data/files}:/files:ro   # your file server (AURELIA_FILES in .env), read-only
     networks:
       - default
       - homelab                           # only Kepler joins it, to reach Trilium; nothing else in Aurelia does

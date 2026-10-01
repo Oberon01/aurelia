@@ -462,6 +462,14 @@ learn in a library that grows by topic.
   the orchestrator (`llm.routes.research`, counted toward the monthly cap);
   Ollama embeds research for finding it by meaning (words are used without it).
 - **Forgetting.** "Forget the azure research" (or "forget what I learned about DNS") removes that topic, its research and its Trilium note. It always asks you first, and the confirmation names the topic. A name has to match one topic by its words (never by meaning); otherwise nothing is deleted and she lists your topics.
+- **Your documents.** "Read my study plan" or "read the azure networking
+  notes" reads a PDF, Word (.docx) or text file from your downloads or your
+  file server, found by its name or words from it (she asks which one if
+  several match). Set `AURELIA_FILES` in `.env` to your file server's folder
+  (e.g. `/mnt/myssd/files`), then `docker compose up -d kepler`. It's mounted
+  read-only: she reads only what you ask for, by name, and never changes,
+  moves or indexes anything there. Links that lead outside the folder are
+  never followed. Old .doc files and scanned PDFs (images only) can't be read.
 - **Always a panel.** Research, the library, topics, explanations and quizzes always open a panel; other tools can answer in a sentence instead (tools declare `display: panel`).
 
 **Trilium (one-way).** Each topic is written to Trilium as a note under
@@ -846,6 +854,7 @@ services/functions/parallax/ analytics on task history → mailbox proposals, mo
 services/functions/nebula/   the web: search, YouTube, read, download, open
 services/functions/kepler/   research and learning: library, topics, explain, quiz, Trilium
 data/downloads/              Nebula's downloads (not in git)
+data/files/                  where Kepler looks if AURELIA_FILES isn't set (not in git)
 services/core/chrysalis/     update system (protected core)
 config/chrysalis.yaml        Chrysalis settings: dry run, polling, held authors, checks
 ```

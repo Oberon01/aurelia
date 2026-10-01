@@ -7,7 +7,7 @@ Tools:
 - explain   an explanation at his level (from his profile's "learning" facts)
 - quiz      multiple-choice questions to check understanding; the display reports
             the score to the orchestrator, which may propose a profile fact
-- read_pdf  a PDF from a link or his downloads folder, as text
+- read_pdf  a document as text: a PDF link, or a PDF, Word or text file from his downloads or file server
 - forget    delete a piece of research or a whole topic (confirmed)
 
 How it reaches the world, on purpose:
@@ -31,6 +31,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings
 
+from . import documents
 from . import research as R
 from . import store
 from .research import KeplerError
@@ -49,6 +50,7 @@ class Settings(BaseSettings):
     trilium_url: str | None = None
     trilium_token: str | None = None
     downloads_dir: str = "/downloads"            # his downloads, mounted read-only
+    files_dir: str = "/files"                    # his file server, mounted read-only (optional)
 
 
 settings = Settings()
@@ -75,7 +77,10 @@ TOOLS_SPEC = [
      "input_schema": {"type": "object", "properties": {"subject": {"type": "string"}, "topic_id": {"type": "integer"},
                                                        "count": {"type": "integer", "minimum": 3, "maximum": 10}},
                       "required": ["subject"]}},
-    {"name": "read_pdf", "description": "Read a PDF as text: a link, or a file name in his downloads folder.",
+    {"name": "read_pdf", "description": "Read a document as text: a PDF link (url), or a PDF, Word (.docx) or text "
+                                        "file from his downloads or his file server (file: its name, a path inside "
+                                        "the folder, or words from its name, e.g. 'azure notes'). If more than one "
+                                        "matches, ask him which.",
      "input_schema": {"type": "object", "properties": {"url": {"type": "string"}, "file": {"type": "string"}}},
      "progress_unit": "steps"},
     {"name": "forget", "description": "Delete a whole topic from his library by its name (topic), or by id (topic_id), "
@@ -407,20 +412,17 @@ async def read_pdf(ctx: TaskContext) -> dict:
         page = await ctx.orch.run("nebula.read", {"url": url}, lambda: ctx.cancelled, 60)
         return {k: page[k] for k in ("title", "url", "site", "words", "text", "truncated", "pages") if k in page}
     if not name:
-        raise KeplerError("Give me a link or the name of a file in your downloads.")
-    root = os.path.realpath(settings.downloads_dir)
-    path = os.path.realpath(os.path.join(root, name))
-    if not path.startswith(root + os.sep) or not path.lower().endswith(".pdf"):
-        raise KeplerError("I only read PDFs inside your downloads folder.")
-    if not os.path.isfile(path):
-        raise KeplerError(f"There's no {name} in your downloads.")
-    from pypdf import PdfReader
-    reader = PdfReader(path)
-    text = "\n\n".join((p.extract_text() or "").strip() for p in reader.pages[:200]).strip()
-    if not text:
-        raise KeplerError("That PDF is only images (scanned), so there's no text to read.")
-    return {"title": os.path.basename(path), "url": "", "site": "downloads", "words": len(text.split()),
-            "pages": len(reader.pages), "text": text[:12000] + ("…" if len(text) > 12000 else ""), "truncated": len(text) > 12000}
+        raise KeplerError("Give me a link or the name of a document in your downloads or file server.")
+    await ctx.progress(0, 1, "Reading the document")
+    path, place, rel = await asyncio.to_thread(documents.find, name, [("your downloads", settings.downloads_dir),
+                                                                      ("your file server", settings.files_dir)])
+    text, pages = await asyncio.to_thread(documents.read, path)
+    out = {"title": os.path.basename(path), "url": "", "site": place.removeprefix("your "), "path": rel,
+           "words": len(text.split()), "text": text[:12000] + ("…" if len(text) > 12000 else ""),
+           "truncated": len(text) > 12000}
+    if pages:
+        out["pages"] = pages
+    return out
 
 
 async def _drop_note(pool, user: str, t: Trilium, note_id: str) -> str:
