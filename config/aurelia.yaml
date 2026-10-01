@@ -7,6 +7,17 @@ display:
   # holds them. Look-ups (home status, releases) stay until you dismiss them.
   action_panel_seconds: 12
 
+# What a presentation display (the TV) shows when nothing's on it: a dim clock, the date, the
+# weather and anything worth a glance. Dark during quiet hours. Set latitude and longitude for
+# the weather (Open-Meteo, no key; only these coordinates are sent).
+ambient:
+  enabled: true
+  dim: 0.55
+  quiet_hours: "23:00-07:00"
+  latitude:
+  longitude:
+  units: fahrenheit
+
 retention:
   # Saved result panels: full for hot_days, then a summary until warm_days,
   # then only the task's metadata (timing, outcome) is kept. Pinned panels stay full.

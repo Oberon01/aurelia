@@ -20,6 +20,17 @@ class DisplayConfig(BaseModel):
     action_panel_seconds: float = 12         # finished actions (lock, lights...) fade after this; look-ups stay
 
 
+class AmbientConfig(BaseModel):
+    """What a presentation display shows when nothing's on it: a dim clock, the date, the weather
+    and anything worth a glance. Dark during quiet hours."""
+    enabled: bool = True
+    dim: float = 0.55                         # brightness of the ambient screen, 0–1
+    quiet_hours: str = "23:00-07:00"          # dark then (HH:MM-HH:MM, local time; "" for never)
+    latitude: float | None = None             # set both for the weather (Open-Meteo, no key needed)
+    longitude: float | None = None
+    units: str = "fahrenheit"                 # or "celsius"
+
+
 class RetentionConfig(BaseModel):
     hot_days: int = 7
     warm_days: int = 90
@@ -80,6 +91,7 @@ class RegistryConfig(BaseModel):
 
 class RuntimeConfig(BaseModel):
     display: DisplayConfig = DisplayConfig()
+    ambient: AmbientConfig = AmbientConfig()
     retention: RetentionConfig = RetentionConfig()
     memory: MemoryConfig = MemoryConfig()
     digest: DigestConfig = DigestConfig()

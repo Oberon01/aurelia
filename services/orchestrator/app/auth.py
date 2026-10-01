@@ -131,10 +131,25 @@ async def device_by_id(dev_id: int) -> dict[str, Any] | None:
     hit = _by_id.get(dev_id)
     if hit and hit[0] > time.monotonic():
         return hit[1]
-    row = await db.pool().fetchrow("SELECT id, kind, name, user_id FROM devices WHERE id=$1 AND status='approved'", dev_id)
-    dev = dict(row) if row else None
+    row = await db.pool().fetchrow("SELECT id, kind, name, user_id, role, info FROM devices WHERE id=$1 AND status='approved'",
+                                   dev_id)
+    dev = None
+    if row:
+        dev = {k: row[k] for k in ("id", "kind", "name", "user_id")}
+        dev["role"] = await role_of(row)
     _by_id[dev_id] = (time.monotonic() + KEY_CACHE_SECONDS, dev)
     return dev
+
+
+async def role_of(row) -> str | None:
+    """A device's role in force (app/roles.py): chosen on the devices panel, else guessed."""
+    from . import roles
+    info = roles.info_of(row)
+    node_role = None
+    if row["kind"] == "screen" and str(info.get("node_id") or "").isdigit():
+        node = await db.pool().fetchrow("SELECT kind, role, info FROM devices WHERE id=$1", int(info["node_id"]))
+        node_role = roles.effective("node", node["role"], roles.info_of(node)) if node else None
+    return roles.effective(row["kind"], row.get("role"), info, node_role)
 
 
 async def asker(headers) -> dict[str, Any] | None:
@@ -386,10 +401,14 @@ async def listing(current: int | None = None) -> list[dict[str, Any]]:
         "SELECT * FROM devices WHERE kind <> 'screen' AND (status IN ('approved','pending') "
         "OR revoked_at > now() - interval '7 days') "
         "ORDER BY status='approved' DESC, last_seen DESC NULLS LAST, requested_at DESC")
+    from . import roles
     out = []
     for r in rows:
         info = r["info"] if isinstance(r["info"], dict) else json.loads(r["info"] or "{}")
+        role = roles.effective(r["kind"], r["role"], info)
         out.append({"id": r["id"], "kind": r["kind"], "name": r["name"], "status": r["status"],
+                    **({"role": role, "role_chosen": r["role"] == role, "roles": list(roles.FOR_KIND[r["kind"]])}
+                       if r["kind"] in roles.FOR_KIND else {}),
                     "os": " ".join(str(info[k]) for k in ("os", "os_version") if info.get(k)) or None,
                     "browser": info.get("browser"), "hostname": info.get("hostname"),
                     "agent_version": info.get("agent_version"), "shell": info.get("shell"),
@@ -413,6 +432,26 @@ class Rename(BaseModel):
 @router.post("/devices/{dev_id}/revoke")
 async def revoke_device(dev_id: int):
     return await revoke(dev_id)
+
+
+class SetRole(BaseModel):
+    role: str
+
+
+@router.post("/devices/{dev_id}/role")
+async def set_role(dev_id: int, body: SetRole):
+    """What a device is for. Only from the display (browser keys): Aurelia has no tool for it,
+    a node can't set its own, and a node's screen can't reach /devices at all."""
+    from . import roles
+    row = await db.pool().fetchrow("SELECT kind FROM devices WHERE id=$1 AND status='approved'", dev_id)
+    if row is None:
+        raise HTTPException(404, "No such device.")
+    allowed_roles = roles.FOR_KIND.get(row["kind"], ())
+    if body.role not in allowed_roles:
+        raise HTTPException(400, f"A {row['kind']} can be: {', '.join(allowed_roles) or 'nothing (no roles)'}.")
+    await db.pool().execute("UPDATE devices SET role=$2 WHERE id=$1", dev_id, body.role)
+    _by_id.clear()                                    # displays pick up the change within seconds
+    return {"id": dev_id, "role": body.role}
 
 
 @router.post("/devices/{dev_id}/rename")

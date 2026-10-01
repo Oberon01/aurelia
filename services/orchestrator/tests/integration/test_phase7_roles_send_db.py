@@ -1,0 +1,165 @@
+"""Node roles and sending: "send this to all presentation devices" reaches every presentation
+display (a TV that isn't open gets it when it connects), a note reaches one display by name,
+presentation displays don't get panels nobody sent them, and roles are set only on the devices
+panel. Real Postgres, Redis and WebSockets."""
+import asyncio
+import json
+import time
+import uuid
+
+import asyncpg
+import httpx
+import pytest
+
+from .conftest import DB, REDIS
+
+pytestmark = pytest.mark.skipif(not (DB and REDIS), reason="needs TEST_DATABASE_URL and TEST_REDIS_URL")
+
+
+def sql(query, *args):
+    async def go():
+        conn = await asyncpg.connect(DB)
+        try:
+            return await conn.fetch(query, *args)
+        finally:
+            await conn.close()
+    return asyncio.run(go())
+
+
+def device(kind, name, info=None, role=None):
+    [row] = sql("INSERT INTO devices (kind, name, status, key_hash, approved_at, info, role) "
+                "VALUES ($1, $2, 'approved', $3, now(), $4::jsonb, $5) RETURNING id",
+                kind, name, uuid.uuid4().hex, json.dumps(info or {}), role)
+    return row["id"]
+
+
+class Model:
+    def __init__(self, steps):
+        self.steps, self.seen = steps, []
+
+    async def complete(self, route, system, messages, tools):
+        from app.llm.base import Completion, ToolCall, Usage
+        self.seen.append(tools)
+        step = self.steps.pop(0) if self.steps else {"text": "Okay."}
+        calls = [ToolCall(id=f"t{uuid.uuid4().hex[:8]}", name=c[0], args=c[1]) for c in step.get("calls", [])]
+        return Completion(text=step.get("text", ""), tool_calls=calls, usage=Usage(10, 5), model="fake", provider="fake")
+
+
+async def listen(url, dev, seconds, out):
+    import websockets
+    async with websockets.connect(url, additional_headers={"X-Aurelia-Device": str(dev)}) as ws:
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            try:
+                out.append(json.loads(await asyncio.wait_for(ws.recv(), timeout=0.3)))
+            except asyncio.TimeoutError:
+                pass
+
+
+def opened(events):
+    return [e for e in events if e.get("type") == "panel.open"]
+
+
+def test_roles_and_sending(stack):
+    from app import auth
+    from app.main import app
+    orch, ws_url = stack["orch"], stack["orch"].replace("http", "ws") + "/ws"
+    sql("UPDATE devices SET status='revoked' WHERE status='approved'")     # only this test's displays
+    auth._by_id.clear()
+    desk = device("browser", "Desk", {"os": "Windows", "browser": "Chrome"})
+    phone = device("browser", "Pixel", {"os": "Android", "browser": "Chrome"})
+    tablet = device("browser", "Hall tablet", {"os": "Windows"})
+    node = device("node", "Den TV PC", {"shell": "on", "screens": [{"w": 3840}], "hostname": "den"})
+    tv = device("screen", "Den TV PC screen", {"node_id": str(node)})
+    httpx.post(f"{orch}/registry/functions", json={
+        "name": "testfn", "description": "test", "url": stack["fn"],
+        "tools": [{"name": n, "description": n, "input_schema": {"type": "object"}} for n in ("status", "look")]
+    }).raise_for_status()
+
+    # Roles: guessed, then chosen on the devices panel (and only there).
+    listed = {d["name"]: d for d in httpx.get(f"{orch}/devices").json()["devices"]}
+    assert (listed["Desk"]["role"], listed["Pixel"]["role"], listed["Den TV PC"]["role"]) == \
+        ("workstation", "companion", "presentation")
+    assert not listed["Den TV PC"]["role_chosen"] and "server" in listed["Den TV PC"]["roles"]
+    assert httpx.post(f"{orch}/devices/{tablet}/role", json={"role": "server"}).status_code == 400
+    assert httpx.post(f"{orch}/devices/{tablet}/role", json={"role": "presentation"}).json()["role"] == "presentation"
+    me = httpx.get(f"{orch}/view/me", headers={"X-Aurelia-Device": str(tablet)}).json()
+    assert me["role"] == "presentation"
+    assert httpx.get(f"{orch}/view/me", headers={"X-Aurelia-Device": str(tv)}).json()["role"] == "presentation"
+    amb = httpx.get(f"{orch}/ambient").json()
+    assert amb["weather"] is None and isinstance(amb["quiet"], bool) and 0 < amb["dim"] <= 1
+
+    # Something on the desk to send: panel 1.
+    t1 = httpx.post(f"{orch}/tasks", json={"tool": "testfn.status", "args": {}},
+                    headers={"X-Aurelia-Device": str(desk)}).json()["task_id"]
+    deadline = time.time() + 10
+    while httpx.get(f"{orch}/tasks/{t1}").json()["status"] == "running" and time.time() < deadline:
+        time.sleep(0.2)
+    screen = {"panels": [{"n": 1, "task_id": t1, "tool": "testfn.status", "title": "Home"}], "focus": None}
+
+    got = {k: [] for k in ("desk", "phone", "tablet")}
+    original = app.state.llm
+
+    async def scenario():
+        ls = [asyncio.create_task(listen(ws_url, d, 7, got[k])) for k, d in
+              (("desk", desk), ("phone", phone), ("tablet", tablet))]
+        await asyncio.sleep(1.0)
+        async with httpx.AsyncClient(timeout=30) as c:
+            app.state.llm = model = Model([{"calls": [("constellation__send", {"to": "all presentation devices"})]},
+                                           {"text": "Sent."}])
+            sent = (await c.post(f"{orch}/ask", headers={"X-Aurelia-Device": str(desk)}, json={
+                "text": "send this to all presentation devices", "session_id": uuid.uuid4().hex,
+                "screen": screen})).json()
+            send_schema = next(t for t in model.seen[0] if t.name == "constellation__send").input_schema
+            app.state.llm = Model([{"calls": [("constellation__send", {"to": "pixel", "text": "Grab milk",
+                                                                        "url": "example.com/list"})]}, {"text": "Sent."}])
+            note = (await c.post(f"{orch}/ask", headers={"X-Aurelia-Device": str(desk)}, json={
+                "text": "send 'grab milk' to my pixel", "session_id": uuid.uuid4().hex})).json()
+            app.state.llm = Model([{"calls": [("constellation__send", {"to": "the desk"})]}, {"text": "?"}])
+            self_send = (await c.post(f"{orch}/ask", headers={"X-Aurelia-Device": str(desk)}, json={
+                "text": "send this to the desk", "session_id": uuid.uuid4().hex, "screen": screen})).json()
+            scheduled = (await c.post(f"{orch}/tasks", json={"tool": "testfn.look", "args": {"s": 1},
+                                                              "trigger": "pulsar"})).json()["task_id"]
+        await asyncio.gather(*ls)
+        tv_got = []
+        await listen(ws_url, tv, 2, tv_got)                    # the TV opens her afterwards
+        return sent, send_schema, note, self_send, scheduled, tv_got
+
+    try:
+        sent, send_schema, note, self_send, scheduled, tv_got = asyncio.run(scenario())
+    finally:
+        app.state.llm = original
+
+    assert "x-panel" not in json.dumps(send_schema)                        # the model gets plain JSON Schema
+    [send_task] = sent["task_ids"]
+    result = httpx.get(f"{orch}/tasks/{send_task}").json()
+    assert result["status"] == "completed", result
+    out = json.loads(result["result"]) if isinstance(result["result"], str) else result["result"]
+    assert out["sent"]["to"] == ["Hall tablet"] and out["sent"]["not_open"] == ["Den TV PC"]
+    assert "Den TV PC" in out["note"] and "when it opens" in out["note"]
+
+    [shown] = [e for e in opened(got["tablet"]) if e["tool"] == "testfn.status"]
+    assert shown["data"]["present"] is True and shown["data"]["sent_from"] == "Desk" and shown["device"] == tablet
+    res = next(e for e in got["tablet"] if e["type"] == "panel.result" and e["task_id"] == shown["task_id"])
+    assert res["data"]["devices"]                                          # the same panel, its data
+    assert not [e for e in opened(got["phone"]) if e["tool"] == "testfn.status" and e.get("data", {}).get("sent_from")]
+    assert not [e for e in got["desk"] if e.get("data", {}).get("sent_from")]   # the sender already has it
+
+    [tv_shown] = [e for e in opened(tv_got) if e["tool"] == "testfn.status"]   # queued for the TV, delivered on connect
+    assert tv_shown["data"]["present"] is True
+    assert not sql("SELECT 1 FROM task_runs WHERE trigger='send' AND device=$1 AND status <> 'completed'", tv)
+
+    [n] = [e for e in got["phone"] if e["type"] == "panel.result" and e["tool"] == "constellation.send"
+           and "note" in e["data"] and isinstance(e["data"]["note"], dict)]
+    assert n["data"]["note"] == {"text": "Grab milk", "url": "https://example.com/list"}
+    assert n["data"]["headline"] == "From Desk"
+    assert not [e for e in got["tablet"] if e.get("tool") == "constellation.send" and e["type"] == "panel.result"
+                and isinstance(e["data"].get("note"), dict)]
+
+    st = httpx.get(f"{orch}/tasks/{self_send['task_ids'][0]}").json()
+    assert st["status"] == "failed" and "already here" in st["error"]
+
+    # Nobody sent the presentation displays the scheduled panel.
+    assert scheduled in {e["task_id"] for e in opened(got["phone"])}
+    assert scheduled not in {e["task_id"] for e in opened(got["tablet"])}
+    assert scheduled not in {e["task_id"] for e in opened(tv_got)}

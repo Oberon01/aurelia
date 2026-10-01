@@ -215,6 +215,8 @@ td .clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;o
 .pdev .dm{grid-column:1;font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
 .pdev .db{grid-column:2;grid-row:1 / span 2;display:flex;gap:8px;align-items:center}
 .pdev.pending .dn{color:var(--warn)}.pdev.revoked{opacity:.55}
+.pdev select.role{font:inherit;font-family:var(--mono);font-size:11px;letter-spacing:1px;color:var(--ink-dim);background:transparent;border:1px solid var(--cyan-soft);border-radius:4px;padding:4px 6px}
+.pdev select.role option{background:#04070b;color:var(--ink)}
 .pdev .dv{grid-column:1;font-family:var(--mono);font-size:11px;color:var(--ink-dim)}
 .pdev .di{grid-column:1;font-size:13px;color:var(--warn)}.pdev .di.urgent{color:var(--bad,#ff7a7a);font-weight:600}
 .hl-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px 18px}
@@ -413,16 +415,30 @@ button.gl:hover{color:var(--ink-strong)}
 /* ---- screen mode: a computer running her shell (the TV). Nobody types here; it shows her. ---- */
 body.screen .said,body.screen .slot,body.screen #form,body.screen .mailchip,body.screen .conn{display:none!important}
 body.screen .top{justify-content:center}
+body.screen{grid-template-rows:auto minmax(0,1fr) auto}   /* no reply slot here: panels get its row */
+body.screen .floor{padding-top:32px}
 body.screen .brand{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;pointer-events:none}
 body.screen .mark{font-size:22px;letter-spacing:14px;color:var(--ink-dim)}
 body.screen .clock{font-family:var(--display);font-size:clamp(64px,11vw,168px);letter-spacing:2px;color:var(--ink-strong)}
 body.screen .clock .date{display:block!important;font-family:var(--mono);font-size:clamp(14px,1.6vw,22px);letter-spacing:3px;color:var(--ink-dim);text-align:center;margin-top:6px}
 body.screen .glance{font-size:15px}
+/* ---- ambient: a presentation display with nothing on it. Dim, calm, dark at quiet hours. ---- */
+body.ambient .brand,body.ambient .glance{opacity:var(--dim,.55);transition:opacity 1.2s ease}
+body.ambient .weather{font-family:var(--mono);font-size:clamp(14px,1.7vw,24px);letter-spacing:2px;color:var(--ink-dim);text-align:center}
+body.ambient .weather b{font-family:var(--display);font-weight:500;color:var(--ink-strong);font-size:1.5em;letter-spacing:1px;margin-right:12px}
+body.ambient.quiet .brand,body.ambient.quiet .glance{opacity:0}
+body.ambient.busy .brand{opacity:0}                        /* panels up: the clock steps out */
+.weather:empty{display:none}
+/* a panel sent to a presentation display: shown big, from across the room */
+body.screen .panel.present{font-size:118%}
+body.screen .panel.present .headline{font-size:clamp(26px,2.6vw,40px)}
+.sentfrom{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--ink-faint);text-transform:uppercase}
+.note-text{font-size:20px;line-height:1.45;color:var(--ink-strong);white-space:pre-wrap;overflow-wrap:anywhere}
 </style>
 </head>
 <body>
 <header class="top">
-  <div class="brand"><div class="mark">AURELIA</div><div class="clock" id="clock"></div></div>
+  <div class="brand"><div class="mark">AURELIA</div><div class="clock" id="clock"></div><div class="weather" id="weather"></div></div>
   <div class="said" id="said"></div>
   <div class="right">
     <button type="button" class="mailchip" id="mailchip" hidden>0 for review</button>
@@ -447,7 +463,32 @@ body.screen .glance{font-size:15px}
 <script>
 // Screen mode: /view?screen=<node> is a computer running her shell (signed in by its own agent).
 const SCREEN = new URLSearchParams(location.search).get("screen");
-if (SCREEN) document.body.classList.add("screen");
+if (SCREEN) document.body.classList.add("screen", "ambient");
+// A browser chosen as a presentation display (a wall tablet) behaves like a node's screen: it shows
+// only what's sent to it, over the ambient screen. Its role is set on the devices panel.
+_fetchMe();
+async function _fetchMe() {
+  try {
+    const me = await (await window.fetch("/view/me", { cache: "no-store" })).json();
+    if (me && me.role === "presentation" && !document.body.classList.contains("screen")) {
+      document.body.classList.add("screen", "ambient"); tick(); relayout(); loadAmbient();
+    }
+  } catch (e) { /* the normal display, then */ }
+}
+// The ambient screen: dim (how dim is set on the server), the weather, dark at quiet hours.
+let ambientTimer = null;
+async function loadAmbient() {
+  clearTimeout(ambientTimer); ambientTimer = setTimeout(loadAmbient, 5 * 60 * 1000);
+  if (!document.body.classList.contains("ambient")) return;
+  try {
+    const a = await (await window.fetch("/ambient", { cache: "no-store" })).json();
+    document.body.style.setProperty("--dim", String(a.dim ?? .55));
+    document.body.classList.toggle("quiet", !!a.quiet);
+    const w = document.getElementById("weather"), x = a.weather;
+    w.replaceChildren(...(x ? [el("b", null, `${x.temp}${x.unit}`),
+                               document.createTextNode(`${x.sky}${x.sky ? "  ·  " : ""}H ${x.high}°  L ${x.low}°`)] : []));
+  } catch (e) { /* try again later */ }
+}
 
 // If this browser's key is revoked (or it was never paired), every call answers 401: go pair.
 const _fetch = window.fetch.bind(window);
@@ -615,6 +656,7 @@ function renderRail(waiting) {
 }
 
 function relayout() {
+  document.body.classList.toggle("busy", recs().some(p => !p.queued));   // the ambient clock steps back
   const { visible, waiting } = arrange();
   const running = recs().filter(p => p.state === "running" || p.state === "refreshing").length;
   const shown = `${visible} panel${visible === 1 ? "" : "s"}` + (waiting ? ` · ${waiting} waiting` : "");
@@ -1002,6 +1044,7 @@ function body(tool, d) {
   if (Array.isArray(d.videos)) { wrap.append(videoResults(d.videos)); ["videos", "query"].forEach(k => used.add(k)); }
   if (typeof d.text === "string" && (d.url || typeof d.pages === "number")) { wrap.append(pageView(d)); ["title", "url", "site", "words", "text", "truncated"].forEach(k => used.add(k)); }
   if (d.link && d.link.url) { wrap.append(linkView(d.link)); used.add("link"); }
+  if (d.note && typeof d.note === "object") { wrap.append(noteView(d.note)); used.add("note"); used.add("headline"); }
   if (typeof d.saved_to === "string") { wrap.append(downloadView(d)); ["file", "size", "saved_to", "type", "quarantined"].forEach(k => used.add(k)); }
   if (Array.isArray(d.mailbox)) { wrap.append(mailboxView(d.mailbox)); used.add("mailbox"); used.add("counts"); }
   if (d.digest && typeof d.digest === "object") { wrap.append(digestView(d.digest)); used.add("digest"); }
@@ -1223,6 +1266,22 @@ function devicesView(list) {
                   d.kind === "node" && d.online ? "online" :
                   d.last_seen ? `${d.kind === "node" ? "offline · " : ""}seen ${d.last_seen}` : "not seen yet"].filter(Boolean);
     const btns = el("span", "db");
+    if (d.status === "approved" && (d.roles || []).length) {        // what it's for: only you set this, here
+      const sel = el("select", "role"); sel.setAttribute("aria-label", `What ${d.name} is for`);
+      d.roles.forEach(r => { const o = el("option", null, r[0].toUpperCase() + r.slice(1) + (r === d.role && !d.role_chosen ? " (guessed)" : ""));
+                             o.value = r; o.selected = r === d.role; sel.append(o); });
+      sel.addEventListener("change", async () => {
+        try {
+          const r = await fetch(`/devices/${d.id}/role`, { method: "POST", headers: { "Content-Type": "application/json" },
+                                                           body: JSON.stringify({ role: sel.value }) });
+          if (!r.ok) throw new Error();
+          d.role = sel.value; d.role_chosen = true;
+          [...sel.options].forEach(o => { o.textContent = o.value[0].toUpperCase() + o.value.slice(1); });
+          say(`${d.name} is a ${sel.value} device now.`);
+        } catch (e) { sel.value = d.role; say("Couldn't change that."); }
+      });
+      btns.append(sel);
+    }
     if (d.status === "approved") {
       const rn = el("button", "btn quiet", "Rename"); rn.type = "button";
       rn.addEventListener("click", () => rename(d, name));
@@ -1550,6 +1609,13 @@ function downloadView(d) {
   box.append(top, el("div", "facts", [d.size, d.type].filter(Boolean).join(" · ")), el("div", "facts", `On the server: ${d.saved_to}`));
   return box;
 }
+function noteView(n) {                             // something sent here: a note, a link, or both
+  const box = el("div"); box.style.display = "flex"; box.style.flexDirection = "column"; box.style.gap = "12px";
+  if (n.text) box.append(el("div", "note-text", n.text));
+  if (n.url) box.append(linkView({ url: n.url, site: (() => { try { return new URL(n.url).hostname.replace(/^www\./, ""); } catch (e) { return "link"; } })() }));
+  return box;
+}
+
 function linkView(link) {
   const box = el("div"); box.style.display = "flex"; box.style.flexDirection = "column"; box.style.gap = "10px";
   box.append(el("div", "facts", link.url));
@@ -1951,7 +2017,8 @@ function flash(rec) {
 // ---------------------------------------------------------------- events
 function onEvent(ev) {
   const id = ev.task_id, d = ev.data || {};
-  if (SCREEN && String(d.screen || "") !== SCREEN) return;      // a screen shows only what's sent to it
+  // A presentation display shows only what's addressed to it (the server already sends only that).
+  if (document.body.classList.contains("ambient") && ev.type.startsWith("panel.") && ev.device == null) return;
   if (ev.type === "mailbox.changed") {               // the chip, and an open mailbox panel, stay current
     updateChip(d);
     refreshOpen(["parallax.mailbox"], new Set());
@@ -1977,7 +2044,8 @@ function onEvent(ev) {
       rec = rec || makePanel(id, ev.tool);
       Object.assign(rec, { unit: d.unit || null, cancellable: d.cancellable !== false, closeAfter: d.close_after || null,
                            key: d.key, args: d.args || {}, refreshes: d.refreshes || [], tier: d.tier,
-                           subtitle: d.subtitle || null, critical: d.critical || null });
+                           subtitle: d.subtitle || (d.sent_from ? `Sent from ${d.sent_from}` : null), critical: d.critical || null });
+      if (d.present) rec.node.classList.add("present");
       if (d.snapshot) {                              // memory: show the last panel now, refresh behind it
         const sn = d.snapshot;
         rec.state = "refreshing";
@@ -2099,7 +2167,7 @@ function connect() {
     connectedBefore = true;
     catchUpOnRelease();
     fetch("/mailbox/count").then(r => r.json()).then(updateChip).catch(() => {});
-    loadGlance();
+    loadGlance(); loadAmbient();
     if (!digestChecked) { digestChecked = true; fetch("/digest/check", { method: "POST" }).catch(() => {}); }
   };
   ws.onmessage = m => { try { onEvent(JSON.parse(m.data)); } catch (e) { console.warn("bad event", e); } };
@@ -2251,9 +2319,9 @@ setInterval(() => {
 // Her name, then the time and date, kept current.
 function tick() {
   const now = new Date();
-  const c = document.getElementById("clock");
+  const c = document.getElementById("clock"), big = document.body.classList.contains("screen");
   c.replaceChildren(el("b", null, now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })),
-                    el("span", "date", (SCREEN ? "" : "  ·  ") + now.toLocaleDateString([], { weekday: SCREEN ? "long" : "short", month: SCREEN ? "long" : "short", day: "numeric" })));
+                    el("span", "date", (big ? "" : "  ·  ") + now.toLocaleDateString([], { weekday: big ? "long" : "short", month: big ? "long" : "short", day: "numeric" })));
 }
 tick(); setInterval(tick, 10000);
 function say(text) {                            // a reply that isn't to something you typed (a confirmation)

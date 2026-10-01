@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
-from . import (assistant, auth, constellation, db, digest, glance, learning, llm_api, mailbox, memory, mnemosyne,
+from . import (ambient, assistant, auth, constellation, db, digest, glance, learning, llm_api, mailbox, memory, mnemosyne,
                nodes, registry, releases, tasks)
 from .config import ConfigStore
 from .events import CHANNEL
@@ -66,6 +66,7 @@ app.include_router(mailbox.router)
 app.include_router(digest.router)
 app.include_router(mnemosyne.router)
 app.include_router(glance.router)
+app.include_router(ambient.router)
 app.include_router(llm_api.router)
 app.include_router(learning.router)
 app.include_router(auth.router)
@@ -220,10 +221,17 @@ async def events_ws(ws: WebSocket):
         await ws.close(code=4401)              # revoked between the proxy's check and now
         return
     await ws.accept()
-    pubsub = ws.app.state.redis.pubsub()
+    redis = ws.app.state.redis
+    pubsub = redis.pubsub()
     await pubsub.subscribe(CHANNEL)
-    checked = time.monotonic()
+    checked = 0.0
     try:
+        if me is not None:                     # what was sent here while it wasn't open
+            from .constellation import DISPLAY_QUEUE
+            q = DISPLAY_QUEUE.format(me["id"])
+            for raw in await redis.lrange(q, 0, -1):
+                await ws.send_text(raw.decode() if isinstance(raw, bytes) else raw)
+            await redis.delete(q)
         while True:
             msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
             if msg is not None:
@@ -239,6 +247,9 @@ async def events_ws(ws: WebSocket):
                 if await auth.device_by_id(me["id"]) is None:
                     await ws.close(code=4401)
                     break
+                from .constellation import DISPLAY_SEEN
+                await redis.set(DISPLAY_SEEN.format(me["id"]), "1", ex=20)   # "open now", for send
+                me = await auth.device_by_id(me["id"]) or me                  # its role may have changed
             await asyncio.sleep(0)
     except (WebSocketDisconnect, RuntimeError):
         pass

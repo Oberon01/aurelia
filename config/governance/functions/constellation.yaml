@@ -18,6 +18,7 @@ tools:
   submit:          { tier: change }      # the press that buys, pays, sends, posts or deletes: always confirmed
   sign_in:         { tier: change }      # a login he saved on that computer; she never sees it (Sep 30 decision)
   logins:          { tier: reference }   # which sites have a saved login there (names only)
+  send:            { tier: act }         # a panel, link or note to another display (or a group by role)
   search_files:    { tier: reference }
   list_processes:  { tier: reference }   # what's running on a computer (node reporting)
   health:          { tier: reference }   # how a computer is doing: hardware, live state, why it's slow

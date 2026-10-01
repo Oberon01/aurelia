@@ -1,0 +1,73 @@
+"""Device roles, groups, which panel 'this' means, and quiet hours."""
+import os
+from datetime import time
+
+os.environ.setdefault("DATABASE_URL", "postgresql://x@localhost/x")    # importing the app needs these set
+os.environ.setdefault("REDIS_URL", "redis://localhost")
+
+import pytest
+
+from app import roles
+from app.ambient import in_quiet
+from app.assistant import _plain, _takes_panel, with_panel_task
+from app.context import PanelRef, Screen
+
+
+@pytest.mark.parametrize("kind,info,want", [
+    ("node", {"shell": "on", "screens": [{}]}, "presentation"),
+    ("node", {"shell": "off", "screens": [{}]}, "workstation"),
+    ("node", {"shell": "off", "screens": []}, "server"),
+    ("node", {"shell": "on", "role": "server"}, "server"),             # his --role at install wins over the guess
+    ("node", {"role": "toaster"}, "workstation"),                      # nonsense is ignored
+    ("browser", {"os": "Android"}, "companion"), ("browser", {"os": "iPhone"}, "companion"),
+    ("browser", {"os": "Windows"}, "workstation"), ("terminal", {}, None),
+])
+def test_guessing(kind, info, want):
+    assert roles.effective(kind, None, info) == want
+
+
+def test_his_choice_wins_and_screens_follow_their_node():
+    assert roles.effective("node", "server", {"shell": "on"}) == "server"
+    assert roles.effective("browser", "presentation", {"os": "Windows"}) == "presentation"   # a wall tablet
+    assert roles.effective("browser", "server", {"os": "Windows"}) == "workstation"          # not a browser role
+    assert roles.effective("screen", None, {}, "workstation") == "workstation"
+    assert roles.effective("screen", None, {}) == "presentation"
+
+
+@pytest.mark.parametrize("words,want", [
+    ("all presentation devices", "presentation"), ("every presentation display", "presentation"),
+    ("all the TVs", "presentation"), ("all my phones", "companion"), ("everywhere", "*"),
+    ("all screens", "*"), ("every display", "*"), ("all of them", "*"),
+    ("the TV", None), ("my phone", None), ("living room tv", None), ("all", None),
+])
+def test_groups(words, want):
+    assert roles.group(words) == want
+
+
+def scr(focus=None, *ns):
+    return Screen(panels=[PanelRef(n=n, task_id=f"t{n}", tool="x.y", queued=(n == 9)) for n in ns], focus=focus)
+
+
+def test_this_panel():
+    assert with_panel_task({"to": "tv", "panel": 2}, scr(None, 1, 2, 3))["_panel_task"] == "t2"
+    assert with_panel_task({"to": "tv"}, scr(1, 1, 2, 3))["_panel_task"] == "t1"           # the one he clicked
+    assert with_panel_task({"to": "tv"}, scr(None, 1, 3, 9))["_panel_task"] == "t3"        # the newest on screen
+    assert "_panel_task" not in with_panel_task({"to": "tv", "text": "hi"}, scr(None, 1))  # a note, not a panel
+    assert "_panel_task" not in with_panel_task({"to": "tv"}, None)
+    assert with_panel_task({"to": "tv", "_panel_task": "forged"}, None) == {"to": "tv"}  # never from the model
+    with pytest.raises(ValueError, match="no panel 7"):
+        with_panel_task({"to": "tv", "panel": 7}, scr(None, 1))
+
+
+def test_markers_stay_with_us():
+    schema = {"type": "object", "properties": {"panel": {"type": "integer", "x-panel": True}}}
+    assert _takes_panel(schema) and not _takes_panel({"properties": {"panel": {"type": "integer"}}})
+    assert _plain(schema)["properties"]["panel"] == {"type": "integer"}
+    assert schema["properties"]["panel"]["x-panel"] is True                 # the original is untouched
+
+
+def test_quiet_hours():
+    assert in_quiet("23:00-07:00", time(23, 30)) and in_quiet("23:00-07:00", time(3, 0))
+    assert not in_quiet("23:00-07:00", time(7, 0)) and not in_quiet("23:00-07:00", time(12, 0))
+    assert in_quiet("13:00-14:00", time(13, 15)) and not in_quiet("13:00-14:00", time(14, 15))
+    assert not in_quiet("", time(3, 0)) and not in_quiet("nonsense", time(3, 0))

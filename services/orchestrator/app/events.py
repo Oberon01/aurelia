@@ -28,16 +28,17 @@ DISPLAYS = ("browser", "screen")   # the kinds of device that show panels
 
 def for_display(event: dict[str, Any], me: dict[str, Any] | None) -> bool:
     """Whether this display gets this event. Each display keeps its own panels: a panel goes
-    only to the display that asked for it. One nobody in particular asked for (a schedule, a
-    release, a terminal's request) goes to every display except node screens: a TV running her
-    shell shows only what was asked of it. Everything else (the mailbox count) goes to all.
+    only to the display that asked for it (or was sent it). One nobody in particular asked for (a
+    schedule, a release, a terminal's request) goes to every display except presentation ones: a
+    TV running her shell shows only what's sent to it. Everything else (the mailbox count) goes to all.
     A connection with no device (inside the stack, never through the proxy) gets everything."""
     if me is None:
         return True
     dev = event.get("device")
     if dev is not None:
         return dev == me["id"]
-    if str(event.get("type", "")).startswith("panel.") and me.get("kind") == "screen":
+    if str(event.get("type", "")).startswith("panel.") and (me.get("kind") == "screen"
+                                                         or me.get("role") == "presentation"):
         return False
     return True
 

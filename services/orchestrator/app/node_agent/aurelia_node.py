@@ -58,7 +58,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.5.2"
+VERSION = "0.5.3"
 IS_WINDOWS = platform.system() == "Windows"
 EXIT_REVOKED = 3                                   # the service manager doesn't restart after this
 EXIT_UPDATED = 75                                  # restart me: a new version is in place
@@ -139,11 +139,38 @@ def machine_info() -> dict:
             "os_version": platform.release() if IS_WINDOWS else (rel.get("PRETTY_NAME") or platform.release()),
             "hostname": socket.gethostname(), "arch": platform.machine(), "agent_version": VERSION,
             "screens": screens()}
+    if role_hint():
+        info["role"] = role_hint()          # his choice at install; the devices panel has the last word
     if not IS_WINDOWS:
         env = session_env()
         info.update(distro=rel.get("ID"), session=env.get("XDG_SESSION_TYPE") or None,
                     desktop=env.get("XDG_CURRENT_DESKTOP") or None)
     return {k: v for k, v in info.items() if v is not None}
+
+
+NODE_ROLES = ("presentation", "workstation", "server", "room")
+
+
+def role_hint() -> str | None:
+    try:
+        r = (config_dir() / "role").read_text().strip()
+    except OSError:
+        return None
+    return r if r in NODE_ROLES else None
+
+
+def cmd_role(role: str) -> int:
+    config_dir().mkdir(parents=True, exist_ok=True)
+    if role == "auto":
+        try:
+            (config_dir() / "role").unlink()
+        except OSError:
+            pass
+        print("Role: guessed from this computer (shell on = presentation, a screen = workstation, none = server).")
+        return 0
+    (config_dir() / "role").write_text(role + "\n")
+    print(f"Role: {role}. It's a suggestion: the devices panel on Aurelia's display has the last word.")
+    return 0
 
 
 SESSION_KEYS = ("DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "XAUTHORITY",
@@ -854,8 +881,19 @@ def do_home(args: dict) -> dict:
     return {"closed": SHELL.home()}
 
 
+def do_showing(args: dict) -> dict:
+    """What's in front on her screen: her own view, or something she opened (its title)."""
+    if not (SHELL and SHELL.running()):
+        return {"shell": False}
+    others = [t for t in SHELL.pages() if not SHELL.is_hers(t)]
+    if not others:
+        return {"shell": True, "content": False}
+    t = next((x for x in others if x["id"] == SHELL.current), others[0])
+    return {"shell": True, "content": True, "title": str(t.get("title") or "")[:120]}
+
+
 COMMANDS = {"open_url": do_open_url, "launch_app": do_launch_app, "list_apps": do_list_apps, "info": do_info,
-            "home": do_home, "health": do_health, "processes": do_processes, "kill": do_kill}
+            "home": do_home, "showing": do_showing, "health": do_health, "processes": do_processes, "kill": do_kill}
 
 
 def execute(cmd: dict) -> dict:
@@ -2000,6 +2038,8 @@ def main(argv=None) -> int:
     sub.add_parser("run", help="connect and wait for work (what the service runs)")
     sh = sub.add_parser("shell", help="make this computer's screen Aurelia (on) or not (off)")
     sh.add_argument("state", choices=["on", "off"])
+    rl = sub.add_parser("role", help="what this computer is for (a suggestion; the devices panel decides)")
+    rl.add_argument("role", choices=[*NODE_ROLES, "auto"])
     sub.add_parser("status")
     sub.add_parser("forget")
     lg = sub.add_parser("login", help="logins Aurelia may use on this computer (add, list, remove)")
@@ -2014,6 +2054,8 @@ def main(argv=None) -> int:
         return cmd_pair(a.server, a.name)
     if a.cmd == "shell":
         return cmd_shell(a.state)
+    if a.cmd == "role":
+        return cmd_role(a.role)
     return {"run": cmd_run, "status": cmd_status, "forget": cmd_forget}[a.cmd]()
 
 

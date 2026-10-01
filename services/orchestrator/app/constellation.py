@@ -11,6 +11,8 @@ nodes hold their connection here (nodes.py). Tools:
   submit   a click (or Enter) that buys, pays, sends, posts or deletes: always his confirmation
   health, list_processes   how a computer is doing (hardware, live state, processes) and why it's slow
   close_process → kill_process   closing a program: found first, then always his confirmation
+  send     a panel, a link or a note to another display: one by name, or a group by role ("all
+           presentation devices", "everywhere"). Presentation displays show it full screen.
 Pairing and revoking happen on the display (or the server), never through a tool:
 Aurelia can show the list but can't let a device in or lock one out.
 """
@@ -100,6 +102,18 @@ TOOLS = [
                                     "confirmation. If it isn't saved there, tell him how to add it on that computer.",
         input_schema={"type": "object", "properties": {"target": {"type": "string"}, "site": {"type": "string"}},
                       "required": ["site"]},
+        cancellable=False),
+    registry.ToolSpec(
+        name="send", description="Send something to another of his displays: a panel on this screen (panel: its "
+                                 "number; leave out for the one he clicked or the newest, i.e. 'this'), a link (url) "
+                                 "or a short note (text). to: a display by name ('the TV', 'my phone', 'the desk'), "
+                                 "or a group by role: 'all presentation devices', 'all phones', 'everywhere'. A "
+                                 "presentation display (a TV) shows it full screen, and a link opens there. Not for "
+                                 "opening a site on a computer: that's open.",
+        input_schema={"type": "object", "properties": {
+            "to": {"type": "string", "description": "a display's name, or a group like 'all presentation devices'"},
+            "panel": {"type": "integer", "x-panel": True, "description": "the number on the panel to send"},
+            "url": {"type": "string"}, "text": {"type": "string"}}, "required": ["to"]},
         cancellable=False),
     registry.ToolSpec(
         name="logins", description="Which sites have a login saved on one of his computers (names only; never the "
@@ -812,10 +826,158 @@ async def submit(app, user: str, args: dict) -> dict:
     return {"headline": f"Pressed \"{data.get('clicked')}\"", "did": _did(node, f"Pressed \"{data.get('clicked')}\"", data)}
 
 
+# ---- sending to another display ---------------------------------------------------------------
+
+DISPLAY_SEEN = "aurelia:display:{}"          # set while a display has her open (main.events_ws)
+
+
+async def displays(app) -> list[dict]:
+    """Every display that can show panels: paired browsers, and the screens of computers running
+    her shell (named after their computer). With each one's role and whether it's open now."""
+    rows = await db.pool().fetch("SELECT id, kind, name, role, info FROM devices WHERE status='approved' "
+                                 "AND kind IN ('browser', 'screen') ORDER BY id")
+    nodes_by_id = {r["id"]: r for r in await db.pool().fetch(
+        "SELECT id, name, role, info FROM devices WHERE status='approved' AND kind='node'")}
+    out = []
+    for r in rows:
+        info = json.loads(r["info"]) if isinstance(r["info"], str) else (r["info"] or {})
+        d = {"id": r["id"], "kind": r["kind"], "name": r["name"], "role": await auth.role_of(r), "node": None,
+             "open": bool(await app.state.redis.exists(DISPLAY_SEEN.format(r["id"])))}
+        if r["kind"] == "screen":
+            node = nodes_by_id.get(int(info["node_id"])) if str(info.get("node_id") or "").isdigit() else None
+            if node is None:
+                continue                                 # a screen whose computer is gone
+            ninfo = json.loads(node["info"]) if isinstance(node["info"], str) else (node["info"] or {})
+            d.update(name=node["name"], hostname=ninfo.get("hostname"), node={"id": node["id"], "name": node["name"]})
+        out.append(d)
+    return out
+
+
+async def send_targets(app, to: str, asker: int | None) -> tuple[list[dict], str]:
+    """Who 'to' means: a role group ('all presentation devices'), everywhere, or one display by name."""
+    from . import roles
+    every = await displays(app)
+    grp = roles.group(to)
+    if grp:
+        hits = [d for d in every if d["id"] != asker and (grp == "*" or d["role"] == grp)]
+        label = "everywhere" if grp == "*" else f"every {grp} display"
+        if not hits:
+            raise ValueError(f"You don't have any {grp} displays besides this one." if grp != "*" else
+                             "There's no other display to send it to.")
+        return hits, label
+    hits = [d for d in every if _match(to, d["name"], d.get("hostname"))]
+    if not hits:
+        names = ", ".join(sorted({d["name"] for d in every})) or "none yet"
+        raise ValueError(f"I don't know a display called \"{to}\". Yours: {names}.")
+    if len(hits) > 1:
+        live = [d for d in hits if d["open"]]
+        if len(live) != 1:
+            raise ValueError(f"Which one: {', '.join(d['name'] for d in (live or hits))}?")
+        hits = live
+    if hits[0]["id"] == asker:
+        raise ValueError("That's the display you're on; it's already here.")
+    return hits, hits[0]["name"]
+
+
+DISPLAY_QUEUE = "aurelia:display:{}:queued"   # sent while it wasn't open: shown when it next opens
+QUEUE_HOURS = 24
+
+
+async def _show_on(app, user: str, d: dict, tool: str, args: dict, data: dict, sent_from: str) -> str:
+    """One panel on one display: a finished task of its own, addressed to that display. A display
+    that isn't open gets it when it next connects (within a day)."""
+    from . import memory
+    from .events import PanelEvent, publish
+    task_id = str(uuid.uuid4())
+    await db.pool().execute(
+        "INSERT INTO task_runs (id, tool, args, trigger, user_id, tier, confirmed, device, status, result, "
+        "finished_at, duration_ms) VALUES ($1, $2, $3::jsonb, 'send', $4, 'reference', false, $5, 'completed', "
+        "$6::jsonb, now(), 0)", uuid.UUID(task_id), tool, json.dumps(args), user, d["id"], json.dumps(data))
+    events = [
+        PanelEvent(type="panel.open", task_id=task_id, tool=tool, device=d["id"], data={
+            "args": args, "user": user, "trigger": "send", "tier": "reference", "cancellable": False,
+            "key": memory.args_key(args), "sent_from": sent_from, "present": d["role"] == "presentation"}),
+        PanelEvent(type="panel.result", task_id=task_id, tool=tool, device=d["id"],
+                   data={"status": "completed", "partial": False, **data}),
+        PanelEvent(type="panel.close", task_id=task_id, tool=tool, device=d["id"],
+                   data={"status": "completed", "has_result": True, "error": None}),
+    ]
+    for e in events:
+        await publish(app.state.redis, e)
+    if not d["open"]:
+        q = DISPLAY_QUEUE.format(d["id"])
+        await app.state.redis.rpush(q, *[e.model_dump_json() for e in events])
+        await app.state.redis.ltrim(q, -60, -1)                 # the last 20 sends at most
+        await app.state.redis.expire(q, QUEUE_HOURS * 3600)
+    return task_id
+
+
+async def send(app, user: str, args: dict) -> dict:
+    to = str(args.get("to") or "").strip()
+    if not to:
+        raise ValueError("Send it where? Name a display, or say e.g. \"all presentation devices\".")
+    task = str(args.get("_panel_task") or "")
+    url, text = str(args.get("url") or "").strip(), str(args.get("text") or "").strip()[:2000]
+    me = await db.pool().fetchrow("SELECT t.device, d.name FROM task_runs t LEFT JOIN devices d ON d.id = t.device "
+                                  "WHERE t.id=$1", uuid.UUID(str(args["_self"]))) if args.get("_self") else None
+    asker, sent_from = (me["device"], me["name"]) if me else (None, None)
+    targets, label = await send_targets(app, to, asker)
+    if task:
+        row = await db.pool().fetchrow("SELECT tool, args, status, result FROM task_runs WHERE id=$1", uuid.UUID(task))
+        if row is None:
+            raise ValueError("That panel is gone.")
+        if row["status"] == "running":
+            raise ValueError("That one is still running; send it when it's done.")
+        result = json.loads(row["result"]) if isinstance(row["result"], str) else row["result"]
+        if not result:
+            raise ValueError("That panel has nothing to show.")
+        tool, targs, what = row["tool"], (json.loads(row["args"]) if isinstance(row["args"], str) else row["args"]), "panel"
+        data = result
+    elif url or text:
+        if url and not urlsplit(url if "://" in url else "https://" + url).scheme in ("http", "https"):
+            raise ValueError("Only http and https links.")
+        if url and "://" not in url:
+            url = "https://" + url
+        tool, targs, what = f"{NAME}.send", {"note": text[:80], "url": url}, "link" if url else "note"
+        data = {"headline": f"From {sent_from}" if sent_from else "Sent to you", "note": {"text": text, "url": url}}
+    else:
+        raise ValueError("Send what? A panel (its number), a link, or a note.")
+    went, waiting, behind = [], [], []
+    for d in targets:
+        if what == "link" and d["node"] and d["role"] == "presentation":
+            try:                                             # a link on a TV: open it there, full screen
+                await _open_on_node(app, await target(app, d["node"]["name"]), url, "")
+                went.append(d["name"])
+                continue
+            except ValueError as exc:
+                waiting.append(f"{d['name']} ({exc})")
+                continue
+        await _show_on(app, user, d, tool, targs, data, sent_from or "another display")
+        (went if d["open"] else waiting).append(d["name"])
+        if d["node"] and d["open"]:
+            try:                                             # her view is behind something she opened there
+                shown = await _ask_node(app, {"id": d["node"]["id"], "name": d["name"]}, "showing", {}, timeout=5)
+                if shown.get("content"):
+                    behind.append(f"{d['name']} is showing {shown.get('title') or 'something'}, so it's waiting "
+                                  f"behind it (say \"go home on {d['name']}\" to see it)")
+            except Exception:
+                pass                                         # an older agent, or busy: the panel is there either way
+    head = f"Sent to {label}" if went else f"Queued for {label}"
+    out = {"headline": head, "sent": {"what": what, "to": went, "not_open": waiting}}
+    notes = []
+    if waiting:
+        notes.append(f"Not open right now: {', '.join(waiting)} (it'll show there when it opens, within a day)"
+                     if what != "link" else f"Couldn't open it on: {', '.join(waiting)}")
+    notes += behind
+    if notes:
+        out["note"] = "; ".join(notes) + "."
+    return out
+
+
 HANDLERS = {"devices": devices, "open": open_, "apps": apps, "home": home, "look": look, "click": click, "type": type_,
             "press": press, "scroll": scroll, "back": back, "media": media, "submit": submit, "health": health,
             "list_processes": list_processes, "close_process": close_process, "kill_process": kill_process,
-            "sign_in": sign_in, "logins": logins}
+            "sign_in": sign_in, "logins": logins, "send": send}
 
 
 @router.get("/shots/{sid}.jpg", include_in_schema=False)
@@ -875,6 +1037,8 @@ async def _run(app, tool: str, task_id: str, args: dict) -> None:
     from . import tasks
     try:
         row = await db.pool().fetchrow("SELECT user_id FROM task_runs WHERE id=$1", uuid.UUID(task_id))
+        if tool == "send":
+            args = {**args, "_self": task_id}               # who's sending: this task's display
         data = await HANDLERS[tool](app, row["user_id"] if row else "owner", args)
         result = tasks.Result(status="completed", data=data)
     except ValueError as exc:

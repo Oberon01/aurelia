@@ -71,7 +71,7 @@ def stack(tmp_path_factory):
         "  look: {tier: read}\n  click: {tier: act}\n  type: {tier: act}\n  press: {tier: act}\n  scroll: {tier: act}\n"
         "  back: {tier: act}\n  media: {tier: act}\n  submit: {tier: change}\n"
         "  health: {tier: reference}\n  list_processes: {tier: reference}\n  close_process: {tier: act}\n"
-        "  kill_process: {tier: change}\n  sign_in: {tier: change}\n  logins: {tier: reference}\n"
+        "  kill_process: {tier: change}\n  sign_in: {tier: change}\n  logins: {tier: reference}\n  send: {tier: act}\n"
         "rules:\n  screen:\n    confirm_before: [buy, place order, pay, send, delete]\n"
         "  screens:\n    - {computer: Den PC, tv: Den TV, input: HDMI 2}\n    - {computer: Attic PC, tv: Attic TV, input: ''}\n")
     (tmp / "aurelia.yaml").write_text(

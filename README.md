@@ -117,6 +117,38 @@ It shows a code: approve it in the mailbox. A systemd user service keeps it
 running through its guard (`journalctl --user -u aurelia-node -f` for its log).
 Revoking the computer on the devices panel stops it.
 
+**What each device is for (roles).** Every computer and browser has a role,
+and her behavior follows from it:
+
+| Role | Examples | What it means |
+|---|---|---|
+| Presentation | the TV PC, a wall tablet | Shows only what's sent to it, over an ambient screen. Panels nobody sent it never appear there. |
+| Workstation | your desktop, a laptop | A machine you use: panels you ask for open there; she never takes over its screen without asking. |
+| Server | the home server, the GPU box | No screen: health, services, fixes. |
+| Companion | your phone | Personal: what you ask there stays there. |
+| Room | a microphone and speaker unit (later) | No screen. |
+
+A role is guessed until you choose one on the devices panel: a computer
+running her shell is Presentation, one with a screen a Workstation, one
+without a Server; a phone's browser is a Companion. Add `--role=server` (or
+`presentation`, `workstation`) to the install line to suggest one. Only you
+set roles, on the devices panel; she can mention them, never change them.
+
+**Sending to another display.** "Send this to the TV", "send panel 2 to my
+phone", "send this to all presentation devices", "send it everywhere". "This"
+is the panel you clicked, otherwise the newest one. She can also send a link
+or a short note ("send 'dinner at 7' to the hall tablet"). A Presentation
+display shows it big; a link sent to a Presentation computer opens there. A
+display that isn't open gets it when it next opens (within a day). If the TV
+is showing something she opened, the panel waits behind it and she says so.
+
+**The ambient screen.** A Presentation display with nothing on it shows a dim
+clock, the date, the weather and anything worth a glance (a door left
+unlocked), and goes dark during quiet hours. The clock steps out of the way
+when a panel arrives. Settings are under `ambient:` in `config/aurelia.yaml`:
+how dim, the quiet hours, and your latitude and longitude for the weather
+(from Open-Meteo, no key; only the coordinates are sent).
+
 **Her shell: the computer's screen is her.** Add `--shell` to the install line
 (it asks for sudo once):
 
@@ -308,8 +340,8 @@ Enter (Shift+Enter for a new line). Esc clears finished panels.
 **Each display keeps its own panels.** A panel opens only on the display that
 asked for it: what you ask on the phone stays on the phone, and the desk
 stays as it was. Panels nobody in particular asked for (a schedule, a request
-from `ask.sh`) show on every display except node screens, so a TV running her
-shell shows only what was asked of it. The mailbox count shows everywhere. The
+from `ask.sh`) show on every display except Presentation ones, so a TV shows
+only what's sent to it. The mailbox count shows everywhere. The
 morning digest opens where you first are after the digest hour, never on a
 node's screen by itself. Revoking a device also closes its open display within
 seconds.

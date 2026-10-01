@@ -4,6 +4,8 @@
 #   curl -fsSL https://atlas-ai.<tailnet>.ts.net:8443/node/install-linux.sh | bash -s -- https://atlas-ai.<tailnet>.ts.net:8443 "Living room TV"
 #   ... | bash -s -- <address> "Living room TV" --shell      also make this screen hers (asks for sudo once)
 #   ... | bash -s -- <address> --no-shell                    back to a normal desktop at login
+#   ... | bash -s -- <address> --role=server                 what it's for (presentation, workstation, server);
+#                                                            guessed if left out, changeable on the devices panel
 #
 # The agent runs as you: it lives in ~/.local/share/aurelia-node, its key in ~/.config/aurelia-node
 # (readable only by you), and a systemd user service keeps it running through its guard (which
@@ -15,16 +17,17 @@
 # GNOME stays on the login screen as a way back in. Each step says what failed if it does.
 set -euo pipefail
 
-SERVER="" NAME="" SHELL_MODE=""
+SERVER="" NAME="" SHELL_MODE="" ROLE=""
 for arg in "$@"; do
   case "$arg" in
     --shell) SHELL_MODE=on ;;
     --no-shell) SHELL_MODE=off ;;
+    --role=*) ROLE="${arg#--role=}" ;;
     *) if [[ -z "$SERVER" ]]; then SERVER="$arg"; elif [[ -z "$NAME" ]]; then NAME="$arg"; fi ;;
   esac
 done
 if [[ -z "$SERVER" ]]; then
-  echo "usage: install-linux.sh <Aurelia's address> [name for this computer] [--shell|--no-shell]"
+  echo "usage: install-linux.sh <Aurelia's address> [name for this computer] [--shell|--no-shell] [--role=presentation|workstation|server]"
   exit 1
 fi
 SERVER="${SERVER%/}"
@@ -70,6 +73,10 @@ acct.parent.mkdir(parents=True, exist_ok=True)
 with acct.open("w") as f: ac.write(f)
 PY
 }
+
+if [[ -n "$ROLE" ]]; then
+  python3 "$AGENT" role "$ROLE" || exit 1
+fi
 
 if [[ "$SHELL_MODE" == "on" ]]; then
   echo "Setting up her session (sudo)..."

@@ -254,7 +254,7 @@ async def _run_llm(app, body: Ask, history: list[dict[str, Any]], request_id: st
                 result_text, is_error = await _read_panel(body.screen, call.args)
             else:
                 result_text, is_error = await _run_tool_call(app, body.user, by_api.get(call.name), call.args, out,
-                                                             body.device)
+                                                             body.device, body.screen)
             messages.append(Message("tool", result_text, tool_call_id=call.id,
                                     tool_name=call.name, is_error=is_error))
 
@@ -295,15 +295,19 @@ async def _read_panel(screen: context.Screen | None, args: dict) -> tuple[str, b
 
 
 async def _run_tool_call(app, user: str, qualified: str | None, args: dict, out: dict,
-                         device: int | None = None) -> tuple[str, bool]:
+                         device: int | None = None, screen: context.Screen | None = None) -> tuple[str, bool]:
     if qualified is None:
         return _data({"status": "error", "error": "no such tool"}), True
     args = dict(args or {})
     display = "brief" if args.pop(DISPLAY_ARG, None) == "brief" else "panel"
-    if display == "brief":
-        resolved = await registry.resolve(app.state.redis, qualified)
-        if resolved and resolved.tool.display == "panel":     # always shown: a library, a quiz, a topic…
-            display = "panel"
+    resolved = await registry.resolve(app.state.redis, qualified)
+    if display == "brief" and resolved and resolved.tool.display == "panel":   # always shown: a library, a quiz…
+        display = "panel"
+    if resolved and _takes_panel(resolved.tool.input_schema):
+        try:
+            args = with_panel_task(args, screen)
+        except ValueError as exc:
+            return _data({"status": "error", "error": str(exc)}), True
     try:
         task_id = await launch(app, StartTask(tool=qualified, args=args, user=user, display=display, device=device))
     except HTTPException as exc:
@@ -324,6 +328,39 @@ async def _run_tool_call(app, user: str, qualified: str | None, args: dict, out:
                       "note": "Nothing was pressed. Tell the user what's waiting; they confirm on the display."}), False
     return _data({"status": result["status"], "partial": result["partial"],
                   "result": result["result"], "error": result["error"]}), result["status"] == "failed"
+
+
+PANEL_TASK = "_panel_task"
+
+
+def _takes_panel(schema: dict | None) -> bool:
+    """A tool that acts on one of his panels (e.g. sending it) marks its `panel` argument."""
+    prop = ((schema or {}).get("properties") or {}).get("panel") or {}
+    return bool(prop.get("x-panel"))
+
+
+def with_panel_task(args: dict, screen: context.Screen | None) -> dict:
+    """The panel he means, as the task behind it: the number he said, else the one he clicked,
+    else the newest on screen. Only this display's panels count, and the model never names tasks."""
+    args = {k: v for k, v in args.items() if k != PANEL_TASK}
+    panels = [p for p in (screen.panels if screen else [])]
+    n = args.get("panel")
+    if n not in (None, ""):
+        try:
+            n = int(n)
+        except (TypeError, ValueError):
+            raise ValueError("Which panel? Give its number.")
+        ref = next((p for p in panels if p.n == n), None)
+        if ref is None:
+            raise ValueError(f"There's no panel {n} on this screen.")
+    else:
+        ref = next((p for p in panels if screen and p.n == screen.focus), None)
+        if ref is None and not any(args.get(k) for k in ("url", "text")):
+            live = [p for p in panels if not p.queued] or panels
+            ref = max(live, key=lambda p: p.n) if live else None
+    if ref is not None:
+        args[PANEL_TASK] = ref.task_id
+    return args
 
 
 MAX_TOOL_OUTPUT = 40_000     # characters handed to the model per tool call; the panel shows everything
@@ -351,7 +388,7 @@ async def _tool_defs(app, user: str) -> tuple[list[ToolDef], dict[str, str], lis
             q = f"{fn.name}.{tool.name}"
             note = " Requires the user's confirmation." if gov.decide(fn.name, tool.name, user, False).needs_confirmation else ""
             defs.append(ToolDef(name=api_name(q), description=f"[{fn.name.capitalize()}] {tool.description}{note}",
-                                input_schema=tool.input_schema if tool.display == "panel" else _with_display(tool.input_schema)))
+                                input_schema=_plain(tool.input_schema) if tool.display == "panel" else _with_display(tool.input_schema)))
             by_api[api_name(q)] = q
             visible.append(tool.name)
         if visible:
@@ -368,8 +405,17 @@ DISPLAY_SCHEMA = {"type": "string", "enum": ["panel", "brief"],
                                  "only what matters, never repeats the panel."}
 
 
-def _with_display(schema: dict) -> dict:
+def _plain(schema: dict | None) -> dict:
+    """Our own markers (x-…) stay with us; the model gets plain JSON Schema."""
     s = dict(schema or {"type": "object"})
+    if s.get("properties"):
+        s["properties"] = {k: {kk: vv for kk, vv in v.items() if not kk.startswith("x-")} if isinstance(v, dict) else v
+                           for k, v in s["properties"].items()}
+    return s
+
+
+def _with_display(schema: dict) -> dict:
+    s = _plain(schema)
     s["properties"] = {**(s.get("properties") or {}), DISPLAY_ARG: DISPLAY_SCHEMA}
     return s
 
