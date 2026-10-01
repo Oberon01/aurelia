@@ -205,7 +205,7 @@ def test_page_commands_need_her_shell(monkeypatch):
     monkeypatch.setattr(agent, "SHELL", None)
     for kind in ("page_look", "page_click", "page_type", "page_key", "page_scroll", "page_back", "page_media"):
         out = agent.execute({"kind": kind, "args": {"n": 1, "text": "x", "key": "enter", "action": "play"}})
-        assert out == {"ok": False, "error": "her shell isn't running on this computer, so I can't see its screen"}
+        assert out == {"ok": False, "error": "my shell isn't running on this computer, so I can't see its screen"}
 
 
 def test_a_press_that_buys_or_sends_comes_back_undone(monkeypatch):
@@ -423,3 +423,94 @@ def test_signing_in_needs_a_saved_login(tmp_path, monkeypatch):
 
 
 import json  # noqa: E402
+
+
+# ---- diagnostics: read-only checks, judged from what real Ubuntu prints -------------------------
+
+class FakeSystem:
+    """Answers the agent's fixed programs the way Ubuntu does; records every call (no shell, no writes)."""
+    def __init__(self, answers):
+        self.answers, self.calls = answers, []
+
+    def __call__(self, argv, timeout=6):
+        self.calls.append(argv)
+        for prefix, reply in self.answers.items():
+            if " ".join(argv).startswith(prefix):
+                return reply
+        return 0, "", ""
+
+
+@pytest.fixture
+def ubuntu(monkeypatch, tmp_path):
+    journal = tmp_path / "journal"
+    (journal / "abc").mkdir(parents=True)
+    monkeypatch.setattr(agent.shutil, "which", lambda name: f"/usr/bin/{name}")
+    real_isdir = agent.Path.is_dir
+    monkeypatch.setattr(agent.Path, "is_dir", lambda self: True if str(self) == "/var/log/journal" else real_isdir(self))
+    monkeypatch.setattr(agent.Path, "iterdir", lambda self: iter([journal / "abc"]))
+    def install(answers):
+        fake = FakeSystem(answers)
+        monkeypatch.setattr(agent, "_run_full", fake)
+        monkeypatch.setattr(agent, "_run", lambda argv, timeout=4: fake(argv, timeout)[1])
+        return fake
+    return install
+
+
+def test_failed_services_and_errors(ubuntu):
+    fake = ubuntu({
+        "systemctl list-units": (0, "snapd.service loaded failed failed Snap Daemon\n", ""),
+        "systemctl --user list-units": (0, "aurelia-node.service loaded failed failed Aurelia\n", ""),
+        "journalctl --no-pager -o short-iso -n 30 -b -p err": (0, "\n".join(
+            f"2026-10-01T10:0{i}:00-0500 node1 gnome-shell[2106]: JS ERROR: thing {i}" for i in range(6)) +
+            "\n2026-10-01T10:09:00-0500 node1 kernel: usb 1-2: device descriptor read/64, error -71\n", ""),
+    })
+    s = agent._diag_services()
+    assert s["status"] == "bad" and "snapd.service" in s["summary"] and "aurelia-node.service (yours)" in s["lines"]
+    e = agent._diag_errors()
+    assert e["status"] == "info" and "gnome-shell ×6" in e["summary"] and len(e["lines"]) == 7
+    assert all(c[0] in ("systemctl", "journalctl") for c in fake.calls)
+    assert not any(w in " ".join(c) for c in fake.calls for w in ("restart", "start", "stop", "enable", "reset-failed"))
+
+
+def test_out_of_memory_is_serious(ubuntu):
+    ubuntu({"journalctl --no-pager -o short-iso -n 40 -k": (0, (
+        "2026-10-01T09:00:00 node1 kernel: Out of memory: Killed process 4242 (chrome) total-vm:9000000kB\n"
+        "2026-10-01T09:00:01 node1 kernel: oom-kill:constraint=CONSTRAINT_NONE\n"), "")})
+    k = agent._diag_kernel()
+    assert k["status"] == "bad" and "out of memory" in k["summary"].lower()
+
+
+def test_tailscale_and_clock(ubuntu):
+    ubuntu({"tailscale status --json": (0, '{"BackendState": "Running", "Self": {"Online": true}, '
+                                           '"Peer": {"a": {"Online": true}, "b": {"Online": false}}}', ""),
+            "timedatectl show": (0, "no\n", "")})
+    t = agent._diag_tailscale()
+    assert t["status"] == "ok" and "1 of 2" in t["summary"]
+    assert agent._diag_time()["status"] == "warn"
+    ubuntu({"tailscale status --json": (0, '{"BackendState": "NeedsLogin"}', "")})
+    assert agent._diag_tailscale()["status"] == "bad"
+
+
+def test_one_service_in_detail(ubuntu):
+    ubuntu({"systemctl show NetworkManager.service": (0, "LoadState=loaded\nActiveState=active\nSubState=running\n"
+                                                         "Result=success\nNRestarts=4\nDescription=Network Manager\n", ""),
+            "journalctl --no-pager -o short-iso -n 30 -u NetworkManager.service": (0, "2026-10-01 node1 NetworkManager[812]: dhcp4 timeout\n", "")})
+    c = agent._diag_unit("NetworkManager")
+    assert c["status"] == "warn" and "restarted 4 time(s)" in c["summary"] and c["lines"]
+    with pytest.raises(ValueError):
+        agent._diag_unit("x; rm -rf /")
+    ubuntu({"systemctl show": (0, "LoadState=not-found\n", ""), "systemctl --user show": (0, "LoadState=not-found\n", "")})
+    assert agent._diag_unit("nothere")["summary"] == "No service by that name here"
+
+
+def test_secrets_never_leave(ubuntu):
+    line = agent._clean("sshd: password=hunter2 api_key: sk-abc Authorization Bearer eyJhbGciOiJIUzI1NiJ9abcdefghijklmnop")
+    assert "hunter2" not in line and "sk-abc" not in line and "eyJhbGci" not in line
+
+
+def test_a_failing_check_never_hides_the_rest(ubuntu, monkeypatch):
+    ubuntu({})
+    monkeypatch.setattr(agent, "_diag_network", lambda server: 1 / 0)
+    out = agent.do_diagnose({})
+    ids = [c["id"] for c in out["checks"]]
+    assert ids == list(agent.DIAG_CHECKS) and next(c for c in out["checks"] if c["id"] == "network")["status"] == "info"

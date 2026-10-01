@@ -303,3 +303,21 @@ def test_a_check_in_carries_health_and_urgent_problems_reach_the_mailbox(node, s
     assert tv["issues"][0]["level"] == "urgent" and tv["vitals"]["disks"][0]["used"] == 98
     out = httpx.post(f"{orch}/mailbox/{cards[0]['id']}/decide", json={"action": "approve"}).json()
     assert out["done"].startswith("Noted.")
+
+
+def test_whats_wrong_with_a_computer(node, stack):
+    """Stage 1 of node fixes, with a real agent: her read-only checks come back worst first, with
+    anything the last check-in flagged, and nothing on the computer is changed."""
+    orch = node["orch"]
+    status, res, err = run_task(orch, "constellation.diagnose", {"target": "living room tv"}, wait=60)
+    assert status == "completed", err
+    ids = [c["id"] for c in res["checks"]]
+    assert {"services", "her", "errors", "kernel", "network", "tailscale", "time", "storage", "memory", "updates"} <= set(ids)
+    order = {"bad": 0, "warn": 1, "info": 2, "ok": 3}
+    ranks = [order[c["status"]] for c in res["checks"]]
+    assert ranks == sorted(ranks)                                         # worst first
+    assert res["node"] == "Living room TV" and res["headline"].startswith("Living room TV")
+    status, res, err = run_task(orch, "constellation.diagnose", {"target": "living room tv", "service": "cron"}, wait=60)
+    assert status == "completed" and any(c["id"].startswith("service:cron") for c in res["checks"])
+    status, res, err = run_task(orch, "constellation.diagnose", {"target": "living room tv", "service": "a;b"}, wait=60)
+    assert status == "failed" and "service name" in err

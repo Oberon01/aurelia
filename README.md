@@ -223,6 +223,19 @@ with the Windows installer.
 | `what's running on the tv pc` / `what's using the memory on the laptop` | Processes, by program and one by one |
 | `close chrome on the laptop` / `force close chrome on the laptop` | A confirmation card, then it closes |
 
+**What's wrong with it (diagnostics, stage 1 of fixes).** "What's wrong with
+the TV PC?" runs the agent's read-only checks (0.5.4+): failed services, errors
+logged this boot, the kernel log (out-of-memory kills, disk errors), network and
+DNS (and Wi-Fi signal), Tailscale, the clock, storage (full or read-only disks),
+memory, a restart pending after updates, recent package changes, and her own
+screen there. "Look at NetworkManager on the TV PC" adds one service in detail
+(state, restarts, its recent log). Problems come first; tap a finding for its
+log lines. Nothing is changed or restarted, everything runs by argument list
+(no shell), and anything that looks like a password, token or key is masked
+before it leaves the computer. To let her read the whole system log, add the
+node's account to the `adm` group (`sudo usermod -aG adm aurelia`); without it
+she sees only that account's own logs, and says so.
+
 **Signing in (your decision, Sep 30: strict).** She can sign in to a site on one
 of your screens with a login you saved on that computer yourself. She never sees
 it. On the TV PC:

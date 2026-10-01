@@ -443,6 +443,13 @@ body.ambient.busy .brand{opacity:0}                        /* panels up: the clo
 body.screen .panel.present{font-size:118%}
 body.screen .panel.present .headline{font-size:clamp(26px,2.6vw,40px)}
 .sentfrom{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--ink-faint);text-transform:uppercase}
+.pdev.chk .dn::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:9px;vertical-align:middle;background:var(--ink-faint)}
+.pdev.chk.ok .dn::before{background:var(--cyan)}.pdev.chk.warn .dn::before{background:var(--warn)}
+.pdev.chk.bad .dn::before{background:var(--bad,#ff7a7a)}.pdev.chk.bad .dm{color:var(--ink)}
+.pdev.chk.ok .dm,.pdev.chk.info .dm{color:var(--ink-faint)}
+.pdev.chk details{grid-column:1;font-family:var(--mono);font-size:11px;color:var(--ink-dim)}
+.pdev.chk summary{cursor:pointer;color:var(--cyan)}
+.chklog{margin:6px 0 0;max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;line-height:1.45;color:var(--ink-dim)}
 .scr-panels{grid-column:1;margin:4px 0 0;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:3px;font-size:14px;color:var(--ink)}
 .scr-panels li{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .answer{display:flex;flex-direction:column;gap:10px;font-size:16px;line-height:1.55;color:var(--ink);overflow:auto}
@@ -1088,6 +1095,7 @@ function body(tool, d) {
   if (typeof d.text === "string" && (d.url || typeof d.pages === "number")) { wrap.append(pageView(d)); ["title", "url", "site", "words", "text", "truncated"].forEach(k => used.add(k)); }
   if (d.link && d.link.url) { wrap.append(linkView(d.link)); used.add("link"); }
   if (d.sent && typeof d.sent === "object") { wrap.append(sentView(d.sent, d.note)); ["sent", "note", "headline"].forEach(k => used.add(k)); }
+  if (Array.isArray(d.checks)) { wrap.append(checksView(d.checks, d.uptime)); ["checks", "node", "uptime", "problems"].forEach(k => used.add(k)); }
   if (Array.isArray(d.screens)) { wrap.append(screensView(d.screens)); used.add("screens"); }
   if (typeof d.answer === "string") { wrap.append(answerView(d.answer, d.headline)); ["answer", "asked", "headline"].forEach(k => used.add(k)); }
   if (d.note && typeof d.note === "object") { wrap.append(noteView(d.note)); used.add("note"); used.add("headline"); }
@@ -1662,6 +1670,21 @@ function downloadView(d) {
   box.append(top, el("div", "facts", [d.size, d.type].filter(Boolean).join(" · ")), el("div", "facts", `On the server: ${d.saved_to}`));
   return box;
 }
+function checksView(list, uptime) {                // a computer's own checks, worst first; tap one for its log
+  const box = el("div", "devlist checks");
+  list.forEach(c => {
+    const row = el("div", "pdev chk " + (c.status || "info"));
+    row.append(el("span", "dn", c.name), el("span", "dm", c.summary));
+    if ((c.lines || []).length) {
+      const det = el("details"); det.append(el("summary", null, `${c.lines.length} line${c.lines.length === 1 ? "" : "s"}`));
+      const pre = el("pre", "chklog"); pre.textContent = c.lines.join("\n"); det.append(pre); row.append(det);
+    }
+    box.append(row);
+  });
+  if (uptime) box.append(el("div", "lib-note", `Up ${uptime}`));
+  return box;
+}
+
 function sentView(x, note) {                       // where a send landed: confirmed there, waiting, or not
   const box = el("div", "devlist");
   const line = (cls, label, names) => { if (!names || !names.length) return;

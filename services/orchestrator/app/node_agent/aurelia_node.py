@@ -58,7 +58,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.5.3"
+VERSION = "0.5.4"
 IS_WINDOWS = platform.system() == "Windows"
 EXIT_REVOKED = 3                                   # the service manager doesn't restart after this
 EXIT_UPDATED = 75                                  # restart me: a new version is in place
@@ -877,8 +877,312 @@ def do_info(args: dict) -> dict:
 
 def do_home(args: dict) -> dict:
     if not (SHELL and SHELL.running()):
-        raise ValueError("her shell isn't running on this computer")
+        raise ValueError("my shell isn't running on this computer")
     return {"closed": SHELL.home()}
+
+
+# ---- diagnostics (stage 1 of node fixes: read-only) ---------------------------------------------
+#
+# "What's wrong with this computer?" answered with evidence. Every check here only looks: a fixed
+# list of programs run by argument list (no shell), files read, names resolved. Nothing is changed,
+# restarted or written. Log lines are trimmed, and anything that looks like a secret is masked
+# before it leaves this computer. What comes back is data for Aurelia, never instructions.
+
+UNIT = re.compile(r"^[A-Za-z0-9@._:-]{1,80}$")
+SECRETISH = re.compile(r"(?i)\b(pass(word)?|passwd|token|secret|api[_-]?key|auth|cookie|session)(\s*[=:]\s*)\S+")
+LONG_BLOB = re.compile(r"[A-Za-z0-9+/=_-]{32,}")
+DIAG_CHECKS = ("services", "her", "errors", "kernel", "network", "tailscale", "time", "storage", "memory", "updates")
+
+
+def _clean(line: str, limit: int = 220) -> str:
+    line = "".join(ch if ch.isprintable() or ch == "\t" else " " for ch in line).strip()
+    line = SECRETISH.sub(lambda m: m.group(1) + m.group(3) + "…", line)
+    line = LONG_BLOB.sub("[…]", line)
+    return line[:limit]
+
+
+def _lines(text: str, n: int = 25) -> list[str]:
+    return [_clean(x) for x in text.splitlines() if x.strip()][-n:]
+
+
+def _run_full(argv: list[str], timeout: float = 6) -> tuple[int, str, str]:
+    exe = shutil.which(argv[0])
+    if not exe:
+        return 127, "", ""
+    try:
+        r = subprocess.run([exe, *argv[1:]], capture_output=True, text=True, timeout=timeout)
+        return r.returncode, r.stdout, r.stderr
+    except (OSError, subprocess.SubprocessError):
+        return 1, "", ""
+
+
+def _check(cid: str, name: str, status: str, summary: str, lines: list[str] | None = None) -> dict:
+    return {"id": cid, "name": name, "status": status, "summary": summary, "lines": lines or []}
+
+
+def _resolves(host: str, seconds: float = 3) -> bool:
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(1) as ex:
+        try:
+            return bool(ex.submit(socket.getaddrinfo, host, 443).result(timeout=seconds))
+        except Exception:
+            return False
+
+
+def _diag_services() -> dict:
+    if not shutil.which("systemctl"):
+        return _check("services", "Services", "info", "Couldn't check (no systemd here)")
+    code, sysout, _ = _run_full(["systemctl", "list-units", "--state=failed", "--no-legend", "--plain"])
+    if code != 0:
+        return _check("services", "Services", "info", "Couldn't check (systemd isn't answering)")
+    _, userout, _ = _run_full(["systemctl", "--user", "list-units", "--state=failed", "--no-legend", "--plain"])
+    failed = [x.split()[0] for x in sysout.splitlines() if x.strip()] + \
+             [x.split()[0] + " (yours)" for x in userout.splitlines() if x.strip()]
+    if failed:
+        return _check("services", "Services", "bad", f"{len(failed)} failed: {', '.join(failed[:5])}", failed[:20])
+    return _check("services", "Services", "ok", "No failed services")
+
+
+def _diag_her() -> dict:
+    if not SHELL or SHELL.state() != "on":
+        return _check("her", "My screen", "ok", "My agent is running (no shell on this computer)")
+    if not SHELL.running():
+        return _check("her", "My screen", "bad", "My shell is on, but its browser isn't running")
+    try:
+        pages = SHELL.pages()
+    except Exception as exc:
+        return _check("her", "My screen", "warn", f"My browser is running but not answering ({exc.__class__.__name__})")
+    mine = [t for t in pages if SHELL.is_hers(t)]
+    if not mine:
+        return _check("her", "My screen", "warn", "My browser is running but my view isn't open in it")
+    return _check("her", "My screen", "ok", f"My view is up ({len(pages)} page{'s' if len(pages) != 1 else ''} open)")
+
+
+def _journal(args: list[str], n: int = 30) -> tuple[list[str], bool]:
+    if not shutil.which("journalctl") or not any(Path(d).is_dir() and any(Path(d).iterdir())
+                                                 for d in ("/run/log/journal", "/var/log/journal")):
+        raise LookupError("no journal here")
+    code, out, err = _run_full(["journalctl", "--no-pager", "-o", "short-iso", "-n", str(n), *args], timeout=8)
+    if code != 0 or "No journal files were found" in err:
+        raise LookupError("the journal isn't readable")
+    limited = "not seeing messages" in err or "No journal files were opened" in err
+    return _lines(out, n), limited
+
+
+def _diag_errors() -> dict:
+    try:
+        lines, limited = _journal(["-b", "-p", "err", "--quiet"])
+    except LookupError:
+        return _check("errors", "Errors this boot", "info", "Couldn't read the logs (no journal here)")
+    note = " (only your own logs: add this account to the adm group to see the system's)" if limited else ""
+    if not lines:
+        return _check("errors", "Errors this boot", "ok", "None logged" + note)
+    sources: dict[str, int] = {}
+    for x in lines:
+        parts = x.split()
+        src = parts[2].split("[")[0].rstrip(":") if len(parts) > 2 else "?"
+        sources[src] = sources.get(src, 0) + 1
+    top = ", ".join(f"{k} ×{v}" if v > 1 else k for k, v in sorted(sources.items(), key=lambda kv: -kv[1])[:4])
+    return _check("errors", "Errors this boot", "warn" if len(lines) >= 10 else "info",
+                  f"{len(lines)}{'+' if len(lines) >= 30 else ''} logged, mostly from {top}" + note, lines)
+
+
+def _diag_kernel() -> dict:
+    try:
+        lines, _ = _journal(["-k", "-b", "-p", "warning", "--quiet"], 40)
+    except LookupError:
+        return _check("kernel", "Kernel", "info", "Couldn't read the kernel log")
+    oom = [x for x in lines if "out of memory" in x.lower() or "oom-kill" in x.lower() or "killed process" in x.lower()]
+    io = [x for x in lines if any(w in x.lower() for w in ("i/o error", "ext4-fs error", "nvme", "ata", "smart"))
+          and "error" in x.lower()]
+    if oom:
+        return _check("kernel", "Kernel", "bad", f"Ran out of memory this boot and killed {len(oom)} program(s)", oom[-10:])
+    if io:
+        return _check("kernel", "Kernel", "bad", "Disk errors in the kernel log", io[-10:])
+    if lines:
+        return _check("kernel", "Kernel", "info", f"{len(lines)} warning(s), nothing serious", lines[-10:])
+    return _check("kernel", "Kernel", "ok", "No warnings")
+
+
+def _diag_network(server: str) -> dict:
+    lines = _lines(_run(["ip", "-br", "addr"]), 12)
+    route = _run(["ip", "route", "show", "default"]).strip()
+    if not route:                                       # straight from the kernel, if `ip` isn't there
+        for x in _read(PROC / "net" / "route").splitlines()[1:]:
+            f = x.split()
+            if len(f) > 2 and f[1] == "00000000":
+                gw = ".".join(str(int(f[2][i:i + 2], 16)) for i in (6, 4, 2, 0))
+                route = f"default via {gw} dev {f[0]}"
+                break
+    host = urllib.parse.urlsplit(server).hostname or ""
+    problems = []
+    if not route:
+        problems.append("no default route (not connected to a network)")
+    if not _resolves("example.com"):
+        problems.append("can't look up internet names (DNS)")
+    if host and not _resolves(host):
+        problems.append(f"can't look up {host}")
+    wifi = _run(["nmcli", "-t", "-f", "ACTIVE,SSID,SIGNAL", "dev", "wifi"])
+    signal = next((x.split(":") for x in wifi.splitlines() if x.startswith("yes:")), None)
+    extra = ""
+    if signal and len(signal) >= 3 and signal[2].isdigit():
+        extra = f"; Wi-Fi {signal[1]} at {signal[2]}%"
+        if int(signal[2]) < 40:
+            problems.append(f"weak Wi-Fi ({signal[2]}%)")
+    lines += [_clean("default route: " + (route or "none"))]
+    if problems:
+        return _check("network", "Network", "bad" if not route else "warn", "; ".join(problems).capitalize(), lines)
+    return _check("network", "Network", "ok", "Connected; names resolve" + extra, lines)
+
+
+def _diag_tailscale() -> dict:
+    code, out, _ = _run_full(["tailscale", "status", "--json"])
+    if code == 127:
+        return _check("tailscale", "Tailscale", "info", "Not installed here (I reach this computer another way)")
+    try:
+        j = json.loads(out)
+    except ValueError:
+        return _check("tailscale", "Tailscale", "warn", "Installed, but it didn't answer")
+    state, me = j.get("BackendState"), (j.get("Self") or {})
+    if state != "Running":
+        return _check("tailscale", "Tailscale", "bad", f"Not running ({state or 'unknown'})")
+    peers = j.get("Peer") or {}
+    online = sum(1 for p in peers.values() if p.get("Online"))
+    return _check("tailscale", "Tailscale", "ok" if me.get("Online", True) else "warn",
+                  f"Running; {online} of {len(peers)} other devices online")
+
+
+def _diag_time() -> dict:
+    v = _run(["timedatectl", "show", "-p", "NTPSynchronized", "--value"]).strip()
+    if v == "no":
+        return _check("time", "Clock", "warn", "Not synced to network time (sign-ins and certificates can fail)")
+    return _check("time", "Clock", "ok", "Synced") if v == "yes" else _check("time", "Clock", "info", "Couldn't tell")
+
+
+def _diag_storage() -> dict:
+    disks, lines, worst = _linux_disks(), [], None
+    for d in disks:
+        lines.append(f"{d['mount']}: {d['used_percent']}% used, {d['free_gb']} GB free of {d['total_gb']} GB")
+        if worst is None or d["used_percent"] > worst["used_percent"]:
+            worst = d
+    root_ro = any(x.split()[1] == "/" and "ro" in x.split()[3].split(",") for x in _read(PROC / "mounts").splitlines()
+                  if len(x.split()) > 3)
+    try:
+        st = os.statvfs("/")
+        inodes = 100 - round(100 * st.f_favail / st.f_files) if st.f_files else 0
+    except OSError:
+        inodes = 0
+    if root_ro:
+        return _check("storage", "Storage", "bad", "The system disk is read-only (usually a disk error)", lines)
+    if worst and worst["used_percent"] >= 95 or inodes >= 95:
+        return _check("storage", "Storage", "bad", f"{worst['mount']} is {worst['used_percent']}% full" if worst else
+                      f"Out of file slots ({inodes}% of inodes used)", lines)
+    if worst and worst["used_percent"] >= 85:
+        return _check("storage", "Storage", "warn", f"{worst['mount']} is {worst['used_percent']}% full", lines)
+    return _check("storage", "Storage", "ok", "Plenty of space", lines)
+
+
+def _diag_memory() -> dict:
+    m = _meminfo()
+    total, avail = m.get("MemTotal", 0), m.get("MemAvailable", 0)
+    swap_used = m.get("SwapTotal", 0) - m.get("SwapFree", 0)
+    if not total:
+        return _check("memory", "Memory", "info", "Couldn't read memory")
+    pct = round(100 * avail / total)
+    line = f"{round(avail / 1e9, 1)} GB free of {round(total / 1e9, 1)} GB; swap used {round(swap_used / 1e9, 1)} GB"
+    if pct < 8:
+        return _check("memory", "Memory", "bad", f"Almost out of memory ({pct}% free)", [line])
+    if pct < 15 or swap_used > total * 0.5:
+        return _check("memory", "Memory", "warn", f"Memory is tight ({pct}% free)", [line])
+    return _check("memory", "Memory", "ok", f"{pct}% free", [line])
+
+
+def _diag_updates() -> dict:
+    lines, recent = [], []
+    pending = Path("/var/run/reboot-required").exists()
+    pkgs = _read(Path("/var/run/reboot-required.pkgs")).split()
+    cutoff = time.time() - 7 * 86400
+    for x in _read(Path("/var/log/dpkg.log")).splitlines()[-3000:]:
+        parts = x.split()
+        if len(parts) >= 4 and parts[2] in ("install", "upgrade", "remove"):
+            try:
+                when = time.mktime(time.strptime(parts[0] + " " + parts[1], "%Y-%m-%d %H:%M:%S"))
+            except ValueError:
+                continue
+            if when >= cutoff:
+                recent.append(_clean(f"{parts[0]} {parts[2]} {parts[3].split(':')[0]}"))
+    if recent:
+        lines = recent[-15:]
+    if pending:
+        return _check("updates", "Updates", "warn",
+                      "A restart is pending to finish updates" + (f" ({', '.join(pkgs[:3])})" if pkgs else ""), lines)
+    if recent:
+        return _check("updates", "Updates", "info", f"{len(recent)} package change(s) in the last week", lines)
+    return _check("updates", "Updates", "ok", "No restart pending; no package changes this week")
+
+
+def _diag_unit(unit: str) -> dict:
+    if not UNIT.match(unit):
+        raise ValueError("that isn't a service name")
+    if not shutil.which("systemctl"):
+        return _check("service:" + unit, unit, "info", "Couldn't check services here (no systemd)")
+    name = unit if "." in unit else unit + ".service"
+    for scope in ([], ["--user"]):
+        code, out, _ = _run_full(["systemctl", *scope, "show", name, "-p", "LoadState,ActiveState,SubState,Result,"
+                                  "NRestarts,ExecMainStatus,Description"])
+        props = dict(x.split("=", 1) for x in out.splitlines() if "=" in x)
+        if props.get("LoadState") not in (None, "not-found"):
+            try:
+                jl, _ = _journal((["--user-unit", name] if scope else ["-u", name]) + ["-b"], 30)
+            except LookupError:
+                jl = []
+            state = f"{props.get('ActiveState')} ({props.get('SubState')})"
+            restarts = int(props.get("NRestarts") or 0)
+            bad = props.get("ActiveState") in ("failed",) or props.get("Result") not in (None, "", "success")
+            summary = f"{props.get('Description') or name}: {state}" + \
+                      (f", restarted {restarts} time(s)" if restarts else "") + \
+                      (f", last result {props.get('Result')}" if props.get("Result") not in (None, "", "success") else "")
+            return _check("service:" + name, name + (" (yours)" if scope else ""),
+                          "bad" if bad else "warn" if restarts >= 3 else "ok", summary, jl)
+    return _check("service:" + name, name, "info", "No service by that name here")
+
+
+def windows_diagnose() -> list[dict]:
+    out = []
+    code, text, _ = _run_full(["wevtutil", "qe", "System", "/c:25", "/rd:true", "/f:text",
+                               "/q:*[System[(Level=1 or Level=2)]]"], timeout=10)
+    errs = [x for x in text.splitlines() if x.strip().startswith(("Date:", "Source:", "Description:"))]
+    out.append(_check("errors", "Errors (System log)", "info" if errs else "ok",
+                      f"{len(errs) // 3} recent error(s)" if errs else "None recent", _lines("\n".join(errs), 30)))
+    out.append(_check("network", "Network", "ok" if _resolves("example.com") else "bad",
+                      "Names resolve" if _resolves("example.com") else "Can't look up internet names (DNS)"))
+    out.append(_check("storage", "Storage", "info", "See health for disk space"))
+    return out
+
+
+def do_diagnose(args: dict) -> dict:
+    """The read-only checks above; one named service in detail when asked."""
+    try:
+        server = load()[0].get("server", "")
+    except SystemExit:
+        server = ""
+    if IS_WINDOWS:
+        checks = windows_diagnose()
+    else:
+        want = [c for c in (args.get("checks") or DIAG_CHECKS) if c in DIAG_CHECKS]
+        run = {"services": _diag_services, "her": _diag_her, "errors": _diag_errors, "kernel": _diag_kernel,
+               "network": lambda: _diag_network(server), "tailscale": _diag_tailscale, "time": _diag_time,
+               "storage": _diag_storage, "memory": _diag_memory, "updates": _diag_updates}
+        checks = []
+        for c in want:
+            try:
+                checks.append(run[c]())
+            except Exception as exc:                    # one check failing never hides the rest
+                checks.append(_check(c, c.capitalize(), "info", f"Couldn't check ({exc.__class__.__name__})"))
+    service = str(args.get("service") or "").strip()
+    if service and not IS_WINDOWS:
+        checks.insert(0, _diag_unit(service))
+    return {"checks": checks, "uptime_s": int(time.time() - _boot_time()) if not IS_WINDOWS else None}
 
 
 def do_showing(args: dict) -> dict:
@@ -893,7 +1197,7 @@ def do_showing(args: dict) -> dict:
 
 
 COMMANDS = {"open_url": do_open_url, "launch_app": do_launch_app, "list_apps": do_list_apps, "info": do_info,
-            "home": do_home, "showing": do_showing, "health": do_health, "processes": do_processes, "kill": do_kill}
+            "home": do_home, "showing": do_showing, "diagnose": do_diagnose, "health": do_health, "processes": do_processes, "kill": do_kill}
 
 
 def execute(cmd: dict) -> dict:
@@ -1503,7 +1807,7 @@ class Tab:
 
 def _tab() -> Tab:
     if not (SHELL and SHELL.running()):
-        raise ValueError("her shell isn't running on this computer, so I can't see its screen")
+        raise ValueError("my shell isn't running on this computer, so I can't see its screen")
     return Tab(SHELL.page())
 
 
@@ -1729,7 +2033,7 @@ def do_sign_in(args: dict) -> dict:
     if not origins:
         raise ValueError(f"the saved login for {site} doesn't say which sign-in page it's for")
     if not (SHELL and SHELL.running()):
-        raise ValueError("her shell isn't running on this computer, so I can't see its screen")
+        raise ValueError("my shell isn't running on this computer, so I can't see its screen")
     try:
         on_screen = SHELL.page()
     except ValueError:

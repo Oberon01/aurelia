@@ -18,6 +18,7 @@ tools:
   submit:          { tier: change }      # the press that buys, pays, sends, posts or deletes: always confirmed
   sign_in:         { tier: change }      # a login he saved on that computer; she never sees it (Sep 30 decision)
   logins:          { tier: reference }   # which sites have a saved login there (names only)
+  diagnose:        { tier: read }        # read-only checks: services, logs, network, storage (stage 1 of node fixes)
   screens:         { tier: reference }   # what's on each display now (its own report)
   send:            { tier: act }         # a panel, link or note to another display (or a group by role)
   search_files:    { tier: reference }
@@ -83,7 +84,7 @@ rules:
   screens:
     - computer: TV PC
       tv: Living room TV
-      input: "HDMI 2"                        # which HDMI the TV PC is plugged into, e.g. "HDMI 2"
+      input: ""                        # which HDMI the TV PC is plugged into, e.g. "HDMI 2"
   targeting:
     default_target: requesting_node
     quiet_hours: []                    # e.g. { node: bedroom-tv, from: "22:00", to: "07:00" }
