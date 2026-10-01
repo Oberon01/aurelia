@@ -235,6 +235,14 @@ TOOLS = [
             "device": {"type": "string", "description": "part of an output's name"}}, "required": ["action"]},
         cancellable=False),
     registry.ToolSpec(
+        name="watch", description="Show him one of his screens live, in a panel on the display he's using: what's "
+                                  "on that computer's screen right now, a few frames a second, for as long as the "
+                                  "panel is open. For 'show me the TV PC screen', 'let me see what you're doing', "
+                                  "'watch the sign-in'. Works on a computer running your shell. You never see the "
+                                  "frames; to read the page yourself, use look.",
+        input_schema={"type": "object", "properties": {"target": {"type": "string", "description": "which screen"}}},
+        cancellable=False, freshness_seconds=0, display="panel"),
+    registry.ToolSpec(
         name="submit", description="Press something that buys, pays, sends, posts or deletes on a screen's page (by n "
                                    "or text), or Enter where it would send (enter: true). Always needs his confirmation; "
                                    "use it only when he asked for exactly that. expect: the words on it, so nothing "
@@ -1389,11 +1397,57 @@ async def wake(app, user: str, args: dict) -> dict:
                                                          "note": f"Sent the wake signal from {via}. I'll tell you when it's back."}}
 
 
+LIVE_SINCE = (0, 5, 7)
+
+
+def _version(v) -> tuple:
+    return tuple(int(x) for x in re.findall(r"\d+", str(v or ""))[:3]) or (0,)
+
+
+async def watch(app, user: str, args: dict) -> dict:
+    node = await target(app, args.get("target"), screen=True)
+    if node.get("shell") != "on":
+        raise ValueError(f"I can show {node['name']} live only while it runs my shell; seeing a whole desktop comes with Iris.")
+    info = (await _node_row(node["id"]))["info"]
+    if _version(info.get("agent_version")) < LIVE_SINCE:
+        raise ValueError(f"{node['name']} is running an older agent that can't stream its screen yet; it updates itself "
+                         "within ten minutes.")
+    await nodes.want_live(app.state.redis, node["id"])
+    return {"headline": f"Live: {node['name']}", "live": {"node": node["name"], "node_id": node["id"]}}
+
+
+async def _viewer(request: Request, node_id: int) -> None:
+    """Only his own displays (a browser) watch; never a screen, a node or a terminal."""
+    dev = await auth.asker(request.headers)
+    if dev is not None and dev["kind"] != "browser":
+        raise HTTPException(403, "This device can't watch screens.")
+    ok = await db.pool().fetchval("SELECT 1 FROM devices WHERE id=$1 AND kind='node' AND status='approved'", node_id)
+    if not ok:
+        raise HTTPException(404, "No such computer.")
+
+
+@router.post("/live/{node_id}/keep", include_in_schema=False)
+async def live_keep(node_id: int, request: Request):
+    """The live panel, every few seconds while it's on screen: keep sending."""
+    await _viewer(request, node_id)
+    await nodes.want_live(request.app.state.redis, node_id)
+    return {"online": await nodes.online(request.app, node_id), **await nodes.live_state(request.app.state.redis, node_id)}
+
+
+@router.get("/live/{node_id}/frame.jpg", include_in_schema=False)
+async def live_frame(node_id: int, request: Request):
+    await _viewer(request, node_id)
+    data = await request.app.state.redis.get(nodes.LIVE_FRAME.format(node_id))
+    if not data:
+        return Response(status_code=204, headers={"Cache-Control": "no-store"})
+    return Response(data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
 HANDLERS = {"devices": devices, "open": open_, "apps": apps, "home": home, "look": look, "click": click, "type": type_,
             "press": press, "scroll": scroll, "back": back, "media": media, "submit": submit, "health": health,
             "list_processes": list_processes, "close_process": close_process, "kill_process": kill_process,
             "sign_in": sign_in, "logins": logins, "send": send, "screens": screens, "diagnose": diagnose_node,
-            "power": power, "restart": restart, "wake": wake, "sound": sound}
+            "power": power, "restart": restart, "wake": wake, "sound": sound, "watch": watch}
 
 
 @router.get("/shots/{sid}.jpg", include_in_schema=False)

@@ -19,6 +19,8 @@ Serving the agent itself (/node/agent.py, /node/install-linux.sh) needs no key: 
 code, no secrets, and a machine can't have a key before it pairs.
 """
 import asyncio
+import base64
+import binascii
 import hashlib
 import json
 import logging
@@ -269,6 +271,80 @@ async def command_result(cmd_id: str, body: CommandResult, request: Request):
     await redis.rpush(key, json.dumps({"node": dev["id"], **body.model_dump()}))
     await redis.expire(key, COMMAND_TTL)
     return {"ok": True}
+
+
+# ---- the live view: his screen, as it is now -----------------------------------------------------
+#
+# While a display shows a node's live panel, it says so every few seconds (want, 12 s). The node
+# waits on its own channel (not the command queue, so it works while a sign-in is running) and
+# sends a few frames a second for as long as someone is watching. A frame lives 10 s in Redis and
+# nowhere else: never stored, never indexed, never shown to the model.
+
+LIVE_WANT = "aurelia:live:{}:want"
+LIVE_START = "aurelia:live:{}:start"
+LIVE_FRAME = "aurelia:live:{}:frame"
+LIVE_META = "aurelia:live:{}:meta"
+LIVE_KEEP_SECONDS = 12
+LIVE_FRAME_SECONDS = 10
+LIVE_MAX_BYTES = 2_000_000
+
+
+async def want_live(redis, node_id: int) -> None:
+    await redis.set(LIVE_WANT.format(node_id), "1", ex=LIVE_KEEP_SECONDS)
+    if not await redis.exists(LIVE_META.format(node_id)):        # not streaming yet: wake it
+        await redis.rpush(LIVE_START.format(node_id), "1")
+        await redis.ltrim(LIVE_START.format(node_id), -1, -1)
+        await redis.expire(LIVE_START.format(node_id), 30)
+
+
+async def live_state(redis, node_id: int) -> dict[str, Any]:
+    raw = await redis.get(LIVE_META.format(node_id))
+    meta = json.loads(raw) if raw else {}
+    if meta.get("at"):
+        meta["age"] = round(max(0.0, time.time() - meta.pop("at")), 1)
+    return meta
+
+
+@router.get("/nodes/live/wait")
+async def live_wait(request: Request, wait: int = 25):
+    """The node's second channel: returns as soon as someone wants to watch its screen."""
+    dev = await node_from(request)
+    redis = request.app.state.redis
+    want = LIVE_WANT.format(dev["id"])
+    if await redis.exists(want):
+        await redis.delete(LIVE_START.format(dev["id"]))
+        return {"want": True}
+    wait = max(0, min(wait, offline_after(request.app) - 15))
+    got = await redis.blpop([LIVE_START.format(dev["id"])], timeout=wait) if wait else None
+    return {"want": bool(got) and bool(await redis.exists(want))}
+
+
+class LiveFrame(BaseModel):
+    jpeg: str = ""
+    w: int = 0
+    h: int = 0
+    title: str = ""
+    site: str = ""
+    problem: str = ""
+
+
+@router.post("/nodes/live/frame")
+async def live_frame(body: LiveFrame, request: Request):
+    dev = await node_from(request)
+    redis = request.app.state.redis
+    meta = {"at": time.time(), "w": body.w, "h": body.h, "title": " ".join(body.title.split())[:120],
+            "site": body.site[:80], "problem": " ".join(body.problem.split())[:200]}
+    if body.jpeg:
+        try:
+            raw = base64.b64decode(body.jpeg, validate=True)
+        except (binascii.Error, ValueError):
+            raise HTTPException(400, "not a picture")
+        if len(raw) > LIVE_MAX_BYTES or not raw.startswith(b"\xff\xd8"):
+            raise HTTPException(400, "not a JPEG, or too big")
+        await redis.set(LIVE_FRAME.format(dev["id"]), raw, ex=LIVE_FRAME_SECONDS)
+        meta["problem"] = ""
+    await redis.set(LIVE_META.format(dev["id"]), json.dumps(meta), ex=LIVE_FRAME_SECONDS)
+    return {"keep": bool(await redis.exists(LIVE_WANT.format(dev["id"])))}
 
 
 # ---- Aurelia's side ------------------------------------------------------------------------

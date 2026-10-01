@@ -19,6 +19,11 @@ def test_each_kind_of_key_reaches_only_its_part():
     assert not auth.allowed("node", "/devices/2/revoke") and not auth.allowed("node", "/ask")
     assert auth.allowed("terminal", "/ask") and auth.allowed("terminal", "/ask/confirm")
     assert not auth.allowed("terminal", "/mailbox") and not auth.allowed("terminal", "/askance")
+    # Watching a screen live: his displays only, never a screen (a TV), a node or a terminal.
+    assert auth.allowed("browser", "/constellation/live/3/frame.jpg") and auth.allowed("browser", "/constellation/live/3/keep")
+    assert not auth.allowed("screen", "/constellation/live/3/frame.jpg") and not auth.allowed("screen", "/constellation/live/3/keep")
+    assert not auth.allowed("node", "/constellation/live/3/frame.jpg") and not auth.allowed("terminal", "/constellation/live/3/keep")
+    assert auth.allowed("node", "/nodes/live/frame") and auth.allowed("node", "/nodes/live/wait")
 
 
 def test_what_a_device_says_about_itself_is_trimmed():

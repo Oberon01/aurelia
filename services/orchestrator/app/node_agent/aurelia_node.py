@@ -58,7 +58,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.5.6"
+VERSION = "0.5.7"
 IS_WINDOWS = platform.system() == "Windows"
 EXIT_REVOKED = 3                                   # the service manager doesn't restart after this
 EXIT_UPDATED = 75                                  # restart me: a new version is in place
@@ -2207,6 +2207,86 @@ class Tab:
                          clip={"x": vp["x"], "y": vp["y"], "width": vp["w"], "height": vp["h"], "scale": scale})["data"]
 
 
+# ---- the live view -------------------------------------------------------------------------------
+#
+# While Kentrell has this screen's live panel open somewhere, a few frames a second go to Aurelia
+# (and from there only to that panel; each lives ten seconds). Its own channel and its own browser
+# connection, so it keeps going while a command (a sign-in) is running. Only the page on the
+# screen is captured, never the rest of the desktop; password boxes show as dots, as on screen.
+
+LIVE_WIDTH = int(os.environ.get("AURELIA_LIVE_WIDTH", "1280"))
+LIVE_FPS = float(os.environ.get("AURELIA_LIVE_FPS", "3"))
+LIVE_QUALITY = 55
+
+
+def live_target() -> dict:
+    """What the screen shows: the page she opened, or her own view when nothing else is open."""
+    try:
+        return SHELL.page()
+    except ValueError:
+        pages = SHELL.pages()
+        if not pages:
+            raise ValueError("my screen has nothing open")
+        return next((t for t in pages if SHELL.is_hers(t)), pages[0])
+
+
+def live_frame(tab: "Tab") -> tuple[str, int, int]:
+    m = tab.call("Page.getLayoutMetrics")
+    vv = m.get("cssVisualViewport") or m.get("visualViewport") or {}
+    w, h = float(vv.get("clientWidth") or 1280), float(vv.get("clientHeight") or 720)
+    scale = min(1.0, LIVE_WIDTH / max(1.0, w))
+    data = tab.call("Page.captureScreenshot", format="jpeg", quality=LIVE_QUALITY,
+                    clip={"x": vv.get("pageX", 0), "y": vv.get("pageY", 0), "width": w, "height": h, "scale": scale})["data"]
+    return data, round(w * scale), round(h * scale)
+
+
+def live_stream(server: str, key: str, stop: threading.Event) -> None:
+    tab, tab_id = None, None
+    try:
+        while not stop.is_set():
+            started = time.monotonic()
+            try:
+                if not (SHELL and SHELL.running()):
+                    raise ValueError("my shell isn't running on this computer")
+                t = live_target()
+                if tab is None or t["id"] != tab_id:              # it switched pages: follow it
+                    if tab:
+                        tab.close()
+                    tab, tab_id = Tab(t, timeout=8), t["id"]
+                data, w, h = live_frame(tab)
+                u = urllib.parse.urlsplit(t.get("url") or "")
+                body = {"jpeg": data, "w": w, "h": h, "title": str(t.get("title") or "")[:120],
+                        "site": "" if SHELL.is_hers(t) else (u.hostname or "")}
+            except (CDPError, OSError, ValueError, KeyError) as exc:
+                if tab:
+                    tab.close()
+                tab, tab_id = None, None
+                body = {"problem": str(exc)[:160]}
+            try:
+                r = call(server, "/nodes/live/frame", body, key, timeout=10)
+            except (Revoked, OSError, RuntimeError, ValueError):
+                return
+            if not r.get("keep"):                                 # nobody is watching any more
+                return
+            stop.wait(max(0.05, 1 / LIVE_FPS - (time.monotonic() - started)))
+    finally:
+        if tab:
+            tab.close()
+
+
+def live_loop(server: str, key: str, stop: threading.Event) -> None:
+    while not stop.is_set():
+        try:
+            got = call(server, f"/nodes/live/wait?wait={POLL_WAIT}", key=key, timeout=POLL_WAIT + 20)
+        except Revoked:
+            return
+        except (OSError, RuntimeError, ValueError):
+            stop.wait(15)
+            continue
+        if got.get("want"):
+            live_stream(server, key, stop)
+
+
 def _tab() -> Tab:
     if not (SHELL and SHELL.running()):
         raise ValueError("my shell isn't running on this computer, so I can't see its screen")
@@ -2639,6 +2719,7 @@ def cmd_run() -> int:
     if cfg.get("shell"):
         SHELL = Shell(server, key)
         threading.Thread(target=SHELL.supervise, daemon=True).start()
+        threading.Thread(target=live_loop, args=(server, key, SHELL.stop_event), daemon=True).start()
     while True:
         try:
             if time.time() - said_hello_at > HELLO_SECONDS or (SHELL and SHELL.changed.is_set()):

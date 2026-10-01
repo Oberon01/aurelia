@@ -23,6 +23,7 @@ tools:
   restart:         { tier: change }      # restart or shut down a computer: always confirmed
   wake:            { tier: act }         # wake-on-LAN
   diagnose:        { tier: read }        # read-only checks: services, logs, network, storage (stage 1 of node fixes)
+  watch:           { tier: read }        # his screen live in a panel on his display (frames never reach the model)
   screens:         { tier: reference }   # what's on each display now (its own report)
   send:            { tier: act }         # a panel, link or note to another display (or a group by role)
   search_files:    { tier: reference }

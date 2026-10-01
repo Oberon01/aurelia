@@ -50,6 +50,7 @@ Built so far:
 - Each display keeps its own panels; device roles (presentation, workstation, server, companion); sending a panel, link, note or any look-up to another display or a group, confirmed from that display's own report; "what's on my screens"; an ambient screen on presentation displays.
 - Power and presence: lock, sleep, screen off/on, idle time, restart and shutdown (always confirmed; I watch for it to come back), wake-on-LAN; shutdowns that can't hang (installer --system); diagnostics say how the last shutdown went.
 - Sound and media: the computer's volume, mute and which output it plays through; next, previous and what's playing for any player (Spotify, VLC, a browser tab).
+- Watching a screen live in a panel ("show me the TV PC screen"), even while I'm signing in; the frames go only to your display, never to me.
 - Long answers open as a panel; a Raphael speaking style on trial.
 - I read my own releases and this roadmap, and harder questions (why, explain, improve, compare) use a stronger model.
 Still to do: a shared clipboard, app install and removal, the Windows installer with exam and gaming modes, the phone web app with push notifications, and the field check.

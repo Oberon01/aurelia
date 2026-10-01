@@ -425,3 +425,8 @@ def test_sound_and_music(node):
     assert status == "completed", err
     played = (bin_ / "played.txt").read_text()
     assert "-p spotify next" in played and "-p spotify pause" in played
+
+
+def test_watching_needs_her_shell(node):
+    status, res, err = run_task(node["orch"], "constellation.watch", {"target": "living room tv"}, wait=30)
+    assert status == "failed" and "only while it runs my shell" in err

@@ -256,6 +256,14 @@ td .clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;o
 .pit span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
 .pit i{flex:none;font-style:normal;font-family:var(--mono);font-size:10px;color:var(--ink-faint)}
 .vstate{display:flex;flex-direction:column;gap:6px}
+.live{display:flex;flex-direction:column;gap:8px;min-height:0}
+.live .screen{position:relative;background:#000;border:1px solid var(--cyan-soft);border-radius:6px;overflow:hidden;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;cursor:pointer}
+.live .screen img{width:100%;height:100%;object-fit:contain;display:block}
+.live .screen .wait{position:absolute;font-size:13px;color:var(--ink-dim);padding:12px;text-align:center}
+.live .lbar{display:flex;justify-content:space-between;gap:4px 12px;flex-wrap:wrap;font-size:12px;line-height:1.5;color:var(--ink-dim)}
+.live .lbar>span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.live .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#e5484d;margin-right:6px;vertical-align:middle}
+.live.paused .dot,.live.stale .dot{background:var(--ink-dim)}
 .vbar{height:6px;border-radius:3px;background:var(--cyan-track);overflow:hidden}
 .vbar span{display:block;height:100%;background:var(--cyan)}
 .vline{display:flex;justify-content:space-between;gap:12px;font-family:var(--mono);font-size:12px;color:var(--ink-dim)}
@@ -561,7 +569,7 @@ const TITLES = { "aurelia.reply": "Aurelia",
   "constellation.devices": "Devices", "constellation.open": "Open", "constellation.apps": "Apps",
   "constellation.home": "Home", "constellation.look": "On the screen", "constellation.click": "Click",
   "constellation.type": "Type", "constellation.press": "Key", "constellation.scroll": "Scroll",
-  "constellation.back": "Back", "constellation.media": "Playing", "constellation.sound": "Sound", "constellation.submit": "Press",
+  "constellation.back": "Back", "constellation.media": "Playing", "constellation.sound": "Sound", "constellation.watch": "Live", "constellation.submit": "Press",
   "constellation.health": "Computer health", "constellation.list_processes": "Processes",
   "constellation.close_process": "Close a program", "constellation.kill_process": "Close a program",
 };
@@ -1147,6 +1155,7 @@ function body(tool, d) {
   }
   if (d.onscreen && typeof d.onscreen === "object") { wrap.append(onscreenView(d.onscreen, !!d.did)); used.add("onscreen"); used.add("headline"); }
   if (d.did && typeof d.did === "object") { wrap.prepend(didView(d.did)); used.add("did"); used.add("headline"); }
+  if (d.live && typeof d.live === "object" && d.live.node_id) { wrap.append(liveView(d.live)); used.add("live"); used.add("headline"); }
   if (d.sound && typeof d.sound === "object" && d.sound.node) { wrap.append(soundView(d.sound)); used.add("sound"); used.add("headline"); }
   if (d.playing && typeof d.playing === "object" && Array.isArray(d.playing.players)) { wrap.append(playingView(d.playing)); used.add("playing"); used.add("headline"); }
   if (d.video && typeof d.video === "object" && !Array.isArray(d.video)) { wrap.append(videoView(d.video)); used.add("video"); used.add("headline"); }
@@ -1673,6 +1682,61 @@ function videoView(v) {
                  v.speed && v.speed !== 1 ? `${v.speed}×` : null, v.fullscreen ? "full screen" : null].filter(Boolean);
   line.append(el("span", "vflags", flags.join(" · ")));
   box.append(bar, line);
+  return box;
+}
+// A screen, live: a few frames a second while this panel is open and on screen. Clicking it pauses.
+// The panel says it's still wanted every few seconds; when it closes (or the tab is hidden), the
+// computer stops sending within seconds.
+function liveView(lv) {
+  const box = el("div", "live"), scr = el("div", "screen"), img = new Image(), wait = el("div", "wait", "Waiting for the screen…");
+  img.alt = `${lv.node}, live`; img.style.visibility = "hidden";
+  scr.append(img, wait);
+  const left = el("span"), right = el("span");
+  const bar = el("div", "lbar"); bar.append(left, right);
+  box.append(scr, bar);
+  let paused = false, lastKeep = 0, busy = false, shown = 0, stopped = false, url = null;
+  const base = `/constellation/live/${lv.node_id}`;
+  const say = (text, cls) => { left.textContent = ""; left.append(el("span", "dot"), document.createTextNode(text));
+                               box.classList.toggle("paused", cls === "paused"); box.classList.toggle("stale", cls === "stale"); };
+  say(`${lv.node} · starting`, "stale");
+  scr.addEventListener("click", () => { paused = !paused; if (!paused) lastKeep = 0; say(paused ? `${lv.node} · paused (tap to resume)` : `${lv.node} · resuming`, paused ? "paused" : ""); });
+  async function keep() {
+    try {
+      const r = await fetch(`${base}/keep`, { method: "POST", cache: "no-store" });
+      if (r.status === 403 || r.status === 404) { stopped = true; wait.textContent = r.status === 403 ? "This device can't watch screens." : "That computer is gone."; return; }
+      const m = await r.json();
+      right.textContent = [m.site, m.title].filter(Boolean).join(" · ");
+      if (!m.online) wait.textContent = `${lv.node} is offline.`;
+      else if (m.problem) wait.textContent = `${lv.node}: ${m.problem}`;
+      if (m.problem || !m.online) { wait.style.display = ""; }
+    } catch (e) {}
+  }
+  async function tick() {
+    if (stopped || !box.isConnected) { if (url) URL.revokeObjectURL(url); return; }
+    const visible = document.visibilityState === "visible";
+    if (!paused && visible) {
+      if (Date.now() - lastKeep > 4000) { lastKeep = Date.now(); keep(); }
+      if (!busy) {
+        busy = true;
+        try {
+          const r = await fetch(`${base}/frame.jpg`, { cache: "no-store" });
+          if (r.status === 200) {
+            const next = URL.createObjectURL(await r.blob());
+            img.src = next; try { await img.decode(); } catch (e) {}
+            if (url) URL.revokeObjectURL(url);
+            url = next; shown = Date.now(); img.style.visibility = ""; wait.style.display = "none";
+          }
+        } catch (e) {}
+        busy = false;
+      }
+      const age = shown ? (Date.now() - shown) / 1000 : null;
+      if (age === null) say(`${lv.node} · starting`, "stale");
+      else if (age > 4) say(`${lv.node} · last frame ${Math.round(age)} s ago`, "stale");
+      else say(`${lv.node} · live`, "");
+    }
+    setTimeout(tick, paused || !visible ? 1000 : 350);
+  }
+  setTimeout(tick, 50);
   return box;
 }
 // A computer's own sound: the level, mute, and the outputs it can play through (the one in use first).

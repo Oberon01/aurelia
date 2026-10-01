@@ -723,3 +723,86 @@ def test_windows_uses_the_media_keys(monkeypatch):
     assert keys[-1] == (0xB0, 1)
     with pytest.raises(ValueError):
         agent.do_player({"action": "status"})
+
+
+# ---- the live view -------------------------------------------------------------------------------
+
+class FakeTab:
+    def __init__(self, target, timeout=8):
+        self.target, self.calls, self.closed = target, [], False
+
+    def call(self, method, **params):
+        self.calls.append((method, params))
+        if method == "Page.getLayoutMetrics":
+            return {"cssVisualViewport": {"pageX": 0, "pageY": 240, "clientWidth": 1920, "clientHeight": 1080}}
+        return {"data": "/9j/frame"}
+
+    def close(self):
+        self.closed = True
+
+
+class FakeShell:
+    def __init__(self, pages, current=None, running=True):
+        self._pages, self.current, self._running, self.server = pages, current, running, "https://aurelia"
+
+    def running(self):
+        return self._running
+
+    def pages(self):
+        return self._pages
+
+    def is_hers(self, t):
+        return t["url"].startswith(self.server)
+
+    def page(self):
+        mine = [t for t in self._pages if not self.is_hers(t)]
+        if not mine:
+            raise ValueError("nothing is open on this screen (it's showing me)")
+        return mine[0]
+
+
+def test_a_live_frame_is_the_visible_page_scaled_down():
+    tab = FakeTab({"id": "a"})
+    data, w, h = agent.live_frame(tab)
+    shot = dict(tab.calls)["Page.captureScreenshot"]
+    assert data == "/9j/frame" and (w, h) == (1280, 720)
+    assert shot["clip"] == {"x": 0, "y": 240, "width": 1920.0, "height": 1080.0, "scale": 1280 / 1920}  # what's scrolled into view
+
+
+def test_live_follows_the_screen_and_stops_when_nobody_watches(monkeypatch):
+    sent, keeps = [], iter([True, True, False])
+    shell = FakeShell([{"id": "v", "url": "https://aurelia/view", "title": "Aurelia"},
+                       {"id": "s", "url": "https://accounts.spotify.com/login?continue=secret-token", "title": "Log in - Spotify"}])
+    monkeypatch.setattr(agent, "SHELL", shell)
+    monkeypatch.setattr(agent, "Tab", FakeTab)
+    monkeypatch.setattr(agent, "call", lambda server, path, body, key, timeout=10: (sent.append((path, body)), {"keep": next(keeps)})[1])
+    agent.live_stream("https://aurelia", "k", agent.threading.Event())
+    assert len(sent) == 3 and all(p == "/nodes/live/frame" for p, _ in sent)
+    body = sent[0][1]
+    assert body["site"] == "accounts.spotify.com" and body["title"] == "Log in - Spotify" and body["jpeg"] == "/9j/frame"
+    assert "secret-token" not in str(sent)                                   # the address's query never leaves
+
+
+def test_live_shows_her_own_view_when_nothing_else_is_open_and_says_why_it_cant(monkeypatch):
+    sent = []
+    monkeypatch.setattr(agent, "Tab", FakeTab)
+    monkeypatch.setattr(agent, "call", lambda server, path, body, key, timeout=10: (sent.append(body), {"keep": False})[1])
+    monkeypatch.setattr(agent, "SHELL", FakeShell([{"id": "v", "url": "https://aurelia/view", "title": "Aurelia"}]))
+    agent.live_stream("https://aurelia", "k", agent.threading.Event())
+    assert sent[-1]["jpeg"] and sent[-1]["site"] == ""                      # her own view: no site to name
+    monkeypatch.setattr(agent, "SHELL", FakeShell([], running=False))
+    agent.live_stream("https://aurelia", "k", agent.threading.Event())
+    assert sent[-1] == {"problem": "my shell isn't running on this computer"}
+
+
+def test_live_ends_when_the_server_cant_be_reached(monkeypatch):
+    calls = []
+
+    def down(*a, **k):
+        calls.append(1)
+        raise OSError("down")
+    monkeypatch.setattr(agent, "Tab", FakeTab)
+    monkeypatch.setattr(agent, "SHELL", FakeShell([{"id": "s", "url": "https://x.example/", "title": "x"}]))
+    monkeypatch.setattr(agent, "call", down)
+    agent.live_stream("https://aurelia", "k", agent.threading.Event())
+    assert calls == [1]                                                     # back to waiting, not a busy loop

@@ -224,13 +224,40 @@ def test_she_signs_in_with_a_login_saved_on_the_computer_without_ever_seeing_it(
         names = ok(orch, "constellation.logins", {"target": "tv pc"})
         assert "Test site" in names["did"]["what"] and secret not in json.dumps(names) and "me@example" not in json.dumps(names)
 
+        # He watches the screen live while she signs in (his own panel; the frames never reach her).
+        live = ok(orch, "constellation.watch", {"target": "tv pc"})
+        nid = live["live"]["node_id"]
+        assert live["headline"] == "Live: TV PC" and set(live["live"]) == {"node", "node_id"}
+
+        def frame():
+            httpx.post(f"{orch}/constellation/live/{nid}/keep").raise_for_status()
+            return httpx.get(f"{orch}/constellation/live/{nid}/frame.jpg")
+        deadline, first = time.time() + 30, None
+        while time.time() < deadline and first is None:
+            f = frame()
+            first = f.content if f.status_code == 200 else None
+            time.sleep(0.3)
+        assert first and first[:2] == b"\xff\xd8"                                         # a JPEG of the screen
+        assert httpx.get(f"{orch}/constellation/live/999999/frame.jpg").status_code == 404
+
         r = httpx.post(f"{orch}/tasks", json={"tool": "constellation.sign_in", "args": {"target": "tv pc", "site": "testsite"}})
         assert r.status_code == 409                                                      # always his confirmation
         tid = httpx.post(f"{orch}/tasks", json={"tool": "constellation.sign_in", "args": {"target": "tv pc", "site": "testsite"},
                                                 "confirmed": True}).json()["task_id"]
-        deadline = time.time() + 60
+        deadline, frames, sites = time.time() + 60, set(), set()
         while time.time() < deadline and httpx.get(f"{orch}/tasks/{tid}").json()["status"] not in ("completed", "failed"):
-            time.sleep(0.3)
+            f = frame()                                                 # still streaming while the sign-in runs
+            if f.status_code == 200:
+                frames.add(f.content)
+            sites.add(httpx.post(f"{orch}/constellation/live/{nid}/keep").json().get("site"))
+            time.sleep(0.25)
+        assert len(frames) >= 2, "no fresh frames during the sign-in"
+        assert "127.0.0.1" in sites or "localhost" in sites                              # which site, for the panel
+
+        stopped = time.time() + 40                                       # nobody watching: it stops by itself
+        while time.time() < stopped and httpx.get(f"{orch}/constellation/live/{nid}/frame.jpg").status_code == 200:
+            time.sleep(1)
+        assert httpx.get(f"{orch}/constellation/live/{nid}/frame.jpg").status_code == 204
         t = httpx.get(f"{orch}/tasks/{tid}").json()
         assert t["status"] == "completed", t.get("error")
         res = t["result"] if isinstance(t["result"], dict) else json.loads(t["result"])

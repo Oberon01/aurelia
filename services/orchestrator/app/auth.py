@@ -77,7 +77,7 @@ def new_key() -> str:
     return "aur_" + secrets.token_urlsafe(32)
 
 
-SCREEN_DENIED = re.compile(r"^/(?:devices(?:/.*)?|mailbox/\d+/decide|mailbox/decide-batch)$")
+SCREEN_DENIED = re.compile(r"^/(?:devices(?:/.*)?|mailbox/\d+/decide|mailbox/decide-batch|constellation/live/.*)$")
 
 
 def allowed(kind: str, path: str) -> bool:

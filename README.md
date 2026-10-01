@@ -262,6 +262,19 @@ player; muting or a volume with no video on the page falls back to the
 computer's sound. The panel shows the level, the outputs (the one in use in
 bold) and the track, with Louder / Quieter / Mute and Next / Pause chips.
 
+**Watching a screen live (agent 0.5.7).** "Show me the TV PC screen", "let me
+see what you're doing", "watch the sign-in" (`watch`) open a panel on the
+display you asked from with that screen live, about three frames a second:
+the page she has open (or her own view), with the site and page title under
+it. It keeps going while she works there, sign-ins included (the agent sends
+frames on its own channel, apart from its commands). Tap the picture to pause.
+It runs only while the panel is open and on screen: close it or switch away
+and the computer stops sending within seconds. Frames live ten seconds in
+Redis, only for that panel: never stored, never indexed, and never shown to
+her (she reads pages with `look`). Only his own browsers can watch; a screen
+key (the TV) can't. Password boxes show as dots, as they do on the screen.
+For now it's the page in her shell; a whole desktop comes with Iris.
+
 **What's wrong with it (diagnostics, stage 1 of fixes).** "What's wrong with
 the TV PC?" runs the agent's read-only checks (0.5.4+): failed services, errors
 logged this boot, the kernel log (out-of-memory kills, disk errors), network and
