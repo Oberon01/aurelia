@@ -280,6 +280,14 @@ approve or decline with `POST /ask/confirm {"action_id": "...", "approve": true}
 **Personality and rules for the model:** `config/identity.md`, plus the
 charter's principles, appended automatically. Both hot-reload.
 
+**Speaking styles:** say "use Raphael style" to try her in the style of
+Raphael from *That Time I Got Reincarnated as a Slime*: formal and precise,
+with replies opening "Answer.", "Report." or "Notice." and held actions asking
+"Do you wish to proceed?". Say "normal style" to go back. The choice is per
+person and stays until you change it. A style changes only how she speaks,
+never what she may do. Tune it in `config/styles/raphael.md` (read on every
+request, so edits apply right away).
+
 **Cost control:** `llm.monthly_token_cap` stops cloud model calls for the rest
 of the month once reached (the fast path keeps working). Every request is
 logged in `ask_requests` and every model call in `llm_calls` with tokens and

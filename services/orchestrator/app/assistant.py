@@ -21,7 +21,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from . import context, db, fastpath, mnemosyne, profile, registry
+from . import context, db, fastpath, mnemosyne, profile, registry, style
 from .llm.base import Message, ProviderError, ToolDef
 from .settings import settings
 from .tasks import StartTask, launch, wait_for_result
@@ -31,6 +31,7 @@ log = logging.getLogger("aurelia.assistant")
 
 PENDING_PREFIX = "aurelia:pending:"
 PENDING_TTL = 600
+NEEDS_CONFIRMATION = "That needs your confirmation first."
 CLOUD_PROVIDERS = ("claude",)
 
 
@@ -72,9 +73,12 @@ async def ask(body: Ask, request: Request):
 
     outcome: dict[str, Any] = {"route": "llm", "reply": "", "task_ids": [], "needs_confirmation": []}
 
-    fp = fastpath.match(body.text, cfg.fastpath.patterns) if cfg.fastpath.enabled else None
+    chosen = style.switch(body.text)
+    fp = fastpath.match(body.text, cfg.fastpath.patterns) if cfg.fastpath.enabled and chosen is None else None
     resolved = await registry.resolve(app.state.redis, fp.pattern.tool) if fp else None
-    if fp and resolved:
+    if chosen is not None:              # "use Raphael style" / "normal style": how she speaks, nothing else
+        outcome.update(route="style", reply=await style.choose(app.state.redis, body.user, chosen))
+    elif fp and resolved:
         outcome = await _run_fastpath(app, body, fp, resolved)
     else:
         outcome = await _run_llm(app, body, history, request_id)
@@ -117,22 +121,39 @@ async def confirm(body: Confirm, request: Request):
     if pending["user"] != body.user:
         raise HTTPException(403, "that action belongs to someone else")
     await app.state.redis.delete(key)
+    st = await style.current(app.state.redis, body.user)
     if not body.approve:
-        return {"reply": "Okay, I won't.", "task_ids": []}
+        return {"reply": style.line(st, "declined", "Okay, I won't."), "task_ids": []}
     try:
         task_id = await launch(app, StartTask(tool=pending["tool"], args=pending["args"],
                                               user=body.user, confirmed=True))
     except HTTPException as exc:
-        return {"reply": f"I couldn't do that: {_reason(exc)}", "task_ids": []}
+        return {"reply": style.notice(st, f"I couldn't do that: {_reason(exc)}"), "task_ids": []}
     result = await wait_for_result(task_id, app.state.config.current.llm.wait_for_result_seconds)
     if result and result["status"] == "completed" and pending.get("reply"):
-        return {"reply": pending["reply"], "task_ids": [task_id]}
-    return {"reply": _summarize(pending["tool"], result), "task_ids": [task_id]}
+        return {"reply": style.report(st, pending["reply"]), "task_ids": [task_id]}
+    if result and result["status"] == "completed":
+        return {"reply": style.line(st, "done", "Done."), "task_ids": [task_id]}
+    return {"reply": style.notice(st, _summarize(pending["tool"], result)), "task_ids": [task_id]}
 
 
 # ---- fast path ----------------------------------------------------------------
 
 async def _run_fastpath(app, body: Ask, fp, resolved) -> dict[str, Any]:
+    out = await _fastpath_plain(app, body, fp, resolved)
+    st = await style.current(app.state.redis, body.user)
+    if st:
+        if out["needs_confirmation"]:
+            out["reply"] = style.confirming(st, out["reply"], plain=out["reply"] == NEEDS_CONFIRMATION)
+        elif out.get("_ok"):
+            out["reply"] = style.report(st, out["reply"])
+        else:
+            out["reply"] = style.notice(st, out["reply"])
+    out.pop("_ok", None)
+    return out
+
+
+async def _fastpath_plain(app, body: Ask, fp, resolved) -> dict[str, Any]:
     args = fastpath.coerce(fp.args, resolved.tool.input_schema)
     out: dict[str, Any] = {"route": "fastpath", "reply": "", "task_ids": [], "needs_confirmation": []}
     try:
@@ -142,7 +163,7 @@ async def _run_fastpath(app, body: Ask, fp, resolved) -> dict[str, Any]:
             action = await _hold(app, resolved.qualified_name, args, body.user, _reason(exc),
                                  reply=fastpath.render_reply(fp.pattern, fp.groups))
             out["needs_confirmation"].append(action)
-            out["reply"] = "That needs your confirmation first."
+            out["reply"] = NEEDS_CONFIRMATION
         else:
             out["reply"] = f"I can't do that: {_reason(exc)}"
         return out
@@ -154,6 +175,7 @@ async def _run_fastpath(app, body: Ask, fp, resolved) -> dict[str, Any]:
         out["reply"] = why
     else:
         out["reply"] = fastpath.render_reply(fp.pattern, fp.groups)
+        out["_ok"] = True
     return out
 
 
@@ -196,6 +218,8 @@ async def _run_llm(app, body: Ask, history: list[dict[str, Any]], request_id: st
     if body.screen and body.screen.panels:
         tools = tools + [PANEL_TOOL]
     system = _system_prompt(app, functions, profile.core_prompt(await profile.core(body.user)))
+    if (extra := style.prompt(await style.current(app.state.redis, body.user))):
+        system += "\n\n" + extra          # last, so the rest of the prompt stays cached
     # What's on screen, what earlier turns found, and what she knows about you that fits
     # this request go with this request only, as data.
     try:

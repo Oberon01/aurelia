@@ -67,7 +67,7 @@ def stack(tmp_path_factory):
         "  max_core: 2\n  recall_min_score: 0.1\n")
     (tmp / "gov" / "functions" / "orbit.yaml").write_text("function: orbit\ntools:\n  tv_app: {tier: act}\n  tv_input: {tier: act}\n")
     (tmp / "gov" / "functions" / "constellation.yaml").write_text(
-        "function: constellation\ntools:\n  devices: {tier: reference}\n  open: {tier: act}\n  apps: {tier: reference}\n  home: {tier: act}\n"
+        "function: constellation\nrate_limit_per_minute: 1000\ntools:\n  devices: {tier: reference}\n  open: {tier: act}\n  apps: {tier: reference}\n  home: {tier: act}\n"
         "  look: {tier: read}\n  click: {tier: act}\n  type: {tier: act}\n  press: {tier: act}\n  scroll: {tier: act}\n"
         "  back: {tier: act}\n  media: {tier: act}\n  submit: {tier: change}\n"
         "  health: {tier: reference}\n  list_processes: {tier: reference}\n  close_process: {tier: act}\n"
