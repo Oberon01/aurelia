@@ -262,6 +262,16 @@ player; muting or a volume with no video on the page falls back to the
 computer's sound. The panel shows the level, the outputs (the one in use in
 bold) and the track, with Louder / Quieter / Mute and Next / Pause chips.
 
+**Sign-in codes (agent 0.5.8).** The computer sorts boxes three ways. Password
+boxes and payment boxes (card number, CVC, expiry, or a "security code" on a
+page whose address or card boxes say it's about paying) are never typed into.
+A box for the code a site emails or texts you ("enter the 6-digit code",
+`autocomplete=one-time-code`, six one-digit boxes) takes only a code you tell
+her: "the code is 123 456" goes in digit by digit, so split boxes move along.
+Zip, promo and gift codes are ordinary boxes. `sign_in` takes a site's "Log in
+with a password" option when it offers one; when it only offers a code, she
+stops and asks you for it.
+
 **Watching a screen live (agent 0.5.7).** "Show me the TV PC screen", "let me
 see what you're doing", "watch the sign-in" (`watch`) open a panel on the
 display you asked from with that screen live, about three frames a second:

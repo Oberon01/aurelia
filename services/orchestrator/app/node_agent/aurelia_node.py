@@ -58,7 +58,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.5.7"
+VERSION = "0.5.8"
 IS_WINDOWS = platform.system() == "Windows"
 EXIT_REVOKED = 3                                   # the service manager doesn't restart after this
 EXIT_UPDATED = 75                                  # restart me: a new version is in place
@@ -1904,10 +1904,26 @@ async (op, a) => {
     String(w).toLowerCase().trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+")).join("|") + ")(?![a-z])", "i");
   const risky = e => { const t = [labelOf(e), e.value, e.getAttribute && e.getAttribute("title")].filter(Boolean).join(" ");
     return words.test(t) ? (labelOf(e) || clean(e.value) || "that button") : null; };
-  const secret = e => { const auto = (e.getAttribute("autocomplete") || "").toLowerCase();
-    const said = [e.name, e.id, e.getAttribute("aria-label"), e.getAttribute("placeholder"), labelOf(e)].join(" ");
-    return (e.getAttribute("type") || "").toLowerCase() === "password" || /password|cc-|one-time-code/.test(auto) ||
-      /pass(?:word|code)?\b|\bpin\b|cvv|cvc|security code|card ?number|\bssn\b|social security/i.test(said); };
+  // What a box is for. password and payment boxes are never typed into; a one-time code box (the
+  // code a site emails or texts him) takes only a code he says. "Security code" means a card's
+  // only on a page that is about paying (its address or its card boxes say so).
+  const payPage = () => /checkout|payment|billing|\/pay(?:\b|\/)|cart|purchase|order|subscribe|upgrade|premium\/.*plan/i.test(location.pathname + location.search) ||
+    !!D.querySelector('input[autocomplete^="cc-"],input[name*="cardnumber" i],input[name*="card_number" i]');
+  const fieldKind = e => { if (!e || !e.getAttribute) return null;
+    const auto = (e.getAttribute("autocomplete") || "").toLowerCase(), type = (e.getAttribute("type") || "").toLowerCase();
+    const said = [e.name, e.id, e.getAttribute("aria-label"), e.getAttribute("placeholder"), labelOf(e)].join(" ").toLowerCase();
+    const short = (+e.getAttribute("maxlength") || 99) <= 8, numeric = /numeric|decimal/.test(e.getAttribute("inputmode") || "") || type === "tel" || type === "number";
+    if (type === "password" || /current-password|new-password/.test(auto)) return "password";
+    if (/^cc-|\bcc-/.test(auto)) return "payment";
+    if (/one-time-code/.test(auto)) return "code";
+    if (/card ?number|credit card|debit card|\bcvv|\bcvc|\bcvn|expir(?:y|ation)|name on card|\biban\b|routing number|account number/.test(said)) return "payment";
+    if (/security code/.test(said)) return payPage() ? "payment" : "code";
+    if (/\bssn\b|social security|pass(?:word|phrase)|passwd/.test(said)) return "password";
+    if (/zip|postal|post ?code|promo|coupon|discount|voucher|gift|referral|invite|country|area code|source code|\bcolou?r\b/.test(said)) return null;
+    if (/(?:verification|confirmation|login|sign[- ]?in|one[- ]time|6[- ]digit|security|access) code|\botp\b|\bcode\b|\bdigit/.test(said) || (short && numeric)) return "code";
+    if (/passcode|\bpin\b/.test(said)) return short && numeric ? "code" : "password";
+    return null; };
+  const secret = e => { const k = fieldKind(e); return k === "password" || k === "payment" ? k : null; };
   const enterRisk = e => {                                      // would Enter here send something?
     if (!e) return null;
     if (!isField(e)) return risky(e);                            // Enter on a focused button presses it
@@ -1970,7 +1986,10 @@ async (op, a) => {
       const said = [e.name, e.id, e.getAttribute("aria-label"), e.getAttribute("placeholder")].join(" ").toLowerCase();
       return ["text", "email", ""].includes(t) && (t === "email" || au.includes("username") || au === "email" ||
              /e-?mail|user|login|identifier|account/.test(said)); });
-    if (op === "login_fields") return { user: !!user, password: !!pw };
+    const code = inputs.find(e => fieldKind(e) === "code");
+    const usePw = !pw && all(D, "button,a,[role=button]").find(e => { const r = e.getBoundingClientRect();
+      return r.width > 2 && r.height > 2 && /(?:log ?in|sign ?in|continue) with (?:a |your )?password|use (?:a |your )?password|enter (?:a |your )?password instead/i.test(labelOf(e)); });
+    if (op === "login_fields") return { user: !!user, password: !!pw, code: !!code, use_password: usePw ? labelOf(usePw) : null };
     const e = a.kind === "password" ? pw : user;
     if (!e) return { error: "nofield" };
     e.scrollIntoView({ block: "center" }); e.focus(); if (e.select) e.select();
@@ -1985,7 +2004,7 @@ async (op, a) => {
     if (!e) return { error: "notfound" };
     const label = labelOf(e);
     if (a.expect && norm(label) !== norm(a.expect)) return { error: "changed", label };
-    if (op === "focus" && tag(e) === "input" && secret(e)) return { error: "secret", label };
+    if (op === "focus" && tag(e) === "input" && secret(e)) return { error: "secret", what: secret(e), label };
     if (op === "focus" && !isField(e)) return { error: "notfield", label };
     if (op === "click" && !a.allow) { const r = risky(e); if (r) return { risky: r }; }
     const p = point(e);
@@ -1995,9 +2014,14 @@ async (op, a) => {
   if (op === "field") {
     const e = deepActive();
     if (!isField(e)) return { error: "nofield" };
-    if (secret(e)) return { error: "secret" };
-    if (a.clear) { if (e.isContentEditable) D.execCommand("selectAll"); else if (e.select) e.select(); }
-    return { label: labelOf(e), enter_risk: enterRisk(e) };
+    if (secret(e)) return { error: "secret", what: secret(e) };
+    const kind = fieldKind(e);
+    if (kind === "code" && e.form) {                                  // six boxes, one digit each: start at the first
+      const boxes = all(e.form, "input").filter(x => fieldKind(x) === "code" && x.getBoundingClientRect().width > 2);
+      if (boxes.length > 1 && (+boxes[0].getAttribute("maxlength") || 99) <= 2) { boxes.forEach(x => { x.value = ""; }); boxes[0].focus(); }
+    }
+    if (a.clear) { if (e.isContentEditable) D.execCommand("selectAll"); else if (deepActive().select) deepActive().select(); }
+    return { label: labelOf(deepActive()), enter_risk: enterRisk(deepActive()), kind };
   }
   if (op === "enter") {
     const e = deepActive(), label = e ? labelOf(e) : "";
@@ -2307,11 +2331,17 @@ def _page_error(r: dict, n=None, text=None) -> None:
     if err == "changed":
         raise ValueError(f"the page changed (that's \"{r.get('label')}\" now), so I didn't press anything")
     if err == "secret":
-        raise ValueError("that's a password or payment box; I don't type into those")
+        raise ValueError(SECRET_SAY.get(r.get("what"), SECRET_SAY["password"]))
     if err == "notfield":
         raise ValueError(f"number {n} (\"{r.get('label')}\") isn't a text box")
     if err:
         raise ValueError(f"that didn't work on this page ({err})")
+
+
+SECRET_SAY = {"password": "that's a password box; I don't type passwords (a login you saved on this computer can sign in "
+                         "instead)",
+              "payment": "that's a payment box (card details); I don't type into those"}
+CODE = re.compile(r"^[A-Za-z0-9]{4,10}$")
 
 
 def _words(args: dict) -> list:
@@ -2373,11 +2403,17 @@ def do_page_type(args: dict) -> dict:
         f = tab.run("field", {"clear": args.get("clear", True) is not False, "words": _words(args)})
         if f.get("error") == "nofield":
             raise ValueError("no text box is selected; say which one (by its number)")
-        if f.get("error") == "secret":
-            raise ValueError("that's a password or payment box; I don't type into those (a login he saved on "
-                             "this computer can sign in instead)")
         _page_error(f)
-        tab.call("Input.insertText", text=text)
+        if f.get("kind") == "code":                           # the code a site sent him, as he said it
+            code = re.sub(r"[\s-]", "", text)
+            if not CODE.match(code):
+                raise ValueError("that's a box for the code the site sent you; tell me just the code (like 123456)")
+            text = code
+            for ch in code:                                   # one at a time: split boxes move to the next
+                tab.call("Input.insertText", text=ch)
+                time.sleep(0.08)
+        else:
+            tab.call("Input.insertText", text=text)
         out = {"typed": text, "into": f.get("label") or "the text box"}
         if args.get("enter"):
             if f.get("enter_risk"):
@@ -2525,7 +2561,7 @@ def do_sign_in(args: dict) -> dict:
         time.sleep(4)
     filled, label = [], entry.get("label") or site
     with _tab() as tab:
-        for _ in range(4):                                    # email, then password (one page or two)
+        for _ in range(5):                                    # email, then password (one page or two)
             url = (tab.run("state") or {}).get("url", "")
             if _origin(url) not in origins:
                 if filled:
@@ -2534,6 +2570,14 @@ def do_sign_in(args: dict) -> dict:
             f = tab.run("login_fields") or {}
             kind = "password" if f.get("password") and "password" not in filled else \
                    "user" if f.get("user") and "user" not in filled else None
+            if kind is None and f.get("use_password") and "password" not in filled and "use_password" not in filled:
+                r = tab.run("click", {"token": "", "text": f["use_password"], "allow": True})   # "Log in with a password"
+                if r.get("error"):
+                    break
+                _clicked(tab, r)
+                filled.append("use_password")
+                time.sleep(2.5)
+                continue
             if kind is None:
                 break
             if (tab.run("focus_login", {"kind": kind}) or {}).get("error"):
@@ -2544,10 +2588,13 @@ def do_sign_in(args: dict) -> dict:
             time.sleep(3.5)
         still = _origin((tab.run("state") or {}).get("url", "")) in origins
         boxes = (tab.run("login_fields") or {}) if still else {}
+    filled = [k for k in filled if k != "use_password"]
     if not filled:
         raise ValueError(f"I couldn't find the sign-in boxes on {label}'s page")
     if not still:
         status = "signed in"                                  # the site took him back to where he was going
+    elif boxes.get("code"):
+        status = "it's asking for the code it sent you (check your email or texts); tell me the code and I'll type it in"
     elif "password" not in filled:
         status = "the email went in, but the password box never came"
     elif boxes.get("password"):

@@ -185,7 +185,8 @@ TOOLS = [
     registry.ToolSpec(
         name="type", description="Type text into a text box on a screen's page: the box by number (n), or the one "
                                  "already selected. enter: true also presses Enter (a search); if Enter there would "
-                                 "send a message, it waits for his confirmation. Never into password or payment boxes.",
+                                 "send a message, it waits for his confirmation. Never into password or payment boxes. A box for "
+                                 "the code a site emailed or texted him takes only the code he just told you.",
         input_schema={"type": "object", "properties": {"target": {"type": "string"}, "text": {"type": "string"},
                                                        "n": {"type": "integer", "minimum": 1}, "enter": {"type": "boolean"}},
                       "required": ["text"]},

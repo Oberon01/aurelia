@@ -290,3 +290,101 @@ def test_she_signs_in_with_a_login_saved_on_the_computer_without_ever_seeing_it(
         proc.kill()
         subprocess.run(["pkill", "-f", f"remote-debugging-port={port}"], capture_output=True)
     assert secret not in proc.stderr.read()                                              # nor in the agent's log
+
+
+# A sign-in like Spotify's: email first, then a page that emails a 6-digit code (six one-digit boxes
+# that move along by themselves), with "Log in with a password" as the other way.
+SPOT_LOGIN = """<!doctype html><title>Log in</title>
+<form action="code.html"><input type="text" name="username" aria-label="Email or username"><button>Continue</button></form>"""
+CODE_JS = """<script>
+const boxes = [...document.querySelectorAll('.d')];
+boxes.forEach((b, i) => b.addEventListener('input', () => { if (b.value && boxes[i + 1]) boxes[i + 1].focus(); }));
+document.querySelector('form').addEventListener('submit', ev => { ev.preventDefault();
+  location.href = 'welcome.html?code=' + boxes.map(b => b.value).join(''); });
+</script>"""
+SPOT_CODE = """<!doctype html><title>Enter code</title><p>We sent a 6-digit code to your email.</p>
+<form>""" + "".join(f'<input class="d" maxlength="1" inputmode="numeric" aria-label="Digit {i}"'
+                    + (' autocomplete="one-time-code"' if i == 1 else "") + ">" for i in range(1, 7)) + """
+<button>Log in</button></form>{other}""" + CODE_JS
+SPOT_PASSWORD = """<!doctype html><title>Password</title>
+<form action="welcome.html"><input type="password" name="pw" aria-label="Password"><button>Log in</button></form>"""
+CHECKOUT = """<!doctype html><title>Checkout</title><form>
+<input name="promo" aria-label="Promo code"><input name="cardnumber" aria-label="Card number">
+<input name="csc" aria-label="Security code" maxlength="4" inputmode="numeric"><button>Pay now</button></form>"""
+
+
+def test_codes_from_his_email_go_in_but_passwords_and_cards_never_do(stack, tmp_path, display, site):
+    orch = stack["orch"]
+    root = tmp_path / "site"
+    (root / "spot.html").write_text(SPOT_LOGIN)
+    (root / "code.html").write_text(SPOT_CODE.replace("{other}", ""))
+    (root / "pw.html").write_text(SPOT_PASSWORD.replace('action="welcome.html"',            # back to the site, signed in
+                                                        f'action="{site.replace("127.0.0.1", "localhost")}/welcome.html"'))
+    (root / "welcome.html").write_text(WELCOME_PAGE)
+    (root / "checkout").mkdir()
+    (root / "checkout" / "index.html").write_text(CHECKOUT)
+    secret = "s3cret-for-the-other-way"
+    got = paired_node(orch, "TV PC")
+    home, app = home_for(tmp_path, orch, got, shell=True)
+    cfg = home / ".config" / "aurelia-node"
+    (cfg / "logins.json").write_text(json.dumps({"spot": {"label": "Spot", "origins": [site], "start": f"{site}/spot.html",
+                                                          "user": "me@example.com", "password": secret}}))
+    (cfg / "logins.json").chmod(0o600)
+    port = free_port()
+    proc = subprocess.Popen([sys.executable, str(app / "aurelia_node_guard.py"), "run"], stderr=subprocess.PIPE, text=True,
+                            env=env_for(home, DISPLAY=display, XDG_CURRENT_DESKTOP="Aurelia", AURELIA_BROWSER=CHROME,
+                                        AURELIA_BROWSER_ARGS="--no-sandbox --disable-gpu", AURELIA_DEBUG_PORT=str(port),
+                                        AURELIA_POLL_WAIT="2"))
+
+    def sign_in():
+        tid = httpx.post(f"{orch}/tasks", json={"tool": "constellation.sign_in", "args": {"target": "tv pc", "site": "spot"},
+                                                "confirmed": True}).json()["task_id"]
+        deadline = time.time() + 60
+        while time.time() < deadline and httpx.get(f"{orch}/tasks/{tid}").json()["status"] not in ("completed", "failed"):
+            time.sleep(0.3)
+        t = httpx.get(f"{orch}/tasks/{tid}").json()
+        assert t["status"] == "completed", t.get("error")
+        return t["result"] if isinstance(t["result"], dict) else json.loads(t["result"])
+
+    def on_screen():
+        return next(p for p in cdp(port, "/json/list") if p["type"] == "page" and "/view" not in p["url"])
+
+    try:
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            devs = run_task(orch, "constellation.devices", {"computers": True})[1]["paired"]
+            if devs and devs[0].get("shell") == "on":
+                break
+            time.sleep(0.5)
+
+        # Only a code: she stops and asks him for it, then types the code he says, box by box.
+        res = sign_in()
+        assert "code it sent you" in json.dumps(res), res
+        seen = ok(orch, "constellation.look", {})
+        first = next(i["n"] for i in seen["onscreen"]["items"] if i["label"] == "Digit 1")
+        ok(orch, "constellation.type", {"text": "123 456", "n": first, "enter": True})
+        time.sleep(1.5)
+        assert on_screen()["title"] == "Welcome" and on_screen()["url"].endswith("code=123456")
+        ok(orch, "constellation.open", {"url": f"{site}/spot.html"})
+        time.sleep(1.5)
+        box = next(i["n"] for i in ok(orch, "constellation.look", {})["onscreen"]["items"] if i["label"] == "Email or username")
+        assert ok(orch, "constellation.type", {"text": "hello there", "n": box})["did"]                 # not a code box: as said
+
+        # With "Log in with a password" offered, she takes it and uses the saved login.
+        (root / "code.html").write_text(SPOT_CODE.replace("{other}", '<a href="pw.html">Log in with a password</a>'))
+        res = sign_in()
+        assert on_screen()["title"] == "Welcome" and res["headline"] == "Signed in to Spot", res
+
+        # A real checkout: the card's security code and number are refused, and say so; a promo code isn't.
+        ok(orch, "constellation.open", {"url": f"{site}/checkout/"})
+        time.sleep(1.5)
+        items = {i["label"]: i["n"] for i in ok(orch, "constellation.look", {})["onscreen"]["items"]}
+        status, _, err = run_task(orch, "constellation.type", {"text": "123", "n": items["Security code"]})
+        assert status == "failed" and "payment box" in err
+        status, _, err = run_task(orch, "constellation.type", {"text": "4111111111111111", "n": items["Card number"]})
+        assert status == "failed" and "payment box" in err
+        assert run_task(orch, "constellation.type", {"text": "SAVE-10", "n": items["Promo code"]})[0] == "completed"
+    finally:
+        proc.kill()
+        subprocess.run(["pkill", "-f", f"remote-debugging-port={port}"], capture_output=True)
+    assert secret not in proc.stderr.read()

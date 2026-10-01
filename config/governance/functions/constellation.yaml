@@ -10,7 +10,7 @@ tools:
   home:            { tier: act }         # close what she opened on a screen; back to her view
   look:            { tier: read }        # the page on a screen running her shell, numbered (step 4)
   click:           { tier: act }         # click by number or words; buy/send/delete-looking ones come back as submit
-  type:            { tier: act }         # into a text box; never password or payment boxes (the node refuses)
+  type:            { tier: act }         # into a text box; never password or payment boxes (the node refuses); a sign-in code only as he says it
   press:           { tier: act }         # a key (enter, escape, arrows…); Enter that would send comes back as submit
   scroll:          { tier: act }
   back:            { tier: act }
