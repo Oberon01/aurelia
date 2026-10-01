@@ -76,6 +76,11 @@ def test_roles_and_sending(stack):
         "tools": [{"name": n, "description": n, "input_schema": {"type": "object"}} for n in ("status", "look")]
     }).raise_for_status()
 
+    # A revoked device leaves the list at once (it doesn't linger for days).
+    gone = device("browser", "Old laptop", {"os": "Windows"})
+    httpx.post(f"{orch}/devices/{gone}/revoke").raise_for_status()
+    assert "Old laptop" not in {d["name"] for d in httpx.get(f"{orch}/devices").json()["devices"]}
+
     # Roles: guessed, then chosen on the devices panel (and only there).
     listed = {d["name"]: d for d in httpx.get(f"{orch}/devices").json()["devices"]}
     assert (listed["Desk"]["role"], listed["Pixel"]["role"], listed["Den TV PC"]["role"]) == \

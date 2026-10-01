@@ -398,8 +398,7 @@ def _ago(ts: datetime | None) -> str | None:
 async def listing(current: int | None = None) -> list[dict[str, Any]]:
     await expire_old()
     rows = await db.pool().fetch(
-        "SELECT * FROM devices WHERE kind <> 'screen' AND (status IN ('approved','pending') "
-        "OR revoked_at > now() - interval '7 days') "
+        "SELECT * FROM devices WHERE kind <> 'screen' AND status IN ('approved','pending') "     # revoked: gone 
         "ORDER BY status='approved' DESC, last_seen DESC NULLS LAST, requested_at DESC")
     from . import roles
     out = []

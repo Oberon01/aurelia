@@ -219,6 +219,16 @@ td .clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;o
 .pdev select.role option{background:#04070b;color:var(--ink)}
 .pdev .dv{grid-column:1;font-family:var(--mono);font-size:11px;color:var(--ink-dim)}
 .pdev .di{grid-column:1;font-size:13px;color:var(--warn)}.pdev .di.urgent{color:var(--bad,#ff7a7a);font-weight:600}
+/* a narrow panel (a phone, or a crowded screen): name, details, then the controls on their own line */
+.devlist{container-type:inline-size}
+@container (max-width:620px){
+  .pdev{grid-template-columns:minmax(0,1fr);gap:4px}
+  .pdev{padding:12px 0}
+  .pdev .db{grid-column:1;grid-row:auto;flex-wrap:nowrap;gap:6px;margin-top:8px}
+  .pdev .db select.role{flex:1 1 auto;min-width:0;height:34px;padding:0 4px;font-size:11px;letter-spacing:0}
+  .pdev .db .btn{flex:0 0 auto;min-height:0;height:34px;padding:0 10px;font-size:12px}
+  .pdev .dn{font-size:16px}.pdev .dm{line-height:1.5}
+}
 .hl-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px 18px}
 .meter{display:flex;flex-direction:column;gap:4px;min-width:0}
 .meter .ml{display:flex;justify-content:space-between;gap:8px;font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
@@ -1234,7 +1244,7 @@ function researchView(r) {
 // ---------------------------------------------------------------- devices (Constellation)
 // Pairing and revoking happen only here, from your click; Aurelia can list devices but has no tool to let one in or out.
 function devicesView(list) {
-  const box = el("div");
+  const box = el("div", "devlist");
   if (!list.length) { box.append(el("div", "lib-note", "Nothing paired yet.")); return box; }
   const KIND = { browser: "browser", node: "computer", terminal: "terminal" };
   const rename = (d, name) => {                          // what you call it out loud: "the TV PC", "the desk"
@@ -1268,7 +1278,7 @@ function devicesView(list) {
     const btns = el("span", "db");
     if (d.status === "approved" && (d.roles || []).length) {        // what it's for: only you set this, here
       const sel = el("select", "role"); sel.setAttribute("aria-label", `What ${d.name} is for`);
-      d.roles.forEach(r => { const o = el("option", null, r[0].toUpperCase() + r.slice(1) + (r === d.role && !d.role_chosen ? " (guessed)" : ""));
+      d.roles.forEach(r => { const o = el("option", null, r[0].toUpperCase() + r.slice(1) + (r === d.role && !d.role_chosen ? " (auto)" : ""));
                              o.value = r; o.selected = r === d.role; sel.append(o); });
       sel.addEventListener("change", async () => {
         try {
@@ -1295,7 +1305,14 @@ function devicesView(list) {
         try {
           const r = await fetch(`/devices/${d.id}/revoke`, { method: "POST" });
           if (!r.ok) throw new Error();
-          row.className = "pdev revoked"; rv.remove(); row.querySelector(".dm").textContent = `${KIND[d.kind] || d.kind} · revoked just now`;
+          row.style.transition = "opacity .35s ease"; row.style.opacity = "0";
+          setTimeout(() => {                                   // gone from the list, not greyed out
+            const panel = row.closest(".panel"); row.remove();
+            const h = panel && panel.querySelector(".headline"), list = box.querySelectorAll(".pdev");
+            const live = box.querySelectorAll(".pdev.approved").length, waiting = box.querySelectorAll(".pdev.pending").length;
+            if (h && /paired/.test(h.textContent)) h.textContent = `${live} paired` + (waiting ? ` · ${waiting} waiting` : "");
+            if (!list.length) box.append(el("div", "lib-note", "Nothing paired yet."));
+          }, 360);
           say(`${d.name} is revoked. It can't reach me anymore.`);
         } catch (e) { rv.disabled = false; say("Couldn't revoke it."); }
       });
