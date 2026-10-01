@@ -13,7 +13,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from . import db, mailbox, memory, registry
+from . import auth, db, mailbox, memory, registry
 from .events import PanelEvent, publish
 
 log = logging.getLogger("aurelia.tasks")
@@ -28,6 +28,7 @@ class StartTask(BaseModel):
     user: str = "owner"
     confirmed: bool = False        # set by the display after you approve a "change"-tier action
     display: str = "panel"         # "brief": the answer is in her reply, so no panel opens
+    device: int | None = None      # the display that asked (set from the proxy's header, not by clients)
 
 
 class Progress(BaseModel):
@@ -50,6 +51,10 @@ def _redis(request: Request):
 
 @router.post("", status_code=202)
 async def start_task(body: StartTask, request: Request):
+    headers = getattr(request, "headers", None)
+    if headers is not None and headers.get("x-aurelia-device"):
+        # Asked from a device through the proxy: its panel goes to that display (if it is one).
+        body = body.model_copy(update={"device": await auth.display_of(headers)})
     resolved = await registry.resolve(_redis(request), body.tool)
     if resolved is None:
         raise HTTPException(404, f"tool '{body.tool}' is not registered (use '<function>.<tool>')")
@@ -72,10 +77,10 @@ async def start_task(body: StartTask, request: Request):
 
     task_id = str(uuid.uuid4())
     await db.pool().execute(
-        "INSERT INTO task_runs (id, tool, args, trigger, progress_unit, user_id, tier, confirmed) "
-        "VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8)",
+        "INSERT INTO task_runs (id, tool, args, trigger, progress_unit, user_id, tier, confirmed, device) "
+        "VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9)",
         uuid.UUID(task_id), name, _json(body.args), body.trigger, resolved.tool.progress_unit,
-        body.user, decision.tier, body.confirmed,
+        body.user, decision.tier, body.confirmed, body.device,
     )
     open_data: dict[str, Any] = {"args": body.args, "user": body.user, "trigger": body.trigger,
                                  "cancellable": resolved.tool.cancellable, "unit": resolved.tool.progress_unit,
@@ -101,7 +106,8 @@ async def start_task(body: StartTask, request: Request):
                 open_data["snapshot"] = snap
         except Exception:
             log.exception("couldn't look up a saved panel for %s", name)
-    await publish(_redis(request), PanelEvent(type="panel.open", task_id=task_id, tool=name, data=open_data))
+    await publish(_redis(request), PanelEvent(type="panel.open", task_id=task_id, tool=name, data=open_data,
+                                              device=body.device))
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.post(f"{resolved.url}/tools/{resolved.tool.name}/invoke",
@@ -122,7 +128,7 @@ async def report_progress(task_id: str, body: Progress, request: Request):
     cancel = bool(await redis.exists(CANCEL_PREFIX + task_id))
     row = await db.pool().fetchrow(
         "UPDATE task_runs SET progress_current=$2, progress_total=$3, progress_unit=COALESCE($4, progress_unit) "
-        "WHERE id=$1 AND status='running' RETURNING tool, progress_unit",
+        "WHERE id=$1 AND status='running' RETURNING tool, progress_unit, device",
         uuid.UUID(task_id), body.current, body.total, body.unit,
     )
     if row is None:
@@ -130,6 +136,7 @@ async def report_progress(task_id: str, body: Progress, request: Request):
     await publish(redis, PanelEvent(
         type="panel.progress", task_id=task_id, tool=row["tool"],
         data={"current": body.current, "total": body.total, "unit": row["progress_unit"], "label": body.label},
+        device=row["device"],
     ))
     return {"cancel": cancel}
 
@@ -223,6 +230,7 @@ async def _finish(request: Request, task_id: str, tool: str, body: Result) -> No
         uuid.UUID(task_id), body.status, body.partial, _json(body.data), body.error,
     )
     redis = _redis(request)
+    device = await db.pool().fetchval("SELECT device FROM task_runs WHERE id=$1", uuid.UUID(task_id))
     if body.data and body.status != "failed":
         try:
             row = await db.pool().fetchrow("SELECT args, user_id FROM task_runs WHERE id=$1", uuid.UUID(task_id))
@@ -233,11 +241,12 @@ async def _finish(request: Request, task_id: str, tool: str, body: Result) -> No
             log.exception("couldn't save the panel for task %s", task_id)
     if body.data:
         await publish(redis, PanelEvent(type="panel.result", task_id=task_id, tool=tool,
-                                        data={"status": body.status, "partial": body.partial, **body.data}))
+                                        data={"status": body.status, "partial": body.partial, **body.data},
+                                        device=device))
     # Nothing to read → the display flashes "Complete" and fades the panel out.
     await publish(redis, PanelEvent(type="panel.close", task_id=task_id, tool=tool,
                                     data={"status": body.status, "has_result": bool(body.data),
-                                          "error": body.error}))
+                                          "error": body.error}, device=device))
 
 
 async def _within_rate_limit(request: Request, function: str, per_minute: int) -> bool:

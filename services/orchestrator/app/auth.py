@@ -123,6 +123,37 @@ async def device_for(key: str) -> dict[str, Any] | None:
     return dev
 
 
+_by_id: dict[int, tuple[float, dict[str, Any] | None]] = {}
+
+
+async def device_by_id(dev_id: int) -> dict[str, Any] | None:
+    """An approved device by id (from the proxy's X-Aurelia-Device header). Cached briefly."""
+    hit = _by_id.get(dev_id)
+    if hit and hit[0] > time.monotonic():
+        return hit[1]
+    row = await db.pool().fetchrow("SELECT id, kind, name, user_id FROM devices WHERE id=$1 AND status='approved'", dev_id)
+    dev = dict(row) if row else None
+    _by_id[dev_id] = (time.monotonic() + KEY_CACHE_SECONDS, dev)
+    return dev
+
+
+async def asker(headers) -> dict[str, Any] | None:
+    """The device a request came through, or None for a request from inside the stack. The proxy
+    sets the header after checking the key, and strips any copy a client sends."""
+    raw = (headers.get("x-aurelia-device") or "").strip() if headers is not None else ""
+    if not raw.isdigit():
+        return None
+    return await device_by_id(int(raw))
+
+
+async def display_of(headers) -> int | None:
+    """The display that asked (a browser or a node's screen), or None: a terminal or node has no
+    panels of its own, so what it asks for shows on the displays as usual."""
+    from .events import DISPLAYS
+    dev = await asker(headers)
+    return dev["id"] if dev and dev["kind"] in DISPLAYS else None
+
+
 async def _touch(dev_id: int) -> None:
     now = time.monotonic()
     if now - _seen.get(dev_id, 0) < SEEN_EVERY_SECONDS:
@@ -329,6 +360,7 @@ async def revoke(dev_id: int) -> dict[str, Any]:
         raise HTTPException(404, "No such device, or it's already revoked.")
     if row["key_hash"]:
         _cache.pop(row["key_hash"], None)
+    _by_id.clear()                                                     # open connections notice within seconds
     screens = await db.pool().fetch(                                   # its screen goes with it
         "UPDATE devices SET status='revoked', revoked_at=now() WHERE kind='screen' AND status='approved' "
         "AND info->>'node_id' = $1 RETURNING key_hash", str(dev_id))

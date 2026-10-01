@@ -305,6 +305,15 @@ fades when there's nothing to read, and a confirmation panel for anything that
 needs your go-ahead (unlock). Type into it like `ask.sh`: press `/`, type,
 Enter (Shift+Enter for a new line). Esc clears finished panels.
 
+**Each display keeps its own panels.** A panel opens only on the display that
+asked for it: what you ask on the phone stays on the phone, and the desk
+stays as it was. Panels nobody in particular asked for (a schedule, a request
+from `ask.sh`) show on every display except node screens, so a TV running her
+shell shows only what was asked of it. The mailbox count shows everywhere. The
+morning digest opens where you first are after the digest hour, never on a
+node's screen by itself. Revoking a device also closes its open display within
+seconds.
+
 The top of the screen is the conversation, and it has a fixed height, so
 nothing she says moves or resizes the panels. Her name has the time and date
 under it, your last question sits across the top, and her reply sits just

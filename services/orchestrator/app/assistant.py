@@ -21,7 +21,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from . import context, db, fastpath, mnemosyne, profile, registry, style
+from . import auth, context, db, fastpath, mnemosyne, profile, registry, style
 from .llm.base import Message, ProviderError, ToolDef
 from .settings import settings
 from .tasks import StartTask, launch, wait_for_result
@@ -40,6 +40,7 @@ class Ask(BaseModel):
     session_id: str | None = None
     user: str = "owner"
     screen: context.Screen | None = None     # the panels you can see, by number, and the one in focus
+    device: int | None = None                # the display asking: set from the proxy's header, never by clients
 
 
 class Confirm(BaseModel):
@@ -63,9 +64,10 @@ async def ask(body: Ask, request: Request):
     app = request.app
     cfg = app.state.config.current
     started = time.monotonic()
-    # First thing you ask after the digest hour brings up the morning digest (once a day).
+    body.device = await auth.display_of(request.headers)       # its panels open on this display only
+    # First thing you ask after the digest hour brings up the morning digest (once a day), right here.
     from . import digest
-    asyncio.create_task(digest.maybe_show(app, body.user))
+    asyncio.create_task(digest.maybe_show(app, body.user, body.device))
     request_id = str(uuid.uuid4())
     # The display makes its own session id, so two requests sent at once share one conversation.
     session_id = body.session_id if context.valid_session(body.session_id) else uuid.uuid4().hex
@@ -125,8 +127,8 @@ async def confirm(body: Confirm, request: Request):
     if not body.approve:
         return {"reply": style.line(st, "declined", "Okay, I won't."), "task_ids": []}
     try:
-        task_id = await launch(app, StartTask(tool=pending["tool"], args=pending["args"],
-                                              user=body.user, confirmed=True))
+        task_id = await launch(app, StartTask(tool=pending["tool"], args=pending["args"], user=body.user,
+                                              confirmed=True, device=await auth.display_of(request.headers)))
     except HTTPException as exc:
         return {"reply": style.notice(st, f"I couldn't do that: {_reason(exc)}"), "task_ids": []}
     result = await wait_for_result(task_id, app.state.config.current.llm.wait_for_result_seconds)
@@ -157,7 +159,8 @@ async def _fastpath_plain(app, body: Ask, fp, resolved) -> dict[str, Any]:
     args = fastpath.coerce(fp.args, resolved.tool.input_schema)
     out: dict[str, Any] = {"route": "fastpath", "reply": "", "task_ids": [], "needs_confirmation": []}
     try:
-        task_id = await launch(app, StartTask(tool=resolved.qualified_name, args=args, user=body.user))
+        task_id = await launch(app, StartTask(tool=resolved.qualified_name, args=args, user=body.user,
+                                              device=getattr(body, "device", None)))
     except HTTPException as exc:
         if exc.status_code == 409:
             action = await _hold(app, resolved.qualified_name, args, body.user, _reason(exc),
@@ -250,7 +253,8 @@ async def _run_llm(app, body: Ask, history: list[dict[str, Any]], request_id: st
             if call.name == PANEL_TOOL.name:
                 result_text, is_error = await _read_panel(body.screen, call.args)
             else:
-                result_text, is_error = await _run_tool_call(app, body.user, by_api.get(call.name), call.args, out)
+                result_text, is_error = await _run_tool_call(app, body.user, by_api.get(call.name), call.args, out,
+                                                             body.device)
             messages.append(Message("tool", result_text, tool_call_id=call.id,
                                     tool_name=call.name, is_error=is_error))
 
@@ -290,7 +294,8 @@ async def _read_panel(screen: context.Screen | None, args: dict) -> tuple[str, b
                   "result": info["result"], "error": info["error"]}), False
 
 
-async def _run_tool_call(app, user: str, qualified: str | None, args: dict, out: dict) -> tuple[str, bool]:
+async def _run_tool_call(app, user: str, qualified: str | None, args: dict, out: dict,
+                         device: int | None = None) -> tuple[str, bool]:
     if qualified is None:
         return _data({"status": "error", "error": "no such tool"}), True
     args = dict(args or {})
@@ -300,7 +305,7 @@ async def _run_tool_call(app, user: str, qualified: str | None, args: dict, out:
         if resolved and resolved.tool.display == "panel":     # always shown: a library, a quiz, a topic…
             display = "panel"
     try:
-        task_id = await launch(app, StartTask(tool=qualified, args=args, user=user, display=display))
+        task_id = await launch(app, StartTask(tool=qualified, args=args, user=user, display=display, device=device))
     except HTTPException as exc:
         if exc.status_code == 409:
             action = await _hold(app, qualified, args, user, _reason(exc))

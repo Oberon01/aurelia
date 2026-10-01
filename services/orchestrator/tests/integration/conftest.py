@@ -57,7 +57,7 @@ def stack(tmp_path_factory):
     (tmp / "gov" / "charter.yaml").write_text(
         "users:\n  owner: {role: owner}\n  chrysalis: {role: system}\n")
     (tmp / "gov" / "functions" / "testfn.yaml").write_text(
-        "function: testfn\ntools:\n  status: {tier: reference}\n  switch: {tier: act}\n  look: {tier: reference}\n")
+        "function: testfn\nrate_limit_per_minute: 1000\ntools:\n  status: {tier: reference}\n  switch: {tier: act}\n  look: {tier: reference}\n")
     (tmp / "gov" / "functions" / "parallax.yaml").write_text(
         "function: parallax\ntools:\n  digest: {tier: reference}\n  mailbox: {tier: reference}\n")
     (tmp / "gov" / "functions" / "mnemosyne.yaml").write_text(

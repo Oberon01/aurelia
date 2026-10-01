@@ -16,7 +16,7 @@ log = logging.getLogger("aurelia.digest")
 router = APIRouter(prefix="/digest", tags=["digest"])
 
 
-async def maybe_show(app, user: str = "owner") -> dict:
+async def maybe_show(app, user: str = "owner", device: int | None = None) -> dict:
     cfg = app.state.config.current.digest
     if not cfg.enabled:
         return {"shown": False, "why": "turned off"}
@@ -43,7 +43,8 @@ async def maybe_show(app, user: str = "owner") -> dict:
                                 day, json.dumps(content))
         if content.get("quiet"):
             return {"shown": False, "why": "quiet day"}
-        task_id = await launch(app, StartTask(tool="parallax.digest", args={}, trigger="digest", user=user))
+        task_id = await launch(app, StartTask(tool="parallax.digest", args={}, trigger="digest", user=user,
+                                              device=device))
         return {"shown": True, "task_id": task_id}
     except Exception as exc:
         log.warning("digest not shown: %s", exc)
@@ -53,5 +54,10 @@ async def maybe_show(app, user: str = "owner") -> dict:
 
 @router.post("/check")
 async def check(request: Request, user: str = "owner"):
-    """The display calls this when it opens; /ask calls it on your first request."""
-    return await maybe_show(request.app, user)
+    """The display calls this when it opens; /ask calls it on your first request. It opens on
+    that display. A node's screen (a TV running her shell) doesn't bring it up on its own."""
+    from . import auth
+    dev = await auth.asker(request.headers)
+    if dev and dev["kind"] == "screen":
+        return {"shown": False, "why": "not on a node's screen unless asked"}
+    return await maybe_show(request.app, user, await auth.display_of(request.headers))

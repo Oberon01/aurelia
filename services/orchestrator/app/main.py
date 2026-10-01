@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -209,15 +210,35 @@ async def governance_function(name: str, request: Request):
 @app.websocket("/ws")
 async def events_ws(ws: WebSocket):
     """Streams panel events to the display. Clients reconnect automatically,
-    so an orchestrator swap shows up as a brief reconnect, not an outage."""
+    so an orchestrator swap shows up as a brief reconnect, not an outage.
+    Each display gets only its own panels (events.for_display); a revoked device's
+    connection is closed within KEY_CACHE_SECONDS."""
+    from . import auth
+    from .events import decode, for_display
+    me = await auth.asker(ws.headers)
+    if ws.headers.get("x-aurelia-device") and me is None:
+        await ws.close(code=4401)              # revoked between the proxy's check and now
+        return
     await ws.accept()
     pubsub = ws.app.state.redis.pubsub()
     await pubsub.subscribe(CHANNEL)
+    checked = time.monotonic()
     try:
         while True:
             msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
             if msg is not None:
-                await ws.send_text(msg["data"].decode() if isinstance(msg["data"], bytes) else msg["data"])
+                text = msg["data"].decode() if isinstance(msg["data"], bytes) else msg["data"]
+                try:
+                    wanted = for_display(decode(text), me)
+                except ValueError:
+                    wanted = False
+                if wanted:
+                    await ws.send_text(text)
+            if me is not None and time.monotonic() - checked > 5:
+                checked = time.monotonic()
+                if await auth.device_by_id(me["id"]) is None:
+                    await ws.close(code=4401)
+                    break
             await asyncio.sleep(0)
     except (WebSocketDisconnect, RuntimeError):
         pass
