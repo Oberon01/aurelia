@@ -58,7 +58,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.5.4"
+VERSION = "0.5.5"
 IS_WINDOWS = platform.system() == "Windows"
 EXIT_REVOKED = 3                                   # the service manager doesn't restart after this
 EXIT_UPDATED = 75                                  # restart me: a new version is in place
@@ -139,6 +139,10 @@ def machine_info() -> dict:
             "os_version": platform.release() if IS_WINDOWS else (rel.get("PRETTY_NAME") or platform.release()),
             "hostname": socket.gethostname(), "arch": platform.machine(), "agent_version": VERSION,
             "screens": screens()}
+    try:
+        info["booted_at"] = int(_boot_time()) if not IS_WINDOWS else None    # a restart shows up as a new value
+    except Exception:
+        pass
     if role_hint():
         info["role"] = role_hint()          # his choice at install; the devices panel has the last word
     if not IS_WINDOWS:
@@ -622,6 +626,10 @@ def specs() -> dict:
         except Exception as exc:
             log("couldn't read the hardware:", repr(exc))
             _SPECS = {}
+        try:
+            _SPECS.update({k: v for k, v in wake_address().items() if v})
+        except Exception:
+            pass
     return _SPECS
 
 
@@ -881,6 +889,201 @@ def do_home(args: dict) -> dict:
     return {"closed": SHELL.home()}
 
 
+# ---- power and presence ---------------------------------------------------------------------
+#
+# Restart, shut down, sleep, lock, screen off/on, idle time, and waking another computer. Fixed
+# programs by argument list (no shell). Restart and shutdown are always confirmed on the server
+# (change tier) and happen a few seconds after the answer, so the answer gets out first. On Linux
+# they go through logind ("-i": a desktop that's holding the shutdown back doesn't hang it); the
+# installer's --system step lets this account do that without a password, keeps a stuck service
+# from holding a shutdown for minutes, and arms the hardware watchdog in case it still hangs.
+
+MAC = re.compile(r"^[0-9a-f]{2}([:-][0-9a-f]{2}){5}$", re.I)
+POWER_ACTIONS = ("restart", "shutdown", "sleep", "lock", "screen_off", "screen_on", "idle")
+
+
+def _default_iface() -> str | None:
+    for x in _read(PROC / "net" / "route").splitlines()[1:]:
+        f = x.split()
+        if len(f) > 1 and f[1] == "00000000":
+            return f[0]
+    return None
+
+
+def wake_address() -> dict:
+    """This computer's MAC address and LAN broadcast address, so another can wake it."""
+    if IS_WINDOWS:
+        out = _run(["getmac", "/fo", "csv", "/nh", "/v"])
+        for line in out.splitlines():
+            cols = [c.strip('"') for c in line.split('","')]
+            if len(cols) >= 3 and MAC.match(cols[2].replace("-", ":")) and "disconnected" not in line.lower():
+                return {"mac": cols[2].replace("-", ":").lower()}
+        return {}
+    iface = _default_iface()
+    if not iface:
+        return {}
+    mac = _read(SYS / "class" / "net" / iface / "address").strip().lower()
+    brd = None
+    m = re.search(r"brd (\d+\.\d+\.\d+\.\d+)", _run(["ip", "-o", "-4", "addr", "show", "dev", iface]))
+    if m:
+        brd = m.group(1)
+    return {"mac": mac if MAC.match(mac) and mac != "00:00:00:00:00:00" else None, "broadcast": brd, "iface": iface}
+
+
+def _run_env(argv: list[str], timeout: float = 6) -> tuple[int, str, str]:
+    """Like _run_full, inside the graphical session (for locking and the screen)."""
+    exe = shutil.which(argv[0])
+    if not exe:
+        return 127, "", ""
+    try:
+        r = subprocess.run([exe, *argv[1:]], capture_output=True, text=True, timeout=timeout, env=session_env())
+        return r.returncode, r.stdout, r.stderr
+    except (OSError, subprocess.SubprocessError):
+        return 1, "", ""
+
+
+def _logind_can(what: str) -> str:
+    """'yes', 'challenge' (needs a password), 'no' or 'na', from logind (CanReboot, CanPowerOff, CanSuspend)."""
+    code, out, _ = _run_full(["busctl", "call", "org.freedesktop.login1", "/org/freedesktop/login1",
+                              "org.freedesktop.login1.Manager", f"Can{what}"])
+    m = re.search(r'"(\w+)"', out)
+    return m.group(1) if code == 0 and m else "unknown"
+
+
+def _later(seconds: float, argv: list[str]) -> None:
+    """Run it a moment from now, so this answer reaches Aurelia first."""
+    def go():
+        time.sleep(seconds)
+        try:
+            subprocess.run(argv, timeout=30, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
+        except Exception as exc:
+            log("power command failed:", repr(exc))
+    threading.Thread(target=go, daemon=True).start()
+
+
+def idle_seconds() -> int | None:
+    if IS_WINDOWS:
+        class LASTINPUTINFO(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+        lii = LASTINPUTINFO(ctypes.sizeof(LASTINPUTINFO), 0)
+        if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
+            return int((ctypes.windll.kernel32.GetTickCount() - lii.dwTime) / 1000)
+        return None
+    code, out, _ = _run_env(["gdbus", "call", "--session", "--dest", "org.gnome.Mutter.IdleMonitor", "--object-path",
+                             "/org/gnome/Mutter/IdleMonitor/Core", "--method", "org.gnome.Mutter.IdleMonitor.GetIdletime"])
+    m = re.search(r"uint64 (\d+)", out)
+    if code == 0 and m:
+        return int(m.group(1)) // 1000
+    return None
+
+
+def _lock() -> str:
+    if SHELL and SHELL.state() == "on":
+        return "Nothing to lock: this screen shows only me."
+    if IS_WINDOWS:
+        ctypes.windll.user32.LockWorkStation()
+        return "Locked."
+    code, _, _ = _run_env(["gdbus", "call", "--session", "--dest", "org.gnome.ScreenSaver", "--object-path",
+                           "/org/gnome/ScreenSaver", "--method", "org.gnome.ScreenSaver.Lock"])
+    if code == 0:
+        return "Locked."
+    code, out, _ = _run_full(["loginctl", "list-sessions", "--no-legend"])
+    me = getpass_user()
+    for line in out.splitlines():
+        f = line.split()
+        if len(f) >= 3 and f[2] == me and _run_full(["loginctl", "lock-session", f[0]])[0] == 0:
+            return "Locked."
+    raise ValueError("I couldn't lock this computer's screen.")
+
+
+def getpass_user() -> str:
+    try:
+        import getpass
+        return getpass.getuser()
+    except Exception:
+        return ""
+
+
+def _screen(on: bool) -> str:
+    if IS_WINDOWS:
+        if on:
+            ctypes.windll.user32.mouse_event(0x0001, 0, 1, 0, 0)          # a tiny nudge wakes the display
+        else:
+            ctypes.windll.user32.SendMessageW(0xFFFF, 0x0112, 0xF170, 2)  # monitor power off
+        return "Screen on." if on else "Screen off."
+    env = session_env()
+    tries = []
+    if env.get("WAYLAND_DISPLAY"):
+        tries.append(["wlopm", "--on" if on else "--off", "*"])                       # Cage and wlroots
+        tries.append(["busctl", "--user", "set-property", "org.gnome.Mutter.DisplayConfig",
+                      "/org/gnome/Mutter/DisplayConfig", "org.gnome.Mutter.DisplayConfig", "PowerSaveMode",
+                      "i", "0" if on else "3"])                                        # GNOME on Wayland
+    if env.get("DISPLAY"):
+        tries.append(["xset", "dpms", "force", "on" if on else "off"])
+    for argv in tries:
+        if _run_env(argv)[0] == 0:
+            return "Screen on." if on else "Screen off."
+    raise ValueError("I couldn't turn this screen " + ("on" if on else "off") +
+                     " (on my shell this needs wlopm: run the installer again with --system).")
+
+
+def do_power(args: dict) -> dict:
+    action = str(args.get("action") or "")
+    if action not in POWER_ACTIONS:
+        raise ValueError("power actions: " + ", ".join(POWER_ACTIONS))
+    if action == "idle":
+        s = idle_seconds()
+        return {"idle_s": s, "said": "Idle time isn't available here." if s is None else None}
+    if action == "lock":
+        return {"said": _lock()}
+    if action in ("screen_off", "screen_on"):
+        return {"said": _screen(action == "screen_on")}
+    if action in ("restart", "shutdown") and args.get("confirmed") is not True:
+        raise ValueError("a restart or shutdown needs his confirmation")
+    if IS_WINDOWS:
+        argv = {"restart": ["shutdown", "/r", "/t", "5", "/c", "Aurelia: restarting"],
+                "shutdown": ["shutdown", "/s", "/t", "5", "/c", "Aurelia: shutting down"],
+                "sleep": ["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"]}[action]
+        _later(1, argv)
+        return {"said": {"restart": "Restarting in a few seconds.", "shutdown": "Shutting down in a few seconds.",
+                         "sleep": "Going to sleep."}[action], "in_s": 5}
+    can = _logind_can({"restart": "Reboot", "shutdown": "PowerOff", "sleep": "Suspend"}[action])
+    if can == "challenge":
+        raise ValueError("this computer wants a password for that; run the installer again with --system "
+                         "(one-time sudo) so I can " + {"restart": "restart", "shutdown": "shut down",
+                                                         "sleep": "suspend"}[action] + " it")
+    if can != "yes":                                    # can't tell, or it says no: never try blind
+        raise ValueError(f"this computer says it can't {action.replace('shutdown', 'shut down')} right now ({can})"
+                         if can in ("no", "na") else
+                         f"I couldn't check whether I'm allowed to {action.replace('shutdown', 'shut down')} this computer")
+    verb = {"restart": "reboot", "shutdown": "poweroff", "sleep": "suspend"}[action]
+    _later(3, ["systemctl", verb, "-i"])
+    return {"said": {"restart": "Restarting in a few seconds.", "shutdown": "Shutting down in a few seconds.",
+                     "sleep": "Going to sleep in a few seconds."}[action], "in_s": 3}
+
+
+def do_wake(args: dict) -> dict:
+    """Send a wake-on-LAN packet for another computer on this network."""
+    mac = str(args.get("mac") or "").strip().lower().replace("-", ":")
+    if not MAC.match(mac):
+        raise ValueError("that isn't a MAC address")
+    packet = b"\xff" * 6 + bytes.fromhex(mac.replace(":", "")) * 16
+    targets = ["255.255.255.255"]
+    brd = str(args.get("broadcast") or "")
+    if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", brd):
+        targets.insert(0, brd)
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        for addr in targets:
+            for port in (9, 7):
+                try:
+                    sock.sendto(packet, (addr, port))
+                except OSError:
+                    pass
+    return {"sent": True, "to": targets}
+
+
 # ---- diagnostics (stage 1 of node fixes: read-only) ---------------------------------------------
 #
 # "What's wrong with this computer?" answered with evidence. Every check here only looks: a fixed
@@ -891,7 +1094,8 @@ def do_home(args: dict) -> dict:
 UNIT = re.compile(r"^[A-Za-z0-9@._:-]{1,80}$")
 SECRETISH = re.compile(r"(?i)\b(pass(word)?|passwd|token|secret|api[_-]?key|auth|cookie|session)(\s*[=:]\s*)\S+")
 LONG_BLOB = re.compile(r"[A-Za-z0-9+/=_-]{32,}")
-DIAG_CHECKS = ("services", "her", "errors", "kernel", "network", "tailscale", "time", "storage", "memory", "updates")
+DIAG_CHECKS = ("services", "her", "errors", "kernel", "network", "tailscale", "time", "storage", "memory", "updates",
+               "shutdown")
 
 
 def _clean(line: str, limit: int = 220) -> str:
@@ -1121,6 +1325,41 @@ def _diag_updates() -> dict:
     return _check("updates", "Updates", "ok", "No restart pending; no package changes this week")
 
 
+CLEAN_END = re.compile(r"systemd-shutdown|Reached target .*(Reboot|Power-?Off|Shutdown)|System is (rebooting|powering down)"
+                       r"|reboot: (Restarting|Power down)|Shutting down\.", re.I)
+STUCK = re.compile(r"(?:A stop job is running for|State 'stop-sigterm' timed out|Stopping timed out|Failed to stop|"
+                   r"Processes still around after|Killing process)\s*(.*)", re.I)
+
+
+def _diag_shutdown() -> dict:
+    """Did the last shutdown or restart finish, or did it hang (or the power go)?"""
+    try:
+        lines, _ = _journal(["-b", "-1"], 200)
+    except LookupError:
+        return _check("shutdown", "Last shutdown", "info", "Couldn't read the previous boot's log")
+    if not lines:
+        return _check("shutdown", "Last shutdown", "info", "No log from before this boot (it may not be kept)")
+    stuck = []
+    for x in lines:
+        m = STUCK.search(x)
+        if m:
+            stuck.append(x)
+    clean = any(CLEAN_END.search(x) for x in lines[-60:])
+    if stuck:
+        names = []
+        for x in stuck:
+            m = re.search(r"([\w@.-]+\.(?:service|scope|mount|socket|slice))", x)
+            if m and m.group(1) not in names:
+                names.append(m.group(1))
+        what = f" waiting on {', '.join(names[:4])}" if names else ""
+        return _check("shutdown", "Last shutdown", "warn" if clean else "bad",
+                      ("It finished, but slowly," if clean else "It hung") + what, stuck[-12:])
+    if clean:
+        return _check("shutdown", "Last shutdown", "ok", "Finished cleanly")
+    return _check("shutdown", "Last shutdown", "warn",
+                  "The last boot ended without a clean shutdown (forced off, a power cut, or a hang)", lines[-10:])
+
+
 def _diag_unit(unit: str) -> dict:
     if not UNIT.match(unit):
         raise ValueError("that isn't a service name")
@@ -1172,7 +1411,7 @@ def do_diagnose(args: dict) -> dict:
         want = [c for c in (args.get("checks") or DIAG_CHECKS) if c in DIAG_CHECKS]
         run = {"services": _diag_services, "her": _diag_her, "errors": _diag_errors, "kernel": _diag_kernel,
                "network": lambda: _diag_network(server), "tailscale": _diag_tailscale, "time": _diag_time,
-               "storage": _diag_storage, "memory": _diag_memory, "updates": _diag_updates}
+               "storage": _diag_storage, "memory": _diag_memory, "updates": _diag_updates, "shutdown": _diag_shutdown}
         checks = []
         for c in want:
             try:
@@ -1197,7 +1436,7 @@ def do_showing(args: dict) -> dict:
 
 
 COMMANDS = {"open_url": do_open_url, "launch_app": do_launch_app, "list_apps": do_list_apps, "info": do_info,
-            "home": do_home, "showing": do_showing, "diagnose": do_diagnose, "health": do_health, "processes": do_processes, "kill": do_kill}
+            "home": do_home, "showing": do_showing, "diagnose": do_diagnose, "power": do_power, "wake": do_wake, "health": do_health, "processes": do_processes, "kill": do_kill}
 
 
 def execute(cmd: dict) -> dict:

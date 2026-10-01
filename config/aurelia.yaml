@@ -52,10 +52,16 @@ llm:
     chat: [claude]
     summarize: [claude]    # Mnemosyne's conversation records (counted toward the monthly cap)
     research: [claude]     # Kepler: planning, cited answers, topics, explanations, quizzes
+    # Questions that need real reasoning (why, explain, improve, compare, plan…; see reason_when)
+    # use a stronger model, falling back to the everyday one. Remove this line to use chat for all.
+    reason: [claude_reason, claude]
   providers:
     claude:
       model: claude-haiku-4-5-20251001   # cheapest tier by default; escalate per route later
       max_tokens: 1024
+    claude_reason:                       # the stronger model for routes.reason (about 2x Haiku per token)
+      model: claude-sonnet-5
+      max_tokens: 2048
     ollama:
       base_url: http://host.docker.internal:11434
       model: qwen2.5:7b-instruct

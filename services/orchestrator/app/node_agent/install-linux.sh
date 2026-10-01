@@ -4,6 +4,8 @@
 #   curl -fsSL https://atlas-ai.<tailnet>.ts.net:8443/node/install-linux.sh | bash -s -- https://atlas-ai.<tailnet>.ts.net:8443 "Living room TV"
 #   ... | bash -s -- <address> "Living room TV" --shell      also make this screen hers (asks for sudo once)
 #   ... | bash -s -- <address> --no-shell                    back to a normal desktop at login
+#   ... | bash -s -- <address> --system                      one-time sudo: restart/shutdown/sleep without a
+#                                                            password, shutdowns that can't hang, the system log
 #   ... | bash -s -- <address> --role=server                 what it's for (presentation, workstation, server);
 #                                                            guessed if left out, changeable on the devices panel
 #
@@ -17,17 +19,18 @@
 # GNOME stays on the login screen as a way back in. Each step says what failed if it does.
 set -euo pipefail
 
-SERVER="" NAME="" SHELL_MODE="" ROLE=""
+SERVER="" NAME="" SHELL_MODE="" ROLE="" SYSTEM=""
 for arg in "$@"; do
   case "$arg" in
     --shell) SHELL_MODE=on ;;
     --no-shell) SHELL_MODE=off ;;
     --role=*) ROLE="${arg#--role=}" ;;
+    --system) SYSTEM=1 ;;
     *) if [[ -z "$SERVER" ]]; then SERVER="$arg"; elif [[ -z "$NAME" ]]; then NAME="$arg"; fi ;;
   esac
 done
 if [[ -z "$SERVER" ]]; then
-  echo "usage: install-linux.sh <Aurelia's address> [name for this computer] [--shell|--no-shell] [--role=presentation|workstation|server]"
+  echo "usage: install-linux.sh <Aurelia's address> [name for this computer] [--shell|--no-shell] [--system] [--role=presentation|workstation|server]"
   exit 1
 fi
 SERVER="${SERVER%/}"
@@ -76,6 +79,41 @@ PY
 
 if [[ -n "$ROLE" ]]; then
   python3 "$AGENT" role "$ROLE" || exit 1
+fi
+
+if [[ -n "$SYSTEM" ]]; then
+  echo "Giving Aurelia's agent what it needs from the system (sudo, once)..."
+  # 1. Restart, shut down and sleep this computer without a password: this account only, these actions only.
+  sudo mkdir -p /etc/polkit-1/rules.d
+  sudo tee /etc/polkit-1/rules.d/49-aurelia-power.rules >/dev/null <<RULES
+// Aurelia's node agent runs as $ME. It may restart, shut down and suspend this computer, and lock
+// its sessions, without a password. Nothing else. (Installed by install-linux.sh --system.)
+polkit.addRule(function (action, subject) {
+  var allowed = ["org.freedesktop.login1.reboot", "org.freedesktop.login1.reboot-multiple-sessions",
+                 "org.freedesktop.login1.reboot-ignore-inhibit", "org.freedesktop.login1.power-off",
+                 "org.freedesktop.login1.power-off-multiple-sessions", "org.freedesktop.login1.power-off-ignore-inhibit",
+                 "org.freedesktop.login1.suspend", "org.freedesktop.login1.suspend-multiple-sessions",
+                 "org.freedesktop.login1.suspend-ignore-inhibit", "org.freedesktop.login1.lock-sessions"];
+  if (subject.user == "$ME" && allowed.indexOf(action.id) >= 0) { return polkit.Result.YES; }
+});
+RULES
+  # 2. Shutdowns that can't hang: a service gets 20 s to stop (not 90 s or forever), the desktop can't
+  #    hold a shutdown back for long, and if it still hangs the hardware watchdog resets the machine.
+  sudo mkdir -p /etc/systemd/system.conf.d /etc/systemd/user.conf.d /etc/systemd/logind.conf.d
+  printf '[Manager]\nDefaultTimeoutStopSec=20s\nRebootWatchdogSec=2min\n' | sudo tee /etc/systemd/system.conf.d/90-aurelia.conf >/dev/null
+  printf '[Manager]\nDefaultTimeoutStopSec=10s\n' | sudo tee /etc/systemd/user.conf.d/90-aurelia.conf >/dev/null
+  printf '[Login]\nInhibitDelayMaxSec=5\n' | sudo tee /etc/systemd/logind.conf.d/90-aurelia.conf >/dev/null
+  sudo systemctl daemon-reexec || true
+  if ls /dev/watchdog* >/dev/null 2>&1; then
+    echo "  The hardware watchdog is there: a shutdown that hangs resets the machine within 2 minutes."
+  else
+    echo "  No hardware watchdog here; shutdowns still can't wait on a service for more than 20 s."
+  fi
+  # 3. Turning the screen off and on in her shell (Wayland).
+  sudo apt-get install -y wlopm >/dev/null 2>&1 || echo "  (wlopm isn't available; screen off/on may not work in her shell)"
+  # 4. Reading the whole system log (diagnostics), not only this account's.
+  sudo usermod -aG adm "$ME" && echo "  She can read the system log after the next login or restart."
+  echo "Done. Restart and shutdown no longer need a password for this account."
 fi
 
 if [[ "$SHELL_MODE" == "on" ]]; then

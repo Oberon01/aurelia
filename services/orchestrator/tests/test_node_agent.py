@@ -514,3 +514,57 @@ def test_a_failing_check_never_hides_the_rest(ubuntu, monkeypatch):
     out = agent.do_diagnose({})
     ids = [c["id"] for c in out["checks"]]
     assert ids == list(agent.DIAG_CHECKS) and next(c for c in out["checks"] if c["id"] == "network")["status"] == "info"
+
+
+# ---- power: restart only when confirmed, after the answer; did the last shutdown hang? ----------
+
+def test_restart_needs_confirmation_and_happens_after_the_answer(monkeypatch):
+    later = []
+    monkeypatch.setattr(agent, "IS_WINDOWS", False)
+    monkeypatch.setattr(agent, "_later", lambda s, argv: later.append((s, argv)))
+    with pytest.raises(ValueError, match="confirmation"):
+        agent.do_power({"action": "restart"})
+    monkeypatch.setattr(agent, "_logind_can", lambda what: "challenge")
+    with pytest.raises(ValueError, match="--system"):
+        agent.do_power({"action": "restart", "confirmed": True})
+    monkeypatch.setattr(agent, "_logind_can", lambda what: "yes")
+    out = agent.do_power({"action": "restart", "confirmed": True})
+    assert later == [(3, ["systemctl", "reboot", "-i"])] and out["in_s"] == 3
+    agent.do_power({"action": "sleep"})                                  # sleeping doesn't need it
+    assert later[-1] == (3, ["systemctl", "suspend", "-i"])
+    with pytest.raises(ValueError):
+        agent.do_power({"action": "format the disk"})
+
+
+def test_wake_packet(monkeypatch):
+    sent = []
+
+    class Sock:
+        def __init__(self, *a): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def setsockopt(self, *a): pass
+        def sendto(self, data, addr): sent.append((data, addr))
+    monkeypatch.setattr(agent.socket, "socket", Sock)
+    out = agent.do_wake({"mac": "AA-BB-CC-DD-EE-FF", "broadcast": "192.168.1.255"})
+    assert out["to"] == ["192.168.1.255", "255.255.255.255"]
+    data, addr = sent[0]
+    assert addr == ("192.168.1.255", 9) and data == b"\xff" * 6 + bytes.fromhex("aabbccddeeff") * 16
+    with pytest.raises(ValueError):
+        agent.do_wake({"mac": "not a mac"})
+
+
+@pytest.mark.parametrize("tail,status,words", [
+    (["Oct 01 node1 systemd[1]: Stopping aurelia-node.service...",
+      "Oct 01 node1 systemd[1]: A stop job is running for snapd.service (1min 30s / 1min 30s)",
+      "Oct 01 node1 systemd[1]: snapd.service: State 'stop-sigterm' timed out. Killing."], "bad", "It hung waiting on snapd.service"),
+    (["Oct 01 node1 systemd[1]: A stop job is running for cage.scope (20s)",
+      "Oct 01 node1 systemd[1]: Reached target System Reboot.", "Oct 01 node1 systemd-shutdown[1]: Syncing filesystems"],
+     "warn", "finished, but slowly, waiting on cage.scope"),
+    (["Oct 01 node1 systemd[1]: Reached target System Reboot.", "Oct 01 node1 kernel: reboot: Restarting system"], "ok", "Finished cleanly"),
+    (["Oct 01 node1 gnome-shell[2106]: JS ERROR: thing", "Oct 01 node1 kernel: usb 1-2: reset"], "warn", "without a clean shutdown"),
+])
+def test_last_shutdown(ubuntu, tail, status, words):
+    ubuntu({"journalctl --no-pager -o short-iso -n 200 -b -1": (0, "\n".join(tail) + "\n", "")})
+    c = agent._diag_shutdown()
+    assert c["status"] == status and words in c["summary"]

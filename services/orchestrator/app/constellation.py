@@ -11,6 +11,8 @@ nodes hold their connection here (nodes.py). Tools:
   submit   a click (or Enter) that buys, pays, sends, posts or deletes: always his confirmation
   health, list_processes   how a computer is doing (hardware, live state, processes) and why it's slow
   close_process → kill_process   closing a program: found first, then always his confirmation
+  power    lock, sleep, screen off/on, idle time; restart (restart or shut down, always confirmed; I watch
+           for it to come back); wake (wake-on-LAN, from another computer on the network or the server)
   diagnose what's wrong with a computer, from its own read-only checks (stage 1 of node fixes)
   screens  what's on each display now (its panels, from its own report; what a TV is showing)
   send     a panel, a link or a note to another display (confirmed from that display's report): one by name, or a group by role ("all
@@ -72,6 +74,27 @@ TOOLS = [
                                    "`diagnosis` says what's wrong in plain words; explain it from that, briefly.",
         input_schema={"type": "object", "properties": {"target": {"type": "string", "description": "which computer"}}},
         cancellable=False, freshness_seconds=15, display="panel"),
+    registry.ToolSpec(
+        name="power", description="Power and presence on one of his computers: lock (its screen), sleep, screen_off, "
+                                  "screen_on, or idle (how long since anyone used it). For restarting or shutting "
+                                  "down use restart; for waking a computer that's off or asleep use wake.",
+        input_schema={"type": "object", "properties": {
+            "target": {"type": "string", "description": "which computer"},
+            "action": {"type": "string", "enum": ["lock", "sleep", "screen_off", "screen_on", "idle"]}},
+            "required": ["action"]}, cancellable=False),
+    registry.ToolSpec(
+        name="restart", description="Restart (action: restart) or shut down (action: shutdown) one of his computers. "
+                                    "Always needs his confirmation. After a restart I watch for it to come back and "
+                                    "tell him; if it doesn't, it goes to his mailbox.",
+        input_schema={"type": "object", "properties": {
+            "target": {"type": "string", "description": "which computer"},
+            "action": {"type": "string", "enum": ["restart", "shutdown"]}}, "required": ["action"]},
+        cancellable=False),
+    registry.ToolSpec(
+        name="wake", description="Wake one of his computers that's off or asleep (wake-on-LAN), from another computer "
+                                 "on the same network or from the server, then tell him when it's back.",
+        input_schema={"type": "object", "properties": {"target": {"type": "string", "description": "which computer"}},
+                      "required": ["target"]}, cancellable=False),
     registry.ToolSpec(
         name="diagnose", description="What's wrong with one of his computers, with evidence: read-only checks of "
                                      "failed services, errors logged this boot, the kernel log (out-of-memory, disk "
@@ -1125,10 +1148,157 @@ async def screens(app, user: str, args: dict) -> dict:
     return {"headline": head, "screens": out}
 
 
+# ---- power and presence --------------------------------------------------------------------------
+
+POWER_SAY = {"lock": "Locked", "sleep": "Going to sleep", "screen_off": "Screen off", "screen_on": "Screen on"}
+BACK_WAIT = 360                                   # how long a restart (or a wake) may take before he's told
+
+
+async def _node_row(node_id: int) -> dict:
+    row = await db.pool().fetchrow("SELECT id, name, info FROM devices WHERE id=$1", node_id)
+    info = json.loads(row["info"]) if row and isinstance(row["info"], str) else ((row["info"] if row else None) or {})
+    return {"id": node_id, "name": row["name"] if row else "it", "info": info}
+
+
+async def _tell(app, user: str, display: int | None, headline: str, text: str) -> None:
+    """A short panel on the display that asked (if one did)."""
+    if display is None:
+        return
+    for d in await displays(app):
+        if d["id"] == display:
+            await deliver(app, user, [d], f"{NAME}.power", {"note": headline[:60]},
+                          {"headline": headline, "note": {"text": text, "url": ""}}, "")
+            return
+
+
+async def _watch(app, user: str, node: dict, display: int | None, kind: str, booted: int | None) -> None:
+    """After a restart, shutdown, sleep or wake: wait for the computer to be back (or gone), and say so."""
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    try:
+        if kind in ("shutdown", "sleep"):
+            while loop.time() - start < 120:
+                await asyncio.sleep(5)
+                if not await nodes.online(app, node["id"]):
+                    word = "off" if kind == "shutdown" else "asleep"
+                    await _tell(app, user, display, f"{node['name']} is {word}",
+                                f"{node['name']} is {word}." + (" Say \"wake the " + node["name"] + "\" to bring it back."
+                                                                if kind == "sleep" else ""))
+                    return
+            await _tell(app, user, display, f"{node['name']} is still on",
+                        f"I asked {node['name']} to {'shut down' if kind == 'shutdown' else 'sleep'}, but it's still checking in.")
+            return
+        went_away = False
+        while loop.time() - start < BACK_WAIT:              # restart or wake: a fresh check-in
+            await asyncio.sleep(5)
+            now = await _node_row(node["id"])
+            fresh = now["info"].get("booted_at")
+            up = await nodes.online(app, node["id"])
+            went_away = went_away or not up
+            # A new boot time, or (an agent that doesn't report one) offline and back again.
+            back = kind == "wake" or (fresh and fresh != booted) or (booted is None and went_away)
+            if up and back:
+                took = int(loop.time() - start)
+                await _tell(app, user, display, f"{node['name']} is back",
+                            f"{node['name']} is back (took {took // 60} min {took % 60} s)." if took >= 60
+                            else f"{node['name']} is back (took {took} s).")
+                return
+        what = "the restart" if kind == "restart" else "being woken"
+        advice = ("It may be stuck shutting down or starting up. If its screen shows a stop job, give it a minute; "
+                  "otherwise hold the power button, then ask me \"what's wrong with " + node["name"] + "\" once it's up: "
+                  "I'll read how the last shutdown went." if kind == "restart" else
+                  "Wake-on-LAN may be off in its firmware (BIOS) or network settings, or it may be unplugged.")
+        await nodes._alert(app.state.redis, node, [{"key": kind, "level": "urgent",
+                                                     "text": f"Didn't come back after {what} ({BACK_WAIT // 60} minutes)"}],
+                           advice=advice)
+    except Exception:
+        log.exception("watching %s after %s", node.get("name"), kind)
+
+
+async def _asker(task_id: str | None) -> int | None:
+    if not task_id:
+        return None
+    return await db.pool().fetchval("SELECT device FROM task_runs WHERE id=$1", uuid.UUID(task_id))
+
+
+async def power(app, user: str, args: dict) -> dict:
+    action = str(args.get("action") or "")
+    if action not in ("lock", "sleep", "screen_off", "screen_on", "idle"):
+        raise ValueError("Lock, sleep, screen off or on, or idle? (Restarting and shutting down are restart.)")
+    node = await target(app, args.get("target"))
+    data = await _ask_new(app, node, "power", {"action": action})
+    if action == "idle":
+        s = data.get("idle_s")
+        if s is None:
+            return {"headline": f"{node['name']}: idle time isn't available", "power": {"node": node["name"]}}
+        human = f"{s // 3600} h {s % 3600 // 60} min" if s >= 3600 else f"{s // 60} min" if s >= 60 else f"{s} s"
+        return {"headline": f"{node['name']}: idle for {human}" if s >= 60 else f"{node['name']} is in use",
+                "power": {"node": node["name"], "idle_s": s}}
+    if action == "sleep":
+        asyncio.create_task(_watch(app, user, node, await _asker(args.get("_self")), "sleep", None))
+    return {"headline": f"{node['name']}: {data.get('said') or POWER_SAY[action]}", "power": {"node": node["name"], "action": action}}
+
+
+async def restart(app, user: str, args: dict) -> dict:
+    action = str(args.get("action") or "restart")
+    if action not in ("restart", "shutdown"):
+        raise ValueError("Restart or shut down?")
+    node = await target(app, args.get("target"))
+    booted = (await _node_row(node["id"]))["info"].get("booted_at")
+    data = await _ask_new(app, node, "power", {"action": action, "confirmed": True})   # governance confirmed it
+    asyncio.create_task(_watch(app, user, node, await _asker(args.get("_self")), action, booted))
+    word = "Restarting" if action == "restart" else "Shutting down"
+    return {"headline": f"{word} {node['name']}",
+            "power": {"node": node["name"], "action": action,
+                      "note": ("I'll tell you when it's back." if action == "restart" else "I'll tell you when it's off.")
+                              + " " + (data.get("said") or "")}}
+
+
+async def wake(app, user: str, args: dict) -> dict:
+    asked = str(args.get("target") or "").strip()
+    rows = await db.pool().fetch("SELECT id, name, info FROM devices WHERE kind='node' AND status='approved'")
+    hits = [r for r in rows if _match(asked, r["name"], (json.loads(r["info"]) if isinstance(r["info"], str) else r["info"] or {}).get("hostname"))]
+    if not hits:
+        raise ValueError(f"I don't know a computer called \"{asked}\".")
+    r = hits[0]
+    info = json.loads(r["info"]) if isinstance(r["info"], str) else (r["info"] or {})
+    node = {"id": r["id"], "name": r["name"]}
+    if await nodes.online(app, r["id"]):
+        return {"headline": f"{r['name']} is already on", "power": {"node": r["name"], "action": "wake"}}
+    sp = info.get("specs") or {}
+    mac, brd = sp.get("mac"), sp.get("broadcast")
+    if not mac:
+        raise ValueError(f"I don't know {r['name']}'s network address yet (it needs to check in once with agent 0.5.5).")
+    via = None
+    for other in rows:                                        # a computer on the same network sends it best
+        if other["id"] != r["id"] and await nodes.online(app, other["id"]):
+            try:
+                await _ask_node(app, {"id": other["id"], "name": other["name"]}, "wake", {"mac": mac, "broadcast": brd}, 10)
+                via = other["name"]
+                break
+            except Exception:
+                continue
+    if via is None:                                           # or the server, as a broadcast on its own network
+        import socket as _s
+        packet = b"\xff" * 6 + bytes.fromhex(mac.replace(":", "")) * 16
+        with _s.socket(_s.AF_INET, _s.SOCK_DGRAM) as sock:
+            sock.setsockopt(_s.SOL_SOCKET, _s.SO_BROADCAST, 1)
+            for addr in ([brd] if brd else []) + ["255.255.255.255"]:
+                try:
+                    sock.sendto(packet, (addr, 9))
+                except OSError:
+                    pass
+        via = "the server"
+    asyncio.create_task(_watch(app, user, node, await _asker(args.get("_self")), "wake", None))
+    return {"headline": f"Waking {r['name']}", "power": {"node": r["name"], "action": "wake",
+                                                         "note": f"Sent the wake signal from {via}. I'll tell you when it's back."}}
+
+
 HANDLERS = {"devices": devices, "open": open_, "apps": apps, "home": home, "look": look, "click": click, "type": type_,
             "press": press, "scroll": scroll, "back": back, "media": media, "submit": submit, "health": health,
             "list_processes": list_processes, "close_process": close_process, "kill_process": kill_process,
-            "sign_in": sign_in, "logins": logins, "send": send, "screens": screens, "diagnose": diagnose_node}
+            "sign_in": sign_in, "logins": logins, "send": send, "screens": screens, "diagnose": diagnose_node,
+            "power": power, "restart": restart, "wake": wake}
 
 
 @router.get("/shots/{sid}.jpg", include_in_schema=False)
@@ -1188,8 +1358,8 @@ async def _run(app, tool: str, task_id: str, args: dict) -> None:
     from . import tasks
     try:
         row = await db.pool().fetchrow("SELECT user_id FROM task_runs WHERE id=$1", uuid.UUID(task_id))
-        if tool == "send":
-            args = {**args, "_self": task_id}               # who's sending: this task's display
+        if tool in ("send", "power", "restart", "wake"):
+            args = {**args, "_self": task_id}               # who's asking: this task's display
         data = await HANDLERS[tool](app, row["user_id"] if row else "owner", args)
         result = tasks.Result(status="completed", data=data)
     except ValueError as exc:

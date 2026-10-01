@@ -223,6 +223,30 @@ with the Windows installer.
 | `what's running on the tv pc` / `what's using the memory on the laptop` | Processes, by program and one by one |
 | `close chrome on the laptop` / `force close chrome on the laptop` | A confirmation card, then it closes |
 
+**Power (agent 0.5.5).** "Lock the desk", "turn the TV PC's screen off", "put
+the desk to sleep", "how long has the desk been idle?" (`power`); "restart the
+TV PC", "shut down the desk" (`restart`, always confirmed: she watches for it
+to come back and tells you on the display you asked from, or files an urgent
+mailbox card if it doesn't come back within 6 minutes); "wake the desk"
+(`wake`: a wake-on-LAN signal from another of your computers on the same
+network, or from the server; wake-on-LAN has to be on in that computer's
+firmware).
+
+Run the installer once with **`--system`** on each Linux computer (one-time
+sudo):
+- restart, shut down and sleep without a password, for that account and those
+  actions only (a polkit rule);
+- shutdowns that can't hang: a service gets 20 s to stop, the desktop can't
+  hold a shutdown back, and the hardware watchdog (if the machine has one)
+  resets it within 2 minutes if it still hangs;
+- `wlopm`, for turning the screen off and on in her shell;
+- the system log (the `adm` group), for diagnostics.
+
+Without it she says what's missing instead of trying. A computer that can't
+confirm it may restart is never restarted blind. If a restart hung before,
+"what's wrong with the TV PC" now includes how the last shutdown went (what it
+waited on, or that it never finished).
+
 **What's wrong with it (diagnostics, stage 1 of fixes).** "What's wrong with
 the TV PC?" runs the agent's read-only checks (0.5.4+): failed services, errors
 logged this boot, the kernel log (out-of-memory kills, disk errors), network and
@@ -348,6 +372,13 @@ request, so edits apply right away).
 of the month once reached (the fast path keeps working). Every request is
 logged in `ask_requests` and every model call in `llm_calls` with tokens and
 latency, for Libra and Parallax later.
+
+**Harder questions use a stronger model.** Questions that need real reasoning
+(why, explain, improve, recommend, compare, plan, "what's wrong") go to
+`llm.routes.reason` (Sonnet by default; about twice Haiku's price per token,
+a cent or few per question with caching), everything else stays on the
+everyday model. The patterns are `llm.reason_when`; remove the `reason` route
+to use one model for everything. It all counts toward the monthly cap.
 
 **Model setup:** put an Anthropic API key in `.env` as `ANTHROPIC_API_KEY`
 (use one with a low spend limit while testing). For a local model, run Ollama

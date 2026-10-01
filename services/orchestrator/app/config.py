@@ -67,6 +67,12 @@ class LLMConfig(BaseModel):
     monthly_token_cap: int = 2_000_000       # input + output tokens across cloud providers
     max_tool_rounds: int = 5                 # tool calls the LLM may chain for one request
     wait_for_result_seconds: float = 8       # wait this long for a task result before replying
+    # Requests that need real reasoning use routes.reason (a stronger model) when it's set.
+    reason_when: list[str] = [
+        r"\bwhy\b", r"\bexplain", r"\bimprov", r"\brecommend", r"\bsuggest", r"\bshould (i|we|you)\b",
+        r"\bcompare|\bversus\b|\bvs\.?\s", r"\bplan\b|\bplanning\b", r"\bdesign\b", r"\banaly[sz]",
+        r"\btrade-?offs?\b|\bpros and cons\b", r"\bwhat do you think\b", r"\bwhat'?s wrong\b",
+        r"\bhow (could|would|can|should) (you|we|i)\b", r"\breason\b", r"\bwhat did (the|your) (last )?(release|update)"]
 
 
 class SessionConfig(BaseModel):

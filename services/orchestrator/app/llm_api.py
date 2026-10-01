@@ -34,7 +34,7 @@ class EmbedBody(BaseModel):
 
 @router.post("/complete")
 async def complete(body: CompleteBody, request: Request):
-    from .assistant import CLOUD_PROVIDERS, _cloud_tokens_this_month
+    from .assistant import _cloud_tokens_this_month, is_cloud
     app = request.app
     if body.purpose not in ROUTES:
         raise HTTPException(400, f"unknown purpose '{body.purpose}'")
@@ -42,7 +42,7 @@ async def complete(body: CompleteBody, request: Request):
         raise HTTPException(400, "messages must be user/assistant turns")
     llm = app.state.config.current.llm
     order = llm.routes.get(body.purpose) or [llm.default_provider]
-    if any(p in CLOUD_PROVIDERS for p in order) and await _cloud_tokens_this_month() >= llm.monthly_token_cap:
+    if any(is_cloud(p) for p in order) and await _cloud_tokens_this_month() >= llm.monthly_token_cap:
         raise HTTPException(429, "This month's model budget is used up.")
     started = time.monotonic()
     try:

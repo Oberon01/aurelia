@@ -48,8 +48,10 @@ Built so far:
 - Strict sign-ins with logins saved only on the computer.
 - Node health ("why is it slow"), closing a process with confirmation, and diagnostics ("what's wrong with the TV PC": read-only checks, worst first).
 - Each display keeps its own panels; device roles (presentation, workstation, server, companion); sending a panel, link, note or any look-up to another display or a group, confirmed from that display's own report; "what's on my screens"; an ambient screen on presentation displays.
+- Power and presence: lock, sleep, screen off/on, idle time, restart and shutdown (always confirmed; I watch for it to come back), wake-on-LAN; shutdowns that can't hang (installer --system); diagnostics say how the last shutdown went.
 - Long answers open as a panel; a Raphael speaking style on trial.
-Still to do: power and presence, sound and media, a shared clipboard, app install and removal, the Windows installer with exam and gaming modes, the phone web app with push notifications, and the field check.
+- I read my own releases and this roadmap, and harder questions (why, explain, improve, compare) use a stronger model.
+Still to do: sound and media, a shared clipboard, app install and removal, the Windows installer with exam and gaming modes, the phone web app with push notifications, and the field check.
 
 ## 8. Iris — Not started
 Builds: sight. Models that take images (screenshots, photos, later cameras); pixel-level control of a whole desktop, not just my browser, on Linux and Windows. What's on screen is data; I never type passwords; anything that buys, sends or deletes waits for your OK. Later, with the GPU box: home cameras you choose, processed locally.

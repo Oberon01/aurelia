@@ -12,7 +12,7 @@ log = logging.getLogger("aurelia.llm")
 
 
 def build(name: str, cfg: dict):
-    if name == "claude":
+    if name == "claude" or name.startswith("claude_"):         # e.g. claude_reason: another Claude model
         from .claude import ClaudeProvider
         return ClaudeProvider(model=cfg.get("model", "claude-haiku-4-5-20251001"),
                               max_tokens=int(cfg.get("max_tokens", 1024)))

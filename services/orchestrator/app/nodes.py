@@ -148,7 +148,7 @@ def issues(v: dict, recent_cpu: list[float], r: dict) -> list[dict]:
     return out
 
 
-async def _alert(redis, dev: dict, urgent: list[dict]) -> None:
+async def _alert(redis, dev: dict, urgent: list[dict], advice: str | None = None) -> None:
     """An urgent problem gets one mailbox card per problem per day (the digest mentions the rest)."""
     from . import mailbox
     from datetime import date
@@ -159,7 +159,8 @@ async def _alert(redis, dev: dict, urgent: list[dict]) -> None:
             "effect, urgent) SELECT 'node_alert', $1, 'constellation', $2, $3, $4::jsonb, '[]'::jsonb, 1, 1, $5, true "
             "WHERE NOT EXISTS (SELECT 1 FROM mailbox_items WHERE fingerprint=$1) RETURNING id",
             f"node_alert:{dev['id']}:{i['key']}:{date.today().isoformat()}", f"{dev['name']}: {i['text'][0].lower()}{i['text'][1:]}",
-            f"{i['text']}. Ask me \"why is the {dev['name']} slow\" or \"how's the {dev['name']} doing\" for the details.",
+            f"{i['text']}. " + (advice or f"Ask me \"why is the {dev['name']} slow\" or \"how's the {dev['name']} doing\" "
+                                          "for the details."),
             json.dumps({"device_id": dev["id"], "key": i["key"]}), "Nothing changes; it only lets me know you've seen it.")
         made = made or bool(item)
     if made:

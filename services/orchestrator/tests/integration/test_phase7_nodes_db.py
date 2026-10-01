@@ -321,3 +321,41 @@ def test_whats_wrong_with_a_computer(node, stack):
     assert status == "completed" and any(c["id"].startswith("service:cron") for c in res["checks"])
     status, res, err = run_task(orch, "constellation.diagnose", {"target": "living room tv", "service": "a;b"}, wait=60)
     assert status == "failed" and "service name" in err
+
+
+def test_power_restart_and_wake(node, stack):
+    """Power with a real agent: idle and lock answer, a restart is held for his confirmation and the
+    computer refuses to try one it can't confirm it may do, and waking a computer that's off sends the
+    signal from another computer on the network."""
+    import json as _json
+    import asyncio, asyncpg
+    orch = node["orch"]
+    status, res, err = run_task(orch, "constellation.power", {"target": "living room tv", "action": "idle"}, wait=30)
+    assert status == "completed" and res["headline"].startswith("Living room TV")
+    r = httpx.post(f"{orch}/tasks", json={"tool": "constellation.restart", "args": {"target": "living room tv", "action": "restart"}})
+    assert r.status_code == 409 and r.json()["detail"]["needs_confirmation"]                 # always his call
+    tid = httpx.post(f"{orch}/tasks", json={"tool": "constellation.restart", "args": {"target": "living room tv"},
+                                            "confirmed": True}).json()["task_id"]
+    for _ in range(100):
+        row = httpx.get(f"{orch}/tasks/{tid}").json()
+        if row["status"] != "running":
+            break
+        time.sleep(0.2)
+    assert row["status"] == "failed" and "couldn't check whether I'm allowed" in row["error"]    # no systemd here: no blind try
+
+    # Wake a computer that's off: another one on the network sends the signal.
+    async def add_sleeper():
+        conn = await asyncpg.connect(DB)
+        try:
+            return await conn.fetchval(
+                "INSERT INTO devices (kind, name, status, key_hash, approved_at, info) VALUES ('node', 'Desk PC', 'approved', "
+                "'x' || md5(random()::text), now(), $1::jsonb) RETURNING id",
+                _json.dumps({"hostname": "desk", "specs": {"mac": "aa:bb:cc:dd:ee:ff", "broadcast": "127.255.255.255"}}))
+        finally:
+            await conn.close()
+    asyncio.run(add_sleeper())
+    status, res, err = run_task(orch, "constellation.wake", {"target": "desk pc"}, wait=30)
+    assert status == "completed", err
+    assert res["headline"] == "Waking Desk PC" and "from Living room TV" in res["power"]["note"]
+    status, res, err = run_task(orch, "constellation.wake", {"target": "living room tv"}, wait=30)
+    assert res["headline"] == "Living room TV is already on"

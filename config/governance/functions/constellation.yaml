@@ -18,6 +18,9 @@ tools:
   submit:          { tier: change }      # the press that buys, pays, sends, posts or deletes: always confirmed
   sign_in:         { tier: change }      # a login he saved on that computer; she never sees it (Sep 30 decision)
   logins:          { tier: reference }   # which sites have a saved login there (names only)
+  power:           { tier: act }         # lock, sleep, screen off/on, idle time
+  restart:         { tier: change }      # restart or shut down a computer: always confirmed
+  wake:            { tier: act }         # wake-on-LAN
   diagnose:        { tier: read }        # read-only checks: services, logs, network, storage (stage 1 of node fixes)
   screens:         { tier: reference }   # what's on each display now (its own report)
   send:            { tier: act }         # a panel, link or note to another display (or a group by role)

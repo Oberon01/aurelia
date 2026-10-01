@@ -32,7 +32,26 @@ log = logging.getLogger("aurelia.assistant")
 PENDING_PREFIX = "aurelia:pending:"
 PENDING_TTL = 600
 NEEDS_CONFIRMATION = "That needs your confirmation first."
-CLOUD_PROVIDERS = ("claude",)
+CLOUD_PROVIDERS = ("claude",)          # what llm_calls.provider says for any Claude model
+
+
+def is_cloud(name: str) -> bool:
+    return name == "claude" or name.startswith("claude_")
+
+
+def needs_reasoning(text: str, cfg) -> bool:
+    """A question that deserves the stronger model (llm.routes.reason), if one is set."""
+    import re
+    if not cfg.routes.get("reason"):
+        return False
+    t = (text or "").lower()
+    for pattern in cfg.reason_when:
+        try:
+            if re.search(pattern, t):
+                return True
+        except re.error:
+            continue
+    return False
 
 
 class Ask(BaseModel):
@@ -249,10 +268,12 @@ async def _run_llm(app, body: Ask, history: list[dict[str, Any]], request_id: st
     ctx = await context.block(body.screen, history, known)
     messages = context.messages(history) + [Message("user", f"{ctx}\n\n{body.text}" if ctx else body.text)]
 
+    purpose = "reason" if needs_reasoning(body.text, cfg) else "chat"
+    out["model_route"] = purpose
     for _ in range(cfg.max_tool_rounds + 1):
         started = time.monotonic()
         try:
-            completion = await app.state.llm.complete("chat", system, messages, tools)
+            completion = await app.state.llm.complete(purpose, system, messages, tools)
         except ProviderError as exc:
             out.update(route="error", reply=f"I can't reach a language model right now ({exc}).")
             return out
@@ -593,7 +614,7 @@ def _summarize(tool: str, result: dict | None) -> str:
 
 
 def _uses_cloud(cfg) -> bool:
-    return any(p in CLOUD_PROVIDERS for p in cfg.routes.get("chat", [cfg.default_provider]))
+    return any(is_cloud(p) for route in ("chat", "reason") for p in cfg.routes.get(route, [cfg.default_provider]))
 
 
 async def _cloud_tokens_this_month() -> int:

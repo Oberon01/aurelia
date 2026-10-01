@@ -85,3 +85,17 @@ def test_long_replies():
     assert not long_reply("", cfg)
     assert first_sentence("Get the 4070 Ti Super. It has 16 GB. More here.") == "Get the 4070 Ti Super."
     assert first_sentence("word " * 60).endswith("…") and len(first_sentence("word " * 60)) <= 160
+
+
+def test_which_questions_get_the_stronger_model():
+    from app.assistant import is_cloud, needs_reasoning
+    from app.config import LLMConfig
+    cfg = LLMConfig(routes={"chat": ["claude"], "reason": ["claude_reason", "claude"]})
+    for q in ("why did the TV PC hang?", "explain the last release", "how should you improve?",
+              "compare these two GPUs", "what do you think about voice next", "what's wrong with the TV PC",
+              "what did the last update do", "what would you recommend"):
+        assert needs_reasoning(q, cfg), q
+    for q in ("lock the door", "open youtube on the tv", "what's the thermostat at", "show my devices", "pause"):
+        assert not needs_reasoning(q, cfg), q
+    assert not needs_reasoning("why?", LLMConfig(routes={"chat": ["claude"]}))      # no reason route: chat for all
+    assert is_cloud("claude") and is_cloud("claude_reason") and not is_cloud("ollama")

@@ -438,7 +438,8 @@ def plain_summary(seg: list[dict]) -> dict[str, Any]:
 async def _over_budget(app) -> bool:
     from .assistant import _cloud_tokens_this_month
     llm = app.state.config.current.llm
-    uses_cloud = any(p == "claude" for p in llm.routes.get("summarize", [llm.default_provider]))
+    from .assistant import is_cloud
+    uses_cloud = any(is_cloud(p) for p in llm.routes.get("summarize", [llm.default_provider]))
     return uses_cloud and await _cloud_tokens_this_month() >= llm.monthly_token_cap
 
 

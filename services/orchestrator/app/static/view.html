@@ -1101,6 +1101,7 @@ function body(tool, d) {
   if (typeof d.text === "string" && (d.url || typeof d.pages === "number")) { wrap.append(pageView(d)); ["title", "url", "site", "words", "text", "truncated"].forEach(k => used.add(k)); }
   if (d.link && d.link.url) { wrap.append(linkView(d.link)); used.add("link"); }
   if (d.sent && typeof d.sent === "object") { wrap.append(sentView(d.sent, d.note)); ["sent", "note", "headline"].forEach(k => used.add(k)); }
+  if (d.power && typeof d.power === "object") { if (d.power.note) wrap.append(el("div", "lib-note", d.power.note)); used.add("power"); }
   if (Array.isArray(d.history)) { wrap.append(historyView(d.history, d.new_abilities)); ["history", "new_abilities", "headline"].forEach(k => used.add(k)); }
   if (d.history_release && typeof d.history_release === "object") { wrap.append(releaseNotesView(d.history_release)); ["history_release", "headline"].forEach(k => used.add(k)); }
   if (d.roadmap && typeof d.roadmap === "object") { wrap.append(roadmapView(d.roadmap)); used.add("roadmap"); }
