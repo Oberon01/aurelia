@@ -78,3 +78,52 @@ async def ambient(request: Request):
     return {"enabled": cfg.enabled, "dim": max(0.1, min(1.0, cfg.dim)),
             "quiet": cfg.enabled and in_quiet(cfg.quiet_hours, now.time()),
             "weather": await weather(app) if cfg.enabled else None}
+
+
+# ---- what each display shows (send confirms against this; "what's on my screens" reads it) ------
+
+REPORT_SECONDS = 86400
+
+
+@router.post("/view/screen")
+async def report_screen(request: Request):
+    """A display says which panels it's showing, whenever that changes (and now and then)."""
+    from .constellation import SCREEN_REPORT
+    from .events import DISPLAYS
+    dev = await auth.asker(request.headers)
+    if dev is None or dev["kind"] not in DISPLAYS:
+        return {"ok": False}
+    try:
+        body = await request.json()
+    except ValueError:
+        return {"ok": False}
+    panels = []
+    for p in (body.get("panels") or [])[:40]:
+        if not isinstance(p, dict):
+            continue
+        panels.append({"n": p.get("n") if isinstance(p.get("n"), int) else None,
+                       "title": str(p.get("title") or "")[:80], "headline": str(p.get("headline") or "")[:160],
+                       "tool": str(p.get("tool") or "")[:80], "queued": bool(p.get("queued")),
+                       "tasks": [str(t)[:40] for t in (p.get("tasks") or [])[:20]]})
+    report = {"panels": panels, "visible": body.get("visible") is not False, "at": int(datetime.now().timestamp())}
+    await request.app.state.redis.set(SCREEN_REPORT.format(dev["id"]), json.dumps(report), ex=REPORT_SECONDS)
+    return {"ok": True}
+
+
+@router.post("/view/queued")
+async def take_queued(request: Request):
+    """What was kept for this display while it wasn't open or on screen (a phone back from a pocket)."""
+    from .constellation import DISPLAY_QUEUE
+    dev = await auth.asker(request.headers)
+    if dev is None:
+        return {"events": []}
+    q = DISPLAY_QUEUE.format(dev["id"])
+    raw = await request.app.state.redis.lrange(q, 0, -1)
+    await request.app.state.redis.delete(q)
+    out = []
+    for r in raw:
+        try:
+            out.append(json.loads(r))
+        except ValueError:
+            pass
+    return {"events": out}

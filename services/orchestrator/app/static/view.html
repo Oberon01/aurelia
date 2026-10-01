@@ -443,6 +443,8 @@ body.ambient.busy .brand{opacity:0}                        /* panels up: the clo
 body.screen .panel.present{font-size:118%}
 body.screen .panel.present .headline{font-size:clamp(26px,2.6vw,40px)}
 .sentfrom{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--ink-faint);text-transform:uppercase}
+.scr-panels{grid-column:1;margin:4px 0 0;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:3px;font-size:14px;color:var(--ink)}
+.scr-panels li{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .answer{display:flex;flex-direction:column;gap:10px;font-size:16px;line-height:1.55;color:var(--ink);overflow:auto}
 .answer p{margin:0}.answer ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
 body.screen .answer{font-size:22px}
@@ -669,6 +671,7 @@ function renderRail(waiting) {
 }
 
 function relayout() {
+  reportSoon();
   document.body.classList.toggle("busy", recs().some(p => !p.queued));   // the ambient clock steps back
   const { visible, waiting } = arrange();
   const running = recs().filter(p => p.state === "running" || p.state === "refreshing").length;
@@ -724,6 +727,33 @@ function screenState() {
                  tool: p.tool, title: panelTitle(p), queued: !!p.queued }));
   return { panels: list, focus: focused && list.some(x => x.n === focused.num) ? focused.num : null };
 }
+
+// What this display shows, told to the server whenever it changes: a send checks its panel arrived
+// here, and "what's on my screens" reads it. Each panel lists every task behind it.
+let reportTimer = null;
+function reportSoon() { clearTimeout(reportTimer); reportTimer = setTimeout(reportScreen, 300); }
+function reportScreen() {
+  clearTimeout(reportTimer);
+  const ids = new Map();
+  panels.forEach((rec, id) => { if (!ids.has(rec)) ids.set(rec, []); ids.get(rec).push(id); });
+  const list = recs().filter(p => p.num && p.state !== "asking" && !p.node.classList.contains("leaving"))
+    .map(p => ({ n: p.num, title: panelTitle(p), headline: p.headline || null, tool: p.tool, queued: !!p.queued,
+                 tasks: [...(ids.get(p) || []), p.taskId, p.latestTask].filter(Boolean) }));
+  window.fetch("/view/screen", { method: "POST", headers: { "Content-Type": "application/json" },
+                                 body: JSON.stringify({ panels: list, visible: document.visibilityState === "visible" }) })
+    .catch(() => {});
+}
+setInterval(reportScreen, 60000);
+// Back on screen (a phone out of a pocket): say so, and pick up anything kept for this display meanwhile.
+document.addEventListener("visibilitychange", async () => {
+  reportScreen();
+  if (document.visibilityState !== "visible") return;
+  try {
+    const { events } = await (await window.fetch("/view/queued", { method: "POST" })).json();
+    (events || []).forEach(e => { try { onEvent(e); } catch (x) {} });
+    if ((events || []).length) relayout();
+  } catch (e) {}
+});
 
 // Each panel once, however many tasks point at it.
 function recs() { return [...new Set(panels.values())]; }
@@ -1057,6 +1087,8 @@ function body(tool, d) {
   if (Array.isArray(d.videos)) { wrap.append(videoResults(d.videos)); ["videos", "query"].forEach(k => used.add(k)); }
   if (typeof d.text === "string" && (d.url || typeof d.pages === "number")) { wrap.append(pageView(d)); ["title", "url", "site", "words", "text", "truncated"].forEach(k => used.add(k)); }
   if (d.link && d.link.url) { wrap.append(linkView(d.link)); used.add("link"); }
+  if (d.sent && typeof d.sent === "object") { wrap.append(sentView(d.sent, d.note)); ["sent", "note", "headline"].forEach(k => used.add(k)); }
+  if (Array.isArray(d.screens)) { wrap.append(screensView(d.screens)); used.add("screens"); }
   if (typeof d.answer === "string") { wrap.append(answerView(d.answer, d.headline)); ["answer", "asked", "headline"].forEach(k => used.add(k)); }
   if (d.note && typeof d.note === "object") { wrap.append(noteView(d.note)); used.add("note"); used.add("headline"); }
   if (typeof d.saved_to === "string") { wrap.append(downloadView(d)); ["file", "size", "saved_to", "type", "quarantined"].forEach(k => used.add(k)); }
@@ -1630,6 +1662,38 @@ function downloadView(d) {
   box.append(top, el("div", "facts", [d.size, d.type].filter(Boolean).join(" · ")), el("div", "facts", `On the server: ${d.saved_to}`));
   return box;
 }
+function sentView(x, note) {                       // where a send landed: confirmed there, waiting, or not
+  const box = el("div", "devlist");
+  const line = (cls, label, names) => { if (!names || !names.length) return;
+    const r = el("div", "pdev " + cls); r.append(el("span", "dn", names.join(", ")), el("span", "dm", label)); box.append(r); };
+  line("online", "confirmed on screen", x.confirmed || x.to);
+  line("offline", "kept: shows there when it next opens", x.later || x.not_open);
+  line("offline", "couldn't", x.failed);
+  if (note) box.append(el("div", "lib-note", note));
+  return box;
+}
+
+function screensView(list) {                       // what's on each display: its panels, what it's showing
+  const box = el("div", "devlist");
+  if (!list.length) { box.append(el("div", "lib-note", "No displays yet.")); return box; }
+  list.forEach(x => {
+    const row = el("div", "pdev scr " + (x.on_screen ? "online" : "offline"));
+    const state = x.on_screen ? "on screen" : x.open ? "open, not on screen" : "not open";
+    row.append(el("span", "dn", x.name),
+               el("span", "dm", [x.role, state, x.as_of ? `as of ${x.as_of}` : null].filter(Boolean).join(" · ")));
+    if (x.showing) row.append(el("span", "dv", `Showing: ${x.showing}`));
+    const ps = (x.panels || []);
+    if (ps.length) {
+      const ul = el("ul", "scr-panels");
+      ps.forEach(p => ul.append(el("li", null, `${p.n ?? "·"}  ${p.title}${p.headline && p.headline !== p.title ? " — " + p.headline : ""}${p.waiting ? " (waiting)" : ""}`)));
+      row.append(ul);
+    } else if (!x.showing) row.append(el("span", "dv", x.role === "presentation" ? "Ambient screen" : "No panels"));
+    if (x.kept) row.append(el("span", "di", `${x.kept} kept for when it opens`));
+    box.append(row);
+  });
+  return box;
+}
+
 function answerView(text, headline) {             // her longer replies: paragraphs, and lists kept as lists
   const box = el("div", "answer");
   let body = String(text).trim();

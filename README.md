@@ -141,7 +141,16 @@ or a short note ("send 'dinner at 7' to the hall tablet"). A Presentation
 display shows it big; a link sent to a Presentation computer opens there. A
 display that isn't open gets it when it next opens (within a day). Something that isn't on screen yet works too: "send the device list to my
 iPhone" or "show the house on the TV" runs the look-up once and opens it only
-there, never here first (look-ups only; an action happens where you ask). If the TV
+there, never here first (look-ups only; an action happens where you ask).
+
+**Every send is checked.** Each display tells her which panels it's showing
+whenever that changes. After sending, she checks the panel appears in that
+display's report; if it doesn't within a few seconds she sends it once more,
+and if it still doesn't (a phone that's locked, a tab in the background) she
+keeps it, and it shows the moment that display is back on screen. Her answer
+says exactly where it was confirmed and where it's waiting. "What's on my
+screens?" (or "what's on the TV?") shows each display with its panels, whether
+it's on screen, anything kept for it, and what a TV is playing. If the TV
 is showing something she opened, the panel waits behind it and she says so.
 
 **The ambient screen.** A Presentation display with nothing on it shows a dim

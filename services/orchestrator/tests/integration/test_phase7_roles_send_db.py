@@ -45,15 +45,25 @@ class Model:
         return Completion(text=step.get("text", ""), tool_calls=calls, usage=Usage(10, 5), model="fake", provider="fake")
 
 
-async def listen(url, dev, seconds, out):
+async def listen(url, dev, seconds, out, report=True):
+    """A display: receives events and, like the real page, reports the panels it's showing.
+    report=False is a display that's connected but frozen (a phone in a pocket)."""
     import websockets
-    async with websockets.connect(url, additional_headers={"X-Aurelia-Device": str(dev)}) as ws:
+    base = url.replace("ws", "http", 1).removesuffix("/ws")
+    showing = []
+    async with websockets.connect(url, additional_headers={"X-Aurelia-Device": str(dev)}) as ws, \
+            httpx.AsyncClient() as c:
         end = time.monotonic() + seconds
         while time.monotonic() < end:
             try:
-                out.append(json.loads(await asyncio.wait_for(ws.recv(), timeout=0.3)))
+                e = json.loads(await asyncio.wait_for(ws.recv(), timeout=0.3))
             except asyncio.TimeoutError:
-                pass
+                continue
+            out.append(e)
+            if report and e.get("type") == "panel.open" and e.get("data", {}).get("display") != "brief":
+                showing.append({"n": len(showing) + 1, "title": e["tool"], "tool": e["tool"], "tasks": [e["task_id"]]})
+                await c.post(f"{base}/view/screen", json={"panels": showing, "visible": True},
+                             headers={"X-Aurelia-Device": str(dev)})
 
 
 def opened(events):
@@ -140,8 +150,8 @@ def test_roles_and_sending(stack):
     result = httpx.get(f"{orch}/tasks/{send_task}").json()
     assert result["status"] == "completed", result
     out = json.loads(result["result"]) if isinstance(result["result"], str) else result["result"]
-    assert out["sent"]["to"] == ["Hall tablet"] and out["sent"]["not_open"] == ["Den TV PC"]
-    assert "Den TV PC" in out["note"] and "when it opens" in out["note"]
+    assert out["sent"]["confirmed"] == ["Hall tablet"] and out["sent"]["later"] == ["Den TV PC"]
+    assert "Den TV PC" in out["note"] and "when it next opens" in out["note"]
 
     [shown] = [e for e in opened(got["tablet"]) if e["tool"] == "testfn.status"]
     assert shown["data"]["present"] is True and shown["data"]["sent_from"] == "Desk" and shown["device"] == tablet
@@ -215,3 +225,61 @@ def test_a_look_up_shown_on_another_display(stack):
     assert any(d["name"] == "iPhone" for d in res["data"]["paired"])
     assert not [e for e in got["desk"] if e.get("tool") == "constellation.devices"]      # never opened here
     assert not acted["task_ids"]                                                     # an action isn't sent anywhere
+
+
+def test_a_send_is_confirmed_or_kept_and_screens_says_what_is_where(stack):
+    """Sending checks the panel arrived (from the display's own report). A display that's connected but
+    frozen doesn't confirm: it's sent once more, then kept, and picked up when it's back on screen.
+    'What's on my screens' lists each display's panels."""
+    from app import auth
+    from app.main import app
+    orch, ws_url = stack["orch"], stack["orch"].replace("http", "ws") + "/ws"
+    sql("UPDATE devices SET status='revoked' WHERE status='approved'")
+    auth._by_id.clear()
+    desk = device("browser", "Desk", {"os": "Windows"})
+    phone = device("browser", "iPhone", {"os": "iPhone"})
+    tab = device("browser", "Kitchen tablet", {"os": "Windows"}, role="presentation")
+    httpx.post(f"{orch}/registry/functions", json={
+        "name": "testfn", "description": "test", "url": stack["fn"],
+        "tools": [{"name": n, "description": n, "input_schema": {"type": "object"}} for n in ("status", "look")]
+    }).raise_for_status()
+    got = {"phone": [], "tab": []}
+    original = app.state.llm
+
+    async def scenario():
+        ls = [asyncio.create_task(listen(ws_url, phone, 22, got["phone"], report=False)),     # frozen in a pocket
+              asyncio.create_task(listen(ws_url, tab, 22, got["tab"]))]
+        await asyncio.sleep(1.0)
+        async with httpx.AsyncClient(timeout=60) as c:
+            app.state.llm = Model([{"calls": [("testfn__status", {"_on": "everywhere"})]}, {"text": "Done."}])
+            sent = (await c.post(f"{orch}/ask", headers={"X-Aurelia-Device": str(desk)}, json={
+                "text": "show the house everywhere", "session_id": uuid.uuid4().hex})).json()
+            tid = (await c.post(f"{orch}/tasks", json={"tool": "constellation.screens", "args": {}},
+                                headers={"X-Aurelia-Device": str(desk)})).json()["task_id"]
+            for _ in range(50):
+                row = (await c.get(f"{orch}/tasks/{tid}")).json()
+                if row["status"] != "running":
+                    break
+                await asyncio.sleep(0.2)
+            # The phone comes back on screen: it picks up what was kept for it.
+            kept = (await c.post(f"{orch}/view/queued", headers={"X-Aurelia-Device": str(phone)})).json()
+            again = (await c.post(f"{orch}/view/queued", headers={"X-Aurelia-Device": str(phone)})).json()
+        await asyncio.gather(*ls)
+        return sent, row, kept, again
+
+    try:
+        sent, row, kept, again = asyncio.run(scenario())
+    finally:
+        app.state.llm = original
+    [run] = sent["task_ids"]
+    tab_tasks = {e["task_id"] for e in opened(got["tab"]) if e["tool"] == "testfn.status"}
+    assert len(tab_tasks) == 1
+    phone_opens = [e for e in opened(got["phone"]) if e["tool"] == "testfn.status"]
+    assert len(phone_opens) == 2 and phone_opens[0]["task_id"] == phone_opens[1]["task_id"]    # sent, then once more
+    assert [e["type"] for e in kept["events"]] == ["panel.open", "panel.result", "panel.close"]
+    assert kept["events"][0]["task_id"] == phone_opens[0]["task_id"] and again["events"] == []
+    res = json.loads(row["result"]) if isinstance(row["result"], str) else row["result"]
+    by = {x["name"]: x for x in res["screens"]}
+    assert by["Kitchen tablet"]["on_screen"] and [p["title"] for p in by["Kitchen tablet"]["panels"]] == ["testfn.status"]
+    assert by["iPhone"]["panels"] == [] and by["Kitchen tablet"]["role"] == "presentation"
+    assert res["headline"].startswith("3 displays")

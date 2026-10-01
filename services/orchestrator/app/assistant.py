@@ -371,11 +371,7 @@ async def _run_for_display(app, user: str, qualified: str, args: dict, on: str, 
     me = await db.pool().fetchval("SELECT name FROM devices WHERE id=$1", asker) if asker else None
 
     async def deliver(result: dict) -> dict:
-        went, waiting = [], []
-        for d in targets:
-            await constellation._show_on(app, user, d, qualified, args, result, me or "another display")
-            (went if d["open"] else waiting).append(d["name"])
-        return {"to": went, "not_open": waiting}
+        return await constellation.deliver(app, user, targets, qualified, args, result, me or "another display")
 
     result = await wait_for_result(task_id, app.state.config.current.llm.wait_for_result_seconds)
     if result is None:                                  # a slow look-up: it goes over when it's done
@@ -388,9 +384,9 @@ async def _run_for_display(app, user: str, qualified: str, args: dict, on: str, 
     if result["status"] != "completed" or not result["result"]:
         return _data({"status": result["status"], "error": result["error"] or "nothing to show"}), True
     sent = await deliver(result["result"])
-    note = f"Shown on {label}." + (f" Not open right now: {', '.join(sent['not_open'])} (it'll be there when it "
-                                   f"opens)." if sent["not_open"] else "")
-    return _data({"status": "sent", "to": sent["to"], "not_open": sent["not_open"], "note": note,
+    note = " ".join(x for x in (f"Confirmed on {', '.join(sent['shown'])}." if sent["shown"] else None,
+                                (constellation.delivery_note(sent) or "") + ("." if sent["later"] else "")) if x)
+    return _data({"status": "sent", "confirmed_on": sent["shown"], "kept_for": sent["later"], "note": note,
                   "result": result["result"]}), False
 
 
