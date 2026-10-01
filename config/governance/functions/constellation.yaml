@@ -14,7 +14,8 @@ tools:
   press:           { tier: act }         # a key (enter, escape, arrows…); Enter that would send comes back as submit
   scroll:          { tier: act }
   back:            { tier: act }
-  media:           { tier: act }         # play, pause, seek, volume, speed, full screen
+  media:           { tier: act }         # play, pause, seek, volume, speed, full screen; next/previous/now playing for any player
+  sound:           { tier: act }         # the computer's volume, mute and which output (speakers, HDMI, headphones)
   submit:          { tier: change }      # the press that buys, pays, sends, posts or deletes: always confirmed
   sign_in:         { tier: change }      # a login he saved on that computer; she never sees it (Sep 30 decision)
   logins:          { tier: reference }   # which sites have a saved login there (names only)

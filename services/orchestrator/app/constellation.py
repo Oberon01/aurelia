@@ -206,16 +206,33 @@ TOOLS = [
         name="back", description="Go back to the previous page on a screen (like a browser's back button).",
         input_schema={"type": "object", "properties": {"target": {"type": "string"}}}, cancellable=False),
     registry.ToolSpec(
-        name="media", description="Control the video playing on a screen's page: play, pause, toggle, forward / back "
-                                  "(seconds; default 10), seek (to seconds from the start), restart, mute, unmute, "
-                                  "volume (level 0-100), speed (rate 0.25-4), fullscreen, exit_fullscreen. amount takes "
-                                  "his words instead of seconds ('2 minutes', '1:30').",
+        name="media", description="Control what's playing on one of his computers. On the page of a screen running "
+                                  "your shell: play, pause, toggle, forward / back (seconds; default 10), seek (to "
+                                  "seconds from the start), restart, mute, unmute, volume (level 0-100), speed (rate "
+                                  "0.25-4), fullscreen, exit_fullscreen. amount takes his words instead of seconds "
+                                  "('2 minutes', '1:30'). For any player on the computer (Spotify, VLC, a browser "
+                                  "tab): next, previous, now_playing ('what's playing'); play / pause also reach "
+                                  "them when there's no video on the page. The computer's own volume is sound.",
         input_schema={"type": "object", "properties": {
             "target": {"type": "string"},
             "action": {"type": "string", "enum": ["play", "pause", "toggle", "forward", "back", "seek", "restart", "mute",
-                                                  "unmute", "volume", "speed", "fullscreen", "exit_fullscreen"]},
+                                                  "unmute", "volume", "speed", "fullscreen", "exit_fullscreen",
+                                                  "next", "previous", "now_playing"]},
             "seconds": {"type": "number"}, "amount": {"type": "string"}, "level": {"type": "number"},
             "rate": {"type": "number"}}, "required": ["action"]},
+        cancellable=False),
+    registry.ToolSpec(
+        name="sound", description="The sound of one of his computers (not one video): action get (volume, mute, "
+                                  "which output), set (level 0-100), up / down (step, default 10), mute, unmute, "
+                                  "toggle, outputs (the speakers, TV/HDMI, headphones it can play through), or output "
+                                  "(switch to the one whose name has device: 'HDMI', 'headphones'). For 'turn it "
+                                  "up', 'volume 30 on the TV PC', 'play the sound through the TV'.",
+        input_schema={"type": "object", "properties": {
+            "target": {"type": "string", "description": "which computer"},
+            "action": {"type": "string", "enum": ["get", "set", "up", "down", "mute", "unmute", "toggle", "outputs",
+                                                  "output"]},
+            "level": {"type": "number"}, "step": {"type": "number"},
+            "device": {"type": "string", "description": "part of an output's name"}}, "required": ["action"]},
         cancellable=False),
     registry.ToolSpec(
         name="submit", description="Press something that buys, pays, sends, posts or deletes on a screen's page (by n "
@@ -860,8 +877,20 @@ async def media(app, user: str, args: dict) -> dict:
             if tv is not None:
                 return tv
         raise ValueError(str(exc))
-    data = await _ask_node(app, node, "page_media", {"action": action, "seconds": secs or 0, "level": args.get("level"),
-                                                     "rate": args.get("rate")})
+    if action in PLAYER_ONLY or (action in PLAYER_TOO and node.get("shell") != "on"):
+        return await _player(app, node, action)
+    try:
+        data = await _ask_node(app, node, "page_media", {"action": action, "seconds": secs or 0, "level": args.get("level"),
+                                                         "rate": args.get("rate")})
+    except ValueError as exc:
+        if "no video" not in str(exc):
+            raise
+        if action in PLAYER_TOO:                            # music in another app, or a tab that isn't mine
+            return await _player(app, node, action)
+        if action in ("mute", "unmute", "volume"):          # no video here: the computer's own sound
+            return await sound(app, user, {"target": node["name"], "action": "set" if action == "volume" else action,
+                                           "level": args.get("level")}, node=node)
+        raise
     v = _video(data.get("video")) or {}
     head = DONE.get(action, "Done") + (f" · {v['position']}" if v.get("position") and action in ("forward", "back", "seek", "restart", "pause", "play") else "")
     out = {"headline": head, "video": {"node": node["name"], "title": data.get("title") or "", **v}}
@@ -869,6 +898,72 @@ async def media(app, user: str, args: dict) -> dict:
         out["note"] = {"NotAllowedError": "The page wouldn't allow that without a real click on it.",
                        "NotSupportedError": "This video can't do that."}.get(data["problem"], f"The page said no ({data['problem']}).")
     return out
+
+
+PLAYER_ONLY = ("next", "previous", "now_playing")
+PLAYER_TOO = ("play", "pause", "toggle")
+PLAYER_DONE = {"play": "Playing", "pause": "Paused", "toggle": "Done", "next": "Next", "previous": "Previous"}
+
+
+def _track(p: dict) -> str:
+    who, what = (p.get("artist") or "").strip(), (p.get("title") or "").strip()
+    return f"{who} — {what}" if who and what else what or who or p.get("player") or "something"
+
+
+async def _player(app, node: dict, action: str) -> dict:
+    """Any media player on the computer (MPRIS through playerctl; the media keys on Windows)."""
+    data = await _ask_new(app, node, "player", {"action": "status" if action == "now_playing" else action})
+    if data.get("windows"):
+        return {"headline": f"{node['name']}: {PLAYER_DONE.get(action, 'Done')}",
+                "did": {"node": node["name"], "what": f"Pressed the {action} media key"}}
+    players = [p for p in data.get("players") or [] if isinstance(p, dict)]
+    playing = {"node": node["name"], "players": players}
+    if not players:
+        return {"headline": f"Nothing is playing on {node['name']}", "playing": playing}
+    top = players[0]
+    if action == "now_playing":
+        state = {"Playing": "Playing", "Paused": "Paused"}.get(top.get("status"), top.get("status") or "Stopped")
+        head = f"{state}: {_track(top)}" + (f" ({top['player']})" if top.get("player") else "")
+    else:
+        head = f"{PLAYER_DONE.get(action, 'Done')} · {_track(top)}"
+    return {"headline": head[:140], "playing": playing}
+
+
+SOUND_SAY = {"up": "Turned it up", "down": "Turned it down", "mute": "Muted", "unmute": "Sound on",
+             "toggle": "Toggled mute", "set": "Volume set"}
+SOUND_WORDS = {"louder": "up", "raise": "up", "increase": "up", "quieter": "down", "lower": "down", "decrease": "down",
+               "softer": "down", "volume": "set", "switch": "output", "use": "output", "status": "get", "list": "outputs"}
+
+
+async def sound(app, user: str, args: dict, node: dict | None = None) -> dict:
+    action = str(args.get("action") or "get").lower().strip()
+    action = SOUND_WORDS.get(action, action)
+    if action == "get" and args.get("level") not in (None, ""):
+        action = "set"
+    if action not in ("get", "set", "up", "down", "mute", "unmute", "toggle", "outputs", "output"):
+        raise ValueError("Volume (set, up, down), mute or unmute, or which output?")
+    if action == "set" and args.get("level") in (None, ""):
+        raise ValueError("Set the volume to what? (0-100)")
+    node = node or await target(app, args.get("target"), screen=True)
+    level = args.get("step") if action in ("up", "down") else args.get("level")
+    sent = {"action": action, **({"level": level} if level not in (None, "") else {}),
+            **({"device": str(args["device"])[:80]} if args.get("device") else {})}
+    data = await _ask_new(app, node, "sound", sent)
+    if data.get("windows"):
+        return {"headline": f"{node['name']}: {SOUND_SAY.get(action, 'Done')}",
+                "did": {"node": node["name"], "what": SOUND_SAY.get(action, "Done")
+                        + (" (Windows only toggles mute)" if action in ("mute", "unmute") else "")}}
+    outs = [o for o in data.get("outputs") or [] if isinstance(o, dict)]
+    vol, muted, out = data.get("volume"), bool(data.get("muted")), data.get("output")
+    level_words = "muted" if muted else (f"volume {vol}%" if vol is not None else "volume unknown")
+    if action == "output":
+        head = f"{node['name']}: sound now plays through {out}"
+    elif action == "outputs":
+        head = f"{node['name']}: {len(outs)} output{'s' if len(outs) != 1 else ''}" + (f" · now {out}" if out else "")
+    else:
+        head = f"{node['name']}: {level_words}" + (f" (volume {vol}%)" if muted and vol is not None else "")
+    return {"headline": head[:140], "sound": {"node": node["name"], "volume": vol, "muted": muted, "output": out,
+                                              "outputs": outs}}
 
 
 async def _roku_key(app, user: str, tv_name: str, action: str) -> dict | None:
@@ -1298,7 +1393,7 @@ HANDLERS = {"devices": devices, "open": open_, "apps": apps, "home": home, "look
             "press": press, "scroll": scroll, "back": back, "media": media, "submit": submit, "health": health,
             "list_processes": list_processes, "close_process": close_process, "kill_process": kill_process,
             "sign_in": sign_in, "logins": logins, "send": send, "screens": screens, "diagnose": diagnose_node,
-            "power": power, "restart": restart, "wake": wake}
+            "power": power, "restart": restart, "wake": wake, "sound": sound}
 
 
 @router.get("/shots/{sid}.jpg", include_in_schema=False)

@@ -359,3 +359,69 @@ def test_power_restart_and_wake(node, stack):
     assert res["headline"] == "Waking Desk PC" and "from Living room TV" in res["power"]["note"]
     status, res, err = run_task(orch, "constellation.wake", {"target": "living room tv"}, wait=30)
     assert res["headline"] == "Living room TV is already on"
+
+
+FAKE_WPCTL = r'''#!PY
+import json, sys, pathlib
+st = pathlib.Path(__file__).with_name("sound.json")
+s = json.loads(st.read_text()) if st.exists() else {"vol": 0.5, "muted": False, "default": "49"}
+a = sys.argv[1:]
+if a[0] == "status":
+    mark = lambda i: " *  " if s["default"] == i else "    "
+    print("Audio\n ├─ Sinks:\n │ " + mark("49") + " 49. Built-in Audio Analog Stereo  [vol: 0.50]\n │ " + mark("55")
+          + " 55. GA104 HDMI Output  [vol: 0.50]\n │\n └─ Sources:\n")
+elif a[0] == "get-volume":
+    print(f"Volume: {s['vol']:.2f}" + (" [MUTED]" if s["muted"] else ""))
+elif a[0] == "set-volume":
+    v = a[-1]
+    s["vol"] = float(v) if "%" not in v else min(1.0, s["vol"] + (1 if v.endswith("+") else -1) * int(v[:-2]) / 100)
+elif a[0] == "set-mute":
+    s["muted"] = {"1": True, "0": False}.get(a[-1], not s["muted"])
+elif a[0] == "set-default":
+    s["default"] = a[-1]
+st.write_text(json.dumps(s))
+'''
+FAKE_PLAYERCTL = r'''#!PY
+import sys, pathlib
+st = pathlib.Path(__file__).with_name("track.txt")
+t = st.read_text() if st.exists() else "One More Time"
+a = sys.argv[1:]
+if "metadata" in a:
+    print(f"spotify\tPlaying\tDaft Punk\t{t}\tDiscovery\t1:02\t5:20")
+elif a[-1] == "next":
+    st.write_text("Aerodynamic")
+with open(pathlib.Path(__file__).with_name("played.txt"), "a") as f:
+    f.write(" ".join(a) + "\n")
+'''
+
+
+def test_sound_and_music(node):
+    """Sound and media players with a real agent (stand-in wpctl and playerctl): volume, mute and
+    the output; next track and what's playing; pause reaches the player when there's no shell page."""
+    orch, bin_ = node["orch"], node["record"].parent / "bin"
+    for name, src in (("wpctl", FAKE_WPCTL), ("playerctl", FAKE_PLAYERCTL)):
+        (bin_ / name).write_text(src.replace("#!PY", f"#!{sys.executable}"))
+        (bin_ / name).chmod(0o755)
+    status, res, err = run_task(orch, "constellation.sound", {"target": "living room tv", "action": "set", "level": 30}, wait=30)
+    assert status == "completed", err
+    assert res["headline"] == "Living room TV: volume 30%" and res["sound"]["output"] == "Built-in Audio Analog Stereo"
+    status, res, err = run_task(orch, "constellation.sound", {"action": "up"}, wait=30)
+    assert res["sound"]["volume"] == 40
+    status, res, err = run_task(orch, "constellation.sound", {"action": "mute"}, wait=30)
+    assert res["sound"]["muted"] and res["headline"] == "Living room TV: muted (volume 40%)"
+    status, res, err = run_task(orch, "constellation.sound", {"action": "output", "device": "hdmi"}, wait=30)
+    assert status == "completed" and res["headline"] == "Living room TV: sound now plays through GA104 HDMI Output"
+    status, res, err = run_task(orch, "constellation.sound", {"action": "output", "device": "bluetooth"}, wait=30)
+    assert status == "failed" and "No output like that" in err
+    status, res, err = run_task(orch, "constellation.sound", {"action": "set"}, wait=30)
+    assert status == "failed" and "to what" in err
+
+    status, res, err = run_task(orch, "constellation.media", {"action": "now_playing"}, wait=30)
+    assert status == "completed", err
+    assert res["headline"] == "Playing: Daft Punk — One More Time (spotify)" and res["playing"]["node"] == "Living room TV"
+    status, res, err = run_task(orch, "constellation.media", {"action": "next"}, wait=30)
+    assert res["headline"] == "Next · Daft Punk — Aerodynamic"
+    status, res, err = run_task(orch, "constellation.media", {"action": "pause"}, wait=30)   # no shell page here
+    assert status == "completed", err
+    played = (bin_ / "played.txt").read_text()
+    assert "-p spotify next" in played and "-p spotify pause" in played

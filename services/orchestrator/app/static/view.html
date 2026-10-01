@@ -561,7 +561,7 @@ const TITLES = { "aurelia.reply": "Aurelia",
   "constellation.devices": "Devices", "constellation.open": "Open", "constellation.apps": "Apps",
   "constellation.home": "Home", "constellation.look": "On the screen", "constellation.click": "Click",
   "constellation.type": "Type", "constellation.press": "Key", "constellation.scroll": "Scroll",
-  "constellation.back": "Back", "constellation.media": "Video", "constellation.submit": "Press",
+  "constellation.back": "Back", "constellation.media": "Playing", "constellation.sound": "Sound", "constellation.submit": "Press",
   "constellation.health": "Computer health", "constellation.list_processes": "Processes",
   "constellation.close_process": "Close a program", "constellation.kill_process": "Close a program",
 };
@@ -997,6 +997,16 @@ function nextSteps(tool, d) {
     out.push({ label: "Quiz me on this", say: `quiz me on ${d.topic.name}` }, { label: "Explain it", say: `explain ${d.topic.name}` });
   }
   if (d.explain && typeof d.explain === "object") out.push({ label: "Quiz me", say: `quiz me on ${d.explain.subject}` });
+  if (d.sound && typeof d.sound === "object" && d.sound.node) {
+    const on = `on the ${d.sound.node.toLowerCase()}`;
+    out.push({ label: "Louder", say: `turn the volume up ${on}` }, { label: "Quieter", say: `turn the volume down ${on}` },
+             d.sound.muted ? { label: "Unmute", say: `unmute ${on}` } : { label: "Mute", say: `mute ${on}` });
+  }
+  if (d.playing && typeof d.playing === "object" && (d.playing.players || []).length) {
+    const on = `on the ${d.playing.node.toLowerCase()}`;
+    out.push({ label: "Next", say: `next track ${on}` },
+             d.playing.players[0].status === "Playing" ? { label: "Pause", say: `pause the music ${on}` } : { label: "Play", say: `play the music ${on}` });
+  }
   return out;
 }
 const usualCache = new Map();
@@ -1137,6 +1147,8 @@ function body(tool, d) {
   }
   if (d.onscreen && typeof d.onscreen === "object") { wrap.append(onscreenView(d.onscreen, !!d.did)); used.add("onscreen"); used.add("headline"); }
   if (d.did && typeof d.did === "object") { wrap.prepend(didView(d.did)); used.add("did"); used.add("headline"); }
+  if (d.sound && typeof d.sound === "object" && d.sound.node) { wrap.append(soundView(d.sound)); used.add("sound"); used.add("headline"); }
+  if (d.playing && typeof d.playing === "object" && Array.isArray(d.playing.players)) { wrap.append(playingView(d.playing)); used.add("playing"); used.add("headline"); }
   if (d.video && typeof d.video === "object" && !Array.isArray(d.video)) { wrap.append(videoView(d.video)); used.add("video"); used.add("headline"); }
   if (d.confirm && typeof d.confirm === "object") { wrap.append(el("div", "more", "Waiting for your OK on the card.")); used.add("confirm"); }
   if (typeof d.note === "string") { wrap.append(el("div", "more", d.note)); used.add("note"); }
@@ -1661,6 +1673,37 @@ function videoView(v) {
                  v.speed && v.speed !== 1 ? `${v.speed}×` : null, v.fullscreen ? "full screen" : null].filter(Boolean);
   line.append(el("span", "vflags", flags.join(" · ")));
   box.append(bar, line);
+  return box;
+}
+// A computer's own sound: the level, mute, and the outputs it can play through (the one in use first).
+function soundView(v) {
+  const box = el("div", "vstate");
+  box.append(el("div", "facts", [v.node, v.output].filter(Boolean).join(" · ")));
+  const bar = el("div", "vbar"), fill = el("span");
+  fill.style.width = (v.muted ? 0 : Math.max(0, Math.min(100, v.volume || 0))) + "%"; bar.append(fill);
+  const line = el("div", "vline");
+  line.append(el("span", "vpos", v.muted ? "Muted" : (v.volume == null ? "" : `${v.volume}%`)));
+  if (v.muted && v.volume != null) line.append(el("span", "vflags", `volume ${v.volume}%`));
+  box.append(bar, line);
+  const outs = (v.outputs || []).slice().sort((a, b) => (b.default ? 1 : 0) - (a.default ? 1 : 0));
+  if (outs.length > 1) {
+    const list = el("div", "napps");
+    outs.forEach(o => { const s = el("span", null, o.name); s.title = o.default ? "in use" : ""; if (o.default) s.style.fontWeight = "600"; list.append(s); });
+    box.append(list);
+  }
+  return box;
+}
+// What's playing in any player on a computer (Spotify, VLC, a browser tab), the active one first.
+function playingView(p) {
+  const box = el("div", "vstate");
+  if (!p.players.length) { box.append(el("div", "facts", `${p.node} · nothing is playing`)); return box; }
+  const [top, ...rest] = p.players;
+  const title = el("div", null, top.title || top.player); title.style.cssText = "font-size:17px;color:var(--ink-strong)";
+  box.append(title);
+  if (top.artist || top.album) box.append(el("div", "facts", [top.artist, top.album].filter(Boolean).join(" · ")));
+  box.append(el("div", "more", [top.status, top.position && top.length ? `${top.position} / ${top.length}` : top.position,
+                                top.player, p.node].filter(Boolean).join(" · ")));
+  rest.forEach(x => box.append(el("div", "more", `Also: ${[x.title || x.artist, x.player, (x.status || "").toLowerCase()].filter(Boolean).join(" · ")}`)));
   return box;
 }
 function pageView(d) {

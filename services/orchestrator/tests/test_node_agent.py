@@ -568,3 +568,158 @@ def test_last_shutdown(ubuntu, tail, status, words):
     ubuntu({"journalctl --no-pager -o short-iso -n 200 -b -1": (0, "\n".join(tail) + "\n", "")})
     c = agent._diag_shutdown()
     assert c["status"] == status and words in c["summary"]
+
+
+# ---- sound and media players ---------------------------------------------------------------------
+
+WPCTL_STATUS = """PipeWire 'pipewire-0' [1.0.5, kentrell@tv-pc, cookie:123]
+ └─ Clients:
+        33. pipewire                            [1.0.5, kentrell@tv-pc, pid:901]
+
+Audio
+ ├─ Devices:
+ │      42. Built-in Audio                      [alsa]
+ │      43. GA104 High Definition Audio         [alsa]
+ │
+ ├─ Sinks:
+ │      49. Built-in Audio Analog Stereo        [vol: 0.40]
+ │  *   55. GA104 HDMI / DisplayPort 1 Output   [vol: 0.65 MUTED]
+ │
+ ├─ Sink endpoints:
+ │      70. Not a real output
+ │
+ ├─ Sources:
+ │  *   50. Built-in Audio Analog Stereo        [vol: 1.00]
+ │
+ └─ Streams:
+        88. Chromium
+
+Video
+ ├─ Devices:
+ │      61. Integrated Camera                   [v4l2]
+ │
+ ├─ Sinks:
+ │      62. A video sink, not sound
+"""
+
+
+def test_wpctl_outputs_are_only_audio_sinks():
+    outs = agent.parse_wpctl(WPCTL_STATUS)
+    assert outs == [{"id": "49", "name": "Built-in Audio Analog Stereo", "default": False},
+                    {"id": "55", "name": "GA104 HDMI / DisplayPort 1 Output", "default": True}]
+
+
+class Sound:
+    """A fake PipeWire: records each command and answers like wpctl."""
+
+    def __init__(self):
+        self.calls, self.volume, self.muted, self.default = [], 0.65, True, "55"
+
+    def __call__(self, argv, *a, **k):
+        self.calls.append(argv)
+        if argv[:2] == ["wpctl", "status"]:
+            return 0, WPCTL_STATUS.replace(" *   55.", "     55.").replace("│      49.", "│      49.").replace(
+                f"     {self.default}.", f" *   {self.default}."), ""
+        if argv[:2] == ["wpctl", "get-volume"]:
+            return 0, f"Volume: {self.volume:.2f}" + (" [MUTED]" if self.muted else ""), ""
+        if argv[:2] == ["wpctl", "set-volume"]:
+            v = argv[-1]
+            self.volume = float(v) if "%" not in v else self.volume + (1 if v.endswith("+") else -1) * int(v[:-2]) / 100
+            return 0, "", ""
+        if argv[:2] == ["wpctl", "set-mute"]:
+            self.muted = {"1": True, "0": False, "toggle": not self.muted}[argv[-1]]
+            return 0, "", ""
+        if argv[:2] == ["wpctl", "set-default"]:
+            self.default = argv[-1]
+            return 0, "", ""
+        return 1, "", "unknown"
+
+
+@pytest.fixture
+def pipewire(monkeypatch):
+    fake = Sound()
+    monkeypatch.setattr(agent, "IS_WINDOWS", False)
+    monkeypatch.setattr(agent, "_run_env", fake)
+    monkeypatch.setattr(agent.shutil, "which", lambda n: f"/usr/bin/{n}" if n in ("wpctl", "playerctl") else None)
+    return fake
+
+
+def test_sound_reads_and_sets(pipewire):
+    got = agent.do_sound({"action": "get"})
+    assert got["volume"] == 65 and got["muted"] and got["output"] == "GA104 HDMI / DisplayPort 1 Output"
+    assert agent.do_sound({"action": "set", "level": 30})["volume"] == 30
+    assert ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", "0.30"] in pipewire.calls
+    agent.do_sound({"action": "up"})
+    assert ["wpctl", "set-volume", "-l", "1.0", "@DEFAULT_AUDIO_SINK@", "10%+"] in pipewire.calls   # never past 100%
+    assert agent.do_sound({"action": "unmute"})["muted"] is False
+    assert agent.do_sound({"action": "set", "level": 400})["volume"] == 100                        # clamped
+
+
+def test_sound_switches_output_by_part_of_its_name(pipewire):
+    got = agent.do_sound({"action": "output", "device": "built-in"})
+    assert got["output"] == "Built-in Audio Analog Stereo" and ["wpctl", "set-default", "49"] in pipewire.calls
+    with pytest.raises(ValueError, match="No output like that"):
+        agent.do_sound({"action": "output", "device": "bluetooth"})
+    with pytest.raises(ValueError, match="Which one"):
+        agent.do_sound({"action": "output", "device": "o"})                     # too vague: both match
+
+
+def test_sound_only_runs_its_own_programs(pipewire):
+    with pytest.raises(ValueError):
+        agent.do_sound({"action": "rm -rf /"})
+    assert all(c[0] == "wpctl" for c in pipewire.calls)
+
+
+def test_no_sound_tools_says_so(monkeypatch):
+    monkeypatch.setattr(agent, "IS_WINDOWS", False)
+    monkeypatch.setattr(agent.shutil, "which", lambda n: None)
+    with pytest.raises(ValueError, match="can't reach this computer's sound"):
+        agent.do_sound({"action": "get"})
+    with pytest.raises(ValueError, match="playerctl isn't installed"):
+        agent.do_player({"action": "next"})
+
+
+def test_players_playing_first():
+    out = ("vlc\tPaused\t\tHoliday video\t\t0:12\t3:40\n"
+           "spotify\tPlaying\tDaft Punk\tOne More Time\tDiscovery\t1:02\t5:20\n"
+           "chromium.instance42\tStopped\t\t\t\t\t\n")
+    ps = agent.parse_players(out)
+    assert [p["player"] for p in ps] == ["spotify", "vlc", "chromium.instance42"]
+    assert ps[0]["artist"] == "Daft Punk" and ps[0]["length"] == "5:20"
+
+
+def test_player_controls_the_active_one(monkeypatch):
+    calls = []
+    lines = {"now": "spotify\tPlaying\tDaft Punk\tOne More Time\tDiscovery\t1:02\t5:20\nvlc\tPaused\t\tClip\t\t0:01\t1:00\n"}
+
+    def run(argv, *a, **k):
+        calls.append(argv)
+        if "metadata" in argv:
+            return 0, lines["now"], ""
+        if argv[-1] == "next":
+            lines["now"] = lines["now"].replace("One More Time", "Aerodynamic")
+        return 0, "", ""
+    monkeypatch.setattr(agent, "IS_WINDOWS", False)
+    monkeypatch.setattr(agent, "_run_env", run)
+    monkeypatch.setattr(agent.shutil, "which", lambda n: "/usr/bin/playerctl")
+    monkeypatch.setattr(agent.time, "sleep", lambda s: None)
+    got = agent.do_player({"action": "next"})
+    assert ["playerctl", "-p", "spotify", "next"] in calls and got["players"][0]["title"] == "Aerodynamic"
+    agent.do_player({"action": "toggle"})
+    assert ["playerctl", "-p", "spotify", "play-pause"] in calls
+    assert agent.do_player({"action": "status"})["players"][1]["player"] == "vlc"
+    with pytest.raises(ValueError):
+        agent.do_player({"action": "open"})
+
+
+def test_windows_uses_the_media_keys(monkeypatch):
+    keys = []
+    monkeypatch.setattr(agent, "IS_WINDOWS", True)
+    monkeypatch.setattr(agent, "_key", lambda vk, times=1: keys.append((vk, times)))
+    assert agent.do_sound({"action": "up"}) == {"windows": True} and keys[-1] == (0xAF, 5)
+    agent.do_sound({"action": "set", "level": 40})
+    assert keys[-2:] == [(0xAE, 50), (0xAF, 20)]
+    agent.do_player({"action": "next"})
+    assert keys[-1] == (0xB0, 1)
+    with pytest.raises(ValueError):
+        agent.do_player({"action": "status"})

@@ -240,12 +240,27 @@ sudo):
   hold a shutdown back, and the hardware watchdog (if the machine has one)
   resets it within 2 minutes if it still hangs;
 - `wlopm`, for turning the screen off and on in her shell;
+- `playerctl`, for music and other players (next, previous, what's playing);
 - the system log (the `adm` group), for diagnostics.
 
 Without it she says what's missing instead of trying. A computer that can't
 confirm it may restart is never restarted blind. If a restart hung before,
 "what's wrong with the TV PC" now includes how the last shutdown went (what it
 waited on, or that it never finished).
+
+**Sound and media (agent 0.5.6).** The computer's own sound (`sound`): "turn
+it up on the TV PC", "volume 30", "mute the desk", "what's the volume", "which
+outputs does the TV PC have", "play the sound through the TV" (switches the
+default output to the one whose name has those words: HDMI, headphones…).
+Linux uses PipeWire's `wpctl` (or PulseAudio's `pactl`) and never goes past
+100%; Windows presses the volume keys (it can set, raise, lower and mute, but
+can't read the level yet). Any player on the computer (`media`): "next",
+"previous", "what's playing" for Spotify, VLC or a browser tab (MPRIS through
+`playerctl`, installed by `--system`; the media keys on Windows). Play and
+pause go to the video on her shell's page when there is one, otherwise to the
+player; muting or a volume with no video on the page falls back to the
+computer's sound. The panel shows the level, the outputs (the one in use in
+bold) and the track, with Louder / Quieter / Mute and Next / Pause chips.
 
 **What's wrong with it (diagnostics, stage 1 of fixes).** "What's wrong with
 the TV PC?" runs the agent's read-only checks (0.5.4+): failed services, errors

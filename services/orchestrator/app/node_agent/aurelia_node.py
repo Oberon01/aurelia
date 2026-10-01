@@ -58,7 +58,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.5.5"
+VERSION = "0.5.6"
 IS_WINDOWS = platform.system() == "Windows"
 EXIT_REVOKED = 3                                   # the service manager doesn't restart after this
 EXIT_UPDATED = 75                                  # restart me: a new version is in place
@@ -1084,6 +1084,168 @@ def do_wake(args: dict) -> dict:
     return {"sent": True, "to": targets}
 
 
+# ---- sound and media players ------------------------------------------------------------------
+#
+# The computer's own volume, mute and audio output, and whatever media player is running (Spotify,
+# a browser tab, VLC): play, pause, next, previous, what's playing. Linux: PipeWire's wpctl (or
+# PulseAudio's pactl) and MPRIS through playerctl; Windows: the media and volume keys. By argument
+# list, inside the user's session; nothing else.
+
+SOUND_ACTIONS = ("get", "set", "up", "down", "mute", "unmute", "toggle", "outputs", "output")
+PLAYER_ACTIONS = ("play", "pause", "toggle", "next", "previous", "status")
+VK = {"up": 0xAF, "down": 0xAE, "mute": 0xAD, "next": 0xB0, "previous": 0xB1, "toggle": 0xB3}
+
+
+def _key(vk: int, times: int = 1) -> None:
+    for _ in range(times):
+        ctypes.windll.user32.keybd_event(vk, 0, 0, 0)
+        ctypes.windll.user32.keybd_event(vk, 0, 2, 0)
+
+
+def parse_wpctl(out: str) -> list[dict]:
+    """Audio outputs from `wpctl status` (the Sinks list under Audio), with the default marked."""
+    outs, in_audio, in_sinks = [], False, False
+    for line in out.splitlines():
+        if line and not line[0].isspace():                  # a top-level section: PipeWire, Audio, Video, Settings
+            in_audio, in_sinks = line.startswith("Audio"), False
+            continue
+        if not in_audio:
+            continue
+        bare = line.strip(" │├└─\t")
+        if re.match(r"^[A-Za-z][\w ]*:$", bare):            # a list heading: Devices:, Sinks:, Sink endpoints:…
+            in_sinks = bare == "Sinks:"
+            continue
+        m = re.match(r"^(\*)?\s*(\d+)\.\s+(.+?)(?:\s+\[vol:.*\])?$", bare) if in_sinks else None
+        if m:
+            outs.append({"id": m.group(2), "name": m.group(3).strip(), "default": bool(m.group(1))})
+    return outs
+
+
+def _wpctl_outputs() -> list[dict]:
+    return parse_wpctl(_run_env(["wpctl", "status"])[1])
+
+
+def _pactl_outputs() -> list[dict]:
+    _, out, _ = _run_env(["pactl", "list", "short", "sinks"])
+    _, default, _ = _run_env(["pactl", "get-default-sink"])
+    _, long, _ = _run_env(["pactl", "list", "sinks"])
+    names = dict(re.findall(r"Name: (\S+)\s+Description: (.+)", long))
+    return [{"id": x.split()[1], "name": names.get(x.split()[1], x.split()[1]), "default": x.split()[1] == default.strip()}
+            for x in out.splitlines() if len(x.split()) > 1]
+
+
+def _sound_state() -> dict:
+    if shutil.which("wpctl"):
+        _, out, _ = _run_env(["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"])
+        m = re.search(r"Volume:\s*([\d.]+)", out)
+        outs = _wpctl_outputs()
+        return {"volume": round(float(m.group(1)) * 100) if m else None, "muted": "MUTED" in out,
+                "output": next((o["name"] for o in outs if o["default"]), None), "outputs": outs}
+    if shutil.which("pactl"):
+        _, vol, _ = _run_env(["pactl", "get-sink-volume", "@DEFAULT_SINK@"])
+        _, mute, _ = _run_env(["pactl", "get-sink-mute", "@DEFAULT_SINK@"])
+        m = re.search(r"(\d+)%", vol)
+        outs = _pactl_outputs()
+        return {"volume": int(m.group(1)) if m else None, "muted": "yes" in mute,
+                "output": next((o["name"] for o in outs if o["default"]), None), "outputs": outs}
+    raise ValueError("I can't reach this computer's sound (no PipeWire or PulseAudio tools here)")
+
+
+def do_sound(args: dict) -> dict:
+    action = str(args.get("action") or "get")
+    if action not in SOUND_ACTIONS:
+        raise ValueError("sound actions: " + ", ".join(SOUND_ACTIONS))
+    level = args.get("level")
+    if IS_WINDOWS:
+        if action in ("up", "down"):
+            _key(VK[action], 5)                             # about 10%
+        elif action in ("mute", "unmute", "toggle"):
+            _key(VK["mute"])                                # Windows only toggles
+        elif action == "set":
+            lv = max(0, min(100, int(float(level or 0))))
+            _key(VK["down"], 50)
+            _key(VK["up"], round(lv / 2))
+        else:
+            raise ValueError("on Windows I can turn it up, down, to a level, or mute it, but not read it yet")
+        return {"windows": True}
+    wp = shutil.which("wpctl")
+    sink = "@DEFAULT_AUDIO_SINK@" if wp else "@DEFAULT_SINK@"
+    if action == "set":
+        try:
+            lv = max(0, min(100, int(float(level))))
+        except (TypeError, ValueError):
+            raise ValueError("set the volume to what? (0-100)")
+        argv = ["wpctl", "set-volume", sink, f"{lv / 100:.2f}"] if wp else ["pactl", "set-sink-volume", sink, f"{lv}%"]
+    elif action in ("up", "down"):
+        step = int(float(level or 10))
+        sign = "+" if action == "up" else "-"
+        argv = ["wpctl", "set-volume", "-l", "1.0", sink, f"{step}%{sign}"] if wp else \
+            ["pactl", "set-sink-volume", sink, f"{sign}{step}%"]
+    elif action in ("mute", "unmute", "toggle"):
+        v = {"mute": "1", "unmute": "0", "toggle": "toggle"}[action]
+        argv = ["wpctl", "set-mute", sink, v] if wp else ["pactl", "set-sink-mute", sink, v]
+    elif action == "output":
+        want = " ".join(str(args.get("device") or "").lower().split())
+        if not want:
+            raise ValueError("which output? (say part of its name, e.g. 'HDMI' or 'headphones')")
+        outs = _sound_state()["outputs"]
+        hits = [o for o in outs if all(w in o["name"].lower() for w in want.split())]
+        if len(hits) != 1:
+            raise ValueError(("Which one: " if hits else "No output like that. Outputs: ") +
+                             ", ".join(o["name"] for o in (hits or outs)))
+        argv = ["wpctl", "set-default", hits[0]["id"]] if wp else ["pactl", "set-default-sink", hits[0]["id"]]
+    else:
+        argv = None
+    if argv:
+        code, _, err = _run_env(argv)
+        if code != 0:
+            raise ValueError(f"the sound system said no ({_clean(err) or code})")
+    return _sound_state()
+
+
+PLAYER_FORMAT = ("{{playerName}}\t{{status}}\t{{artist}}\t{{title}}\t{{album}}\t{{duration(position)}}\t"
+                 "{{duration(mpris:length)}}")
+
+
+def _players() -> list[dict]:
+    return parse_players(_run_env(["playerctl", "-a", "metadata", "--format", PLAYER_FORMAT])[1])
+
+
+def parse_players(out: str) -> list[dict]:
+    """playerctl's lines, playing first, then paused."""
+    found = []
+    for line in out.splitlines():
+        f = (line.split("\t") + [""] * 7)[:7]
+        if f[0]:
+            found.append({"player": f[0], "status": f[1], "artist": f[2], "title": f[3], "album": f[4],
+                          "position": f[5], "length": f[6]})
+    return sorted(found, key=lambda p: {"Playing": 0, "Paused": 1}.get(p["status"], 2))
+
+
+def do_player(args: dict) -> dict:
+    action = str(args.get("action") or "status")
+    if action not in PLAYER_ACTIONS:
+        raise ValueError("player actions: " + ", ".join(PLAYER_ACTIONS))
+    if IS_WINDOWS:
+        if action == "status":
+            raise ValueError("I can't see what's playing on Windows yet")
+        _key(VK["toggle" if action in ("play", "pause", "toggle") else action])
+        return {"windows": True}
+    if not shutil.which("playerctl"):
+        raise ValueError("I can't reach media players here (playerctl isn't installed: run the installer with --system)")
+    players = _players()
+    if not players:
+        return {"players": [], "said": "Nothing is playing."}
+    if action != "status":
+        verb = {"toggle": "play-pause"}.get(action, action)
+        code, _, err = _run_env(["playerctl", "-p", players[0]["player"], verb])
+        if code != 0:
+            raise ValueError(f"{players[0]['player']} said no ({_clean(err) or code})")
+        time.sleep(0.4)
+        players = _players()
+    return {"players": players[:5]}
+
+
 # ---- diagnostics (stage 1 of node fixes: read-only) ---------------------------------------------
 #
 # "What's wrong with this computer?" answered with evidence. Every check here only looks: a fixed
@@ -1436,7 +1598,8 @@ def do_showing(args: dict) -> dict:
 
 
 COMMANDS = {"open_url": do_open_url, "launch_app": do_launch_app, "list_apps": do_list_apps, "info": do_info,
-            "home": do_home, "showing": do_showing, "diagnose": do_diagnose, "power": do_power, "wake": do_wake, "health": do_health, "processes": do_processes, "kill": do_kill}
+            "home": do_home, "showing": do_showing, "diagnose": do_diagnose, "power": do_power, "wake": do_wake,
+            "sound": do_sound, "player": do_player, "health": do_health, "processes": do_processes, "kill": do_kill}
 
 
 def execute(cmd: dict) -> dict:

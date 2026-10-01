@@ -111,7 +111,9 @@ RULES
   fi
   # 3. Turning the screen off and on in her shell (Wayland).
   sudo apt-get install -y wlopm >/dev/null 2>&1 || echo "  (wlopm isn't available; screen off/on may not work in her shell)"
-  # 4. Reading the whole system log (diagnostics), not only this account's.
+  # 4. Media players (play, pause, next, what's playing) through playerctl.
+  sudo apt-get install -y playerctl >/dev/null 2>&1 || echo "  (playerctl isn't available; I can't control media players here)"
+  # 5. Reading the whole system log (diagnostics), not only this account's.
   sudo usermod -aG adm "$ME" && echo "  She can read the system log after the next login or restart."
   echo "Done. Restart and shutdown no longer need a password for this account."
 fi
