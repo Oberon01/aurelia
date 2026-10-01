@@ -139,7 +139,9 @@ phone", "send this to all presentation devices", "send it everywhere". "This"
 is the panel you clicked, otherwise the newest one. She can also send a link
 or a short note ("send 'dinner at 7' to the hall tablet"). A Presentation
 display shows it big; a link sent to a Presentation computer opens there. A
-display that isn't open gets it when it next opens (within a day). If the TV
+display that isn't open gets it when it next opens (within a day). Something that isn't on screen yet works too: "send the device list to my
+iPhone" or "show the house on the TV" runs the look-up once and opens it only
+there, never here first (look-ups only; an action happens where you ask). If the TV
 is showing something she opened, the panel waits behind it and she says so.
 
 **The ambient screen.** A Presentation display with nothing on it shows a dim

@@ -108,8 +108,10 @@ TOOLS = [
                                  "number; leave out for the one he clicked or the newest, i.e. 'this'), a link (url) "
                                  "or a short note (text). to: a display by name ('the TV', 'my phone', 'the desk'), "
                                  "or a group by role: 'all presentation devices', 'all phones', 'everywhere'. A "
-                                 "presentation display (a TV) shows it full screen, and a link opens there. Not for "
-                                 "opening a site on a computer: that's open.",
+                                 "presentation display (a TV) shows it full screen, and a link opens there. For something "
+                                 "that isn't on screen yet ('send the device list to my iPhone'), don't open it here "
+                                 "first: call that look-up with _on set to the display instead. Not for opening a "
+                                 "site on a computer: that's open.",
         input_schema={"type": "object", "properties": {
             "to": {"type": "string", "description": "a display's name, or a group like 'all presentation devices'"},
             "panel": {"type": "integer", "x-panel": True, "description": "the number on the panel to send"},

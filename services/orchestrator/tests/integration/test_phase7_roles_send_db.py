@@ -168,3 +168,50 @@ def test_roles_and_sending(stack):
     assert scheduled in {e["task_id"] for e in opened(got["phone"])}
     assert scheduled not in {e["task_id"] for e in opened(got["tablet"])}
     assert scheduled not in {e["task_id"] for e in opened(tv_got)}
+
+
+def test_a_look_up_shown_on_another_display(stack):
+    """'Send the device list to my iPhone': it runs once and opens only there, not here first."""
+    from app import auth
+    from app.main import app
+    orch, ws_url = stack["orch"], stack["orch"].replace("http", "ws") + "/ws"
+    sql("UPDATE devices SET status='revoked' WHERE status='approved'")
+    auth._by_id.clear()
+    desk = device("browser", "Desk", {"os": "Windows"})
+    phone = device("browser", "iPhone", {"os": "iPhone"})
+    httpx.post(f"{orch}/registry/functions", json={
+        "name": "testfn", "description": "test", "url": stack["fn"],
+        "tools": [{"name": n, "description": n, "input_schema": {"type": "object"}} for n in ("status", "look", "switch")]
+    }).raise_for_status()
+    got = {"desk": [], "phone": []}
+    original = app.state.llm
+
+    async def scenario():
+        ls = [asyncio.create_task(listen(ws_url, d, 6, got[k])) for k, d in (("desk", desk), ("phone", phone))]
+        await asyncio.sleep(1.0)
+        async with httpx.AsyncClient(timeout=30) as c:
+            app.state.llm = model = Model([{"calls": [("constellation__devices", {"_on": "my iphone"})]},
+                                           {"text": "It's on your iPhone."}])
+            shown = (await c.post(f"{orch}/ask", headers={"X-Aurelia-Device": str(desk)}, json={
+                "text": "send the device list to my iphone", "session_id": uuid.uuid4().hex})).json()
+            schema = next(t for t in model.seen[0] if t.name == "constellation__devices").input_schema
+            app.state.llm = Model([{"calls": [("testfn__switch", {"_on": "my iphone"})]}, {"text": "No."}])
+            acted = (await c.post(f"{orch}/ask", headers={"X-Aurelia-Device": str(desk)}, json={
+                "text": "turn on the lamp on my iphone", "session_id": uuid.uuid4().hex})).json()
+        await asyncio.gather(*ls)
+        return shown, schema, acted
+
+    try:
+        shown, schema, acted = asyncio.run(scenario())
+    finally:
+        app.state.llm = original
+    assert "_on" in schema["properties"]
+    assert "reply_panel" not in shown and shown["reply"] == "It's on your iPhone."
+    [run] = shown["task_ids"]
+    assert sql("SELECT device FROM task_runs WHERE id=$1", uuid.UUID(run))[0]["device"] == 0
+    on_phone = [e for e in opened(got["phone"]) if e["tool"] == "constellation.devices"]
+    assert len(on_phone) == 1 and on_phone[0]["data"]["sent_from"] == "Desk"
+    res = next(e for e in got["phone"] if e["type"] == "panel.result" and e["task_id"] == on_phone[0]["task_id"])
+    assert any(d["name"] == "iPhone" for d in res["data"]["paired"])
+    assert not [e for e in got["desk"] if e.get("tool") == "constellation.devices"]      # never opened here
+    assert not acted["task_ids"]                                                     # an action isn't sent anywhere

@@ -316,6 +316,9 @@ async def _run_tool_call(app, user: str, qualified: str | None, args: dict, out:
             args = with_panel_task(args, screen)
         except ValueError as exc:
             return _data({"status": "error", "error": str(exc)}), True
+    on = str(args.pop(ON_ARG, "") or "").strip()
+    if on:
+        return await _run_for_display(app, user, qualified, args, on, device, out)
     try:
         task_id = await launch(app, StartTask(tool=qualified, args=args, user=user, display=display, device=device))
         if display == "panel" and qualified not in QUIET_TOOLS:
@@ -338,6 +341,57 @@ async def _run_tool_call(app, user: str, qualified: str | None, args: dict, out:
                       "note": "Nothing was pressed. Tell the user what's waiting; they confirm on the display."}), False
     return _data({"status": result["status"], "partial": result["partial"],
                   "result": result["result"], "error": result["error"]}), result["status"] == "failed"
+
+
+# ---- a look-up shown on another display ("send the device list to my iPhone") -----------------
+
+ELSEWHERE = 0          # a task whose panel is for other displays: its own events reach no display
+
+
+async def _run_for_display(app, user: str, qualified: str, args: dict, on: str, asker: int | None,
+                           out: dict) -> tuple[str, bool]:
+    """Runs a look-up once, without a panel here, and puts its result on the display(s) he named,
+    the same way send does: big on a presentation display, kept for one that isn't open."""
+    from . import constellation
+    fn, _, tool = qualified.partition(".")
+    tier = app.state.governance.decide(fn, tool, user, False).tier
+    if tier not in ("reference", "read"):
+        return _data({"status": "refused", "reason": "Only look-ups can be shown on another display; "
+                                                     "do this one here, or send its panel afterwards."}), True
+    try:
+        targets, label = await constellation.send_targets(app, on, asker)
+    except ValueError as exc:
+        return _data({"status": "error", "error": str(exc)}), True
+    try:
+        task_id = await launch(app, StartTask(tool=qualified, args=args, user=user, device=ELSEWHERE, trigger="send"))
+    except HTTPException as exc:
+        return _data({"status": "refused", "reason": _reason(exc)}), True
+    out["task_ids"].append(task_id)
+    out["_panel_opened"] = True                        # her reply stays a sentence; the panel is over there
+    me = await db.pool().fetchval("SELECT name FROM devices WHERE id=$1", asker) if asker else None
+
+    async def deliver(result: dict) -> dict:
+        went, waiting = [], []
+        for d in targets:
+            await constellation._show_on(app, user, d, qualified, args, result, me or "another display")
+            (went if d["open"] else waiting).append(d["name"])
+        return {"to": went, "not_open": waiting}
+
+    result = await wait_for_result(task_id, app.state.config.current.llm.wait_for_result_seconds)
+    if result is None:                                  # a slow look-up: it goes over when it's done
+        async def later():
+            r = await wait_for_result(task_id, 600)
+            if r and r["status"] == "completed" and r["result"]:
+                await deliver(r["result"])
+        asyncio.create_task(later())
+        return _data({"status": "running", "note": f"Still running; it will appear on {label} when it's done."}), False
+    if result["status"] != "completed" or not result["result"]:
+        return _data({"status": result["status"], "error": result["error"] or "nothing to show"}), True
+    sent = await deliver(result["result"])
+    note = f"Shown on {label}." + (f" Not open right now: {', '.join(sent['not_open'])} (it'll be there when it "
+                                   f"opens)." if sent["not_open"] else "")
+    return _data({"status": "sent", "to": sent["to"], "not_open": sent["not_open"], "note": note,
+                  "result": result["result"]}), False
 
 
 # ---- long replies open as a panel --------------------------------------------------------------
@@ -467,12 +521,19 @@ DISPLAY_SCHEMA = {"type": "string", "enum": ["panel", "brief"],
                                  "only what matters, never repeats the panel."}
 
 
+ON_ARG = "_on"
+ON_SCHEMA = {"type": "string",
+             "description": "Show the result on another of his displays instead of this one, without opening it "
+                            "here: a display's name ('my iphone', 'the TV') or a group ('all presentation devices', "
+                            "'everywhere'). Only for look-ups. Leave out to show it here."}
+
+
 def _plain(schema: dict | None) -> dict:
-    """Our own markers (x-…) stay with us; the model gets plain JSON Schema."""
+    """Our own markers (x-…) stay with us; the model gets plain JSON Schema (plus where to show it)."""
     s = dict(schema or {"type": "object"})
-    if s.get("properties"):
-        s["properties"] = {k: {kk: vv for kk, vv in v.items() if not kk.startswith("x-")} if isinstance(v, dict) else v
-                           for k, v in s["properties"].items()}
+    props = {k: {kk: vv for kk, vv in v.items() if not kk.startswith("x-")} if isinstance(v, dict) else v
+             for k, v in (s.get("properties") or {}).items()}
+    s["properties"] = {**props, ON_ARG: ON_SCHEMA}
     return s
 
 
