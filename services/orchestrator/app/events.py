@@ -12,7 +12,8 @@ from redis.asyncio import Redis
 CHANNEL = "aurelia:events"
 
 EventType = Literal["panel.open", "panel.progress", "panel.result", "panel.close",
-                    "mailbox.changed"]          # the "N for review" chip
+                    "mailbox.changed",          # the "N for review" chip
+                    "confirm.ask"]              # a confirmation card that came after her reply (a slow tool)
 
 
 class PanelEvent(BaseModel):
@@ -37,7 +38,7 @@ def for_display(event: dict[str, Any], me: dict[str, Any] | None) -> bool:
     dev = event.get("device")
     if dev is not None:
         return dev == me["id"]
-    if str(event.get("type", "")).startswith("panel.") and (me.get("kind") == "screen"
+    if str(event.get("type", "")).startswith(("panel.", "confirm.")) and (me.get("kind") == "screen"
                                                          or me.get("role") == "presentation"):
         return False
     return True

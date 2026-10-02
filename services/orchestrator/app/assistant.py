@@ -199,6 +199,9 @@ async def _fastpath_plain(app, body: Ask, fp, resolved) -> dict[str, Any]:
         return out
     out["task_ids"].append(task_id)
     result = await wait_for_result(task_id, app.state.config.current.llm.wait_for_result_seconds)
+    if result is None:
+        asyncio.create_task(_late_follow_up(app, body.user, resolved.qualified_name, task_id,
+                                            getattr(body, "device", None)))
     if result and result["status"] == "failed":
         out["reply"] = f"That didn't work: {result.get('error') or 'the tool failed'}"
     elif (why := await _follow_up(app, body.user, resolved.qualified_name, result, out)):
@@ -207,6 +210,21 @@ async def _fastpath_plain(app, body: Ask, fp, resolved) -> dict[str, Any]:
         out["reply"] = fastpath.render_reply(fp.pattern, fp.groups)
         out["_ok"] = True
     return out
+
+
+async def _late_follow_up(app, user: str, tool: str, task_id: str, device: int | None, wait: float = 600) -> None:
+    """A tool that was still running when she replied may still end in a confirmation (installing,
+    removing, closing a program): when it does, the card goes to the display that asked."""
+    from .events import PanelEvent, publish
+    try:
+        result = await wait_for_result(task_id, wait)
+        held: dict = {"needs_confirmation": []}
+        if await _follow_up(app, user, tool, result, held):
+            for action in held["needs_confirmation"]:
+                await publish(app.state.redis, PanelEvent(type="confirm.ask", task_id=task_id, tool=action["tool"],
+                                                          device=device, data={"action": action}))
+    except Exception:
+        log.exception("couldn't bring a late confirmation for %s", tool)
 
 
 # A function may hand him a confirmation for another function's tool only where it's named here.
@@ -364,8 +382,10 @@ async def _run_tool_call(app, user: str, qualified: str | None, args: dict, out:
     out["task_ids"].append(task_id)
     result = await wait_for_result(task_id, app.state.config.current.llm.wait_for_result_seconds)
     if result is None:
+        asyncio.create_task(_late_follow_up(app, user, qualified, task_id, device))
         return _data({"status": "running", "task_id": task_id,
-                      "note": "Still running; progress is shown on the display."}), False
+                      "note": "Still running; progress is shown on the display. It isn't done: don't say it "
+                              "happened. If it needs his OK, a confirmation card appears when it's ready."}), False
     why = await _follow_up(app, user, qualified, result, out)
     if why:
         return _data({"status": "needs_confirmation", "reason": why,

@@ -445,6 +445,8 @@ with open(pathlib.Path(__file__).with_name("pkg-calls.txt"), "a") as f:
     f.write(tool + " " + " ".join(a) + "\n")
 avail = {"vlc": "multimedia player", "vlc-bin": "binaries from VLC", "mpv": "video player", "media-player-x": "another one"}
 if tool == "apt-cache":
+    if pathlib.Path(__file__).with_name("slow").exists():
+        import time; time.sleep(12)                                      # longer than she waits before replying
     print("\n".join(f"{n} - {d}" for n, d in avail.items() if a[-1].lower() in n))
 elif tool == "dpkg-query":
     if "${Essential} ${Priority}" in a:
@@ -514,3 +516,69 @@ def test_installing_and_removing_apps_only_with_his_yes(node):
 def test_a_new_agent_is_announced_with_every_poll(node):
     got = httpx.get(f"{node['orch']}/nodes/commands?wait=0", headers={"Authorization": f"Bearer {node['key']}"}).json()
     assert got["commands"] == [] and got["agent"]["version"] and len(got["agent"]["sha256"]) == 64
+
+
+def test_a_slow_removal_still_brings_its_card(node):
+    """The look-up took longer than she waits before replying: the card still comes, to the display
+    that asked, and her reply doesn't claim it's done."""
+    import asyncio, uuid, asyncpg
+    from app.main import app
+    from app.llm.base import Completion, ToolCall, Usage
+    from .test_phase7_own_panels_db import listen
+    orch, bin_ = node["orch"], node["record"].parent / "bin"
+    for name in ("apt-cache", "dpkg-query", "apt-get", "pkgcli", "snap"):
+        (bin_ / name).write_text(FAKE_PKG.replace("#!PY", f"#!{sys.executable}"))
+        (bin_ / name).chmod(0o755)
+    (bin_ / "pkgs.json").write_text(json.dumps({"installed": ["vlc-bin", "vlc"], "deps": {}}))
+    (bin_ / "slow").write_text("")
+
+    async def browser():
+        c = await asyncpg.connect(DB)
+        try:
+            return await c.fetchval("INSERT INTO devices (kind, name, status, key_hash, approved_at) VALUES "
+                                    "('browser', 'Desk', 'approved', $1, now()) RETURNING id", uuid.uuid4().hex)
+        finally:
+            await c.close()
+    desk = asyncio.run(browser())
+
+    class Model:
+        def __init__(self):
+            self.steps = [[("constellation__uninstall", {"app": "vlc"})], []]
+            self.seen = []
+
+        async def complete(self, route, system, messages, tools):
+            self.seen.append(messages)
+            calls = self.steps.pop(0) if self.steps else []
+            return Completion(text="" if calls else "I'm checking what removing VLC would take with it.", usage=Usage(10, 5),
+                              model="fake", provider="fake",
+                              tool_calls=[ToolCall(id=uuid.uuid4().hex[:8], name=n, args=a) for n, a in calls])
+    model, original = Model(), app.state.llm
+    got = []
+
+    async def scenario():
+        ws = asyncio.create_task(listen(orch.replace("http", "ws") + "/ws", desk, 30, got))
+        await asyncio.sleep(0.8)
+        async with httpx.AsyncClient(timeout=60) as c:
+            out = (await c.post(f"{orch}/ask", json={"text": "remove vlc", "session_id": uuid.uuid4().hex},
+                                headers={"X-Aurelia-Device": str(desk)})).json()
+        await ws
+        return out
+    app.state.llm = model
+    try:
+        out = asyncio.run(scenario())
+    finally:
+        app.state.llm = original
+    assert out["needs_confirmation"] == []                                   # not there in time for her reply
+    assert "don't say it happened" in " ".join(m.text or "" for m in model.seen[-1])   # and she was told it isn't done
+    cards = [e for e in got if e.get("type") == "confirm.ask"]
+    assert len(cards) == 1, got
+    action = cards[0]["data"]["action"]
+    assert action["tool"] == "constellation.remove_package" and action["args"]["name"] == "vlc"
+    done = httpx.post(f"{orch}/ask/confirm", json={"action_id": action["action_id"], "approve": True},
+                      headers={"X-Aurelia-Device": str(desk)}, timeout=60)
+    assert done.status_code == 200, done.text
+    for _ in range(100):
+        if "vlc" not in json.loads((bin_ / "pkgs.json").read_text())["installed"]:
+            break
+        time.sleep(0.2)
+    assert "vlc" not in json.loads((bin_ / "pkgs.json").read_text())["installed"]

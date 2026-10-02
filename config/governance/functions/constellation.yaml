@@ -92,7 +92,7 @@ rules:
   screens:
     - computer: TV PC
       tv: Living room TV
-      input: ""                        # which HDMI the TV PC is plugged into, e.g. "HDMI 2"
+      input: "HDMI 2"                        # which HDMI the TV PC is plugged into, e.g. "HDMI 2"
   targeting:
     default_target: requesting_node
     quiet_hours: []                    # e.g. { node: bedroom-tv, from: "22:00", to: "07:00" }

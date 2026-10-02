@@ -2423,6 +2423,10 @@ function onEvent(ev) {
   const id = ev.task_id, d = ev.data || {};
   // A presentation display shows only what's addressed to it (the server already sends only that).
   if (document.body.classList.contains("ambient") && ev.type.startsWith("panel.") && ev.device == null) return;
+  if (ev.type === "confirm.ask") {                     // a slow tool finished after her reply and needs his OK
+    if (d.action && !panels.has("confirm-" + d.action.action_id)) showConfirm(d.action);
+    return;
+  }
   if (ev.type === "mailbox.changed") {               // the chip, and an open mailbox panel, stay current
     updateChip(d);
     refreshOpen(["parallax.mailbox"], new Set());

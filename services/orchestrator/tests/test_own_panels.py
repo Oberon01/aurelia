@@ -22,3 +22,12 @@ def test_unaddressed_panels_skip_node_screens():
 def test_everything_else_goes_everywhere_and_inside_gets_all():
     assert all(for_display(ev("mailbox.changed"), d) for d in (DESK, PHONE, TV))
     assert for_display(ev(device=2), None) and for_display(ev(), None)
+
+
+def test_a_late_confirmation_card_goes_to_the_display_that_asked_and_never_to_a_tv():
+    from app.events import for_display
+    ev = {"type": "confirm.ask", "device": 7, "data": {}}
+    assert for_display(ev, {"id": 7, "kind": "browser"}) and not for_display(ev, {"id": 8, "kind": "browser"})
+    loose = {"type": "confirm.ask", "device": None}
+    assert not for_display(loose, {"id": 9, "kind": "screen"})
+    assert not for_display(loose, {"id": 3, "kind": "browser", "role": "presentation"})
