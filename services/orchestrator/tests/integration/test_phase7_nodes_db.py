@@ -91,7 +91,8 @@ def test_a_node_says_what_it_is(node):
 
 def test_aurelia_opens_a_page_and_an_app_on_it(node):
     status, res, _ = run_task(node["orch"], "constellation.open", {"url": "youtube.com", "target": "living room"})
-    assert status == "completed" and res["headline"] == "Opened on Living room TV"
+    assert status == "completed" and res["headline"] == "Asked Living room TV's browser to open it"   # its own browser: not seen
+    assert res["opened"]["unconfirmed"] is True
     status, res, _ = run_task(node["orch"], "constellation.open", {"app": "vlc", "target": "the tv"})
     assert status == "completed" and res["opened"]["what"] == "VLC media player"
     assert started(node) == ["xdg-open https://youtube.com", "gtk-launch org.videolan.vlc"]
@@ -154,7 +155,7 @@ def test_open_x_on_y_prefers_the_computer_and_opens_sites(node):
     """'open youtube on the tv': YouTube isn't an installed app there, so its site opens in the browser."""
     status, res, err = run_task(node["orch"], "constellation.open", {"what": "youtube", "target": "tv"})
     assert status == "completed", err
-    assert res["opened"] == {"node": "Living room TV", "what": "https://www.youtube.com", "kind": "page"}
+    assert res["opened"] == {"node": "Living room TV", "what": "https://www.youtube.com", "kind": "page", "unconfirmed": True}
     status, res, _ = run_task(node["orch"], "constellation.open", {"what": "vlc", "target": "living room"})
     assert status == "completed" and res["opened"]["kind"] == "app"                # a real app wins over a site
     status, res, _ = run_task(node["orch"], "constellation.open", {"what": "twitch.tv", "target": "tv"})
@@ -644,3 +645,29 @@ def test_the_shared_clipboard(node):
     assert status == "failed" and "password manager" in err
     status, res, _ = run_task(orch, "constellation.clipboard", {}, wait=30)
     assert [i["text"] for i in res["clipboard"]["items"]] == ["grocery list: eggs, rice", "https://example.com/recipe"]
+
+
+def test_gaming_and_exam_modes(node):
+    """Gaming mode: she keeps out of the way. Exam mode: the agent answers, then stops completely and
+    stays stopped (even if started again) until its timer, which a stand-in systemd-run records."""
+    orch, bin_, proc = node["orch"], node["record"].parent / "bin", node["proc"]
+    (bin_ / "systemd-run").write_text(f"#!/bin/sh\necho \"$@\" > {bin_}/timer.txt\n")
+    (bin_ / "systemd-run").chmod(0o755)
+
+    res = run_task(orch, "constellation.mode", {"mode": "gaming"}, wait=30)[1]
+    assert res["headline"] == "Gaming mode on Living room TV: I'll keep out of the way"
+    status, _, err = run_task(orch, "constellation.open", {"url": "https://example.com"}, wait=30)
+    assert status == "failed" and "gaming mode" in err
+    assert run_task(orch, "constellation.mode", {"mode": "normal"}, wait=30)[1]["headline"] == "Living room TV is back to normal"
+
+    status, res, err = run_task(orch, "constellation.mode", {"mode": "exam", "hours": 2}, wait=30)
+    assert status == "completed", err
+    assert res["headline"].startswith("Exam mode on Living room TV for 1 h 59 min") or res["headline"].endswith("for 2 h")
+    assert "--on-active=7200" in (bin_ / "timer.txt").read_text()               # it comes back by itself
+    assert proc.wait(timeout=20) == 4                                            # and it really stopped
+    status, _, err = run_task(orch, "constellation.health", {"target": "living room tv"}, wait=30)
+    assert status == "failed" and "exam mode for another 1 h 5" in err
+    cfg = Path(node["record"]).parent / "home" / ".config" / "aurelia-node"
+    again = subprocess.run([sys.executable, str(AGENT), "run"], env={"HOME": str(cfg.parents[1]), "XDG_CONFIG_HOME": str(cfg.parent),
+                                                                     "PATH": f"{bin_}:/usr/bin:/bin"}, timeout=20)
+    assert again.returncode == 4                                                  # started during the exam: stays stopped

@@ -53,12 +53,13 @@ def test_installed_apps_skip_hidden_and_broken(apps_dir):
     assert names == ["Firefox", "VLC media player"]
 
 
-def test_apps_are_found_by_what_he_calls_them(apps_dir, spawned):
+def test_apps_are_found_by_what_he_calls_them(apps_dir, spawned, monkeypatch):
+    monkeypatch.setattr(agent, "_started", lambda app, before, wait=0: "vlc")
     assert agent.find_app("vlc")["id"] == "org.videolan.vlc"
     assert agent.find_app("VLC Media Player")["name"] == "VLC media player"
     assert agent.find_app("firefox")["name"] == "Firefox" and agent.find_app("steam") is None
     out = agent.execute({"kind": "launch_app", "args": {"name": "vlc"}})
-    assert out == {"ok": True, "data": {"app": "VLC media player"}} and spawned == [["gtk-launch", "org.videolan.vlc"]]
+    assert out == {"ok": True, "data": {"app": "VLC media player", "verified": True, "process": "vlc"}} and spawned == [["gtk-launch", "org.videolan.vlc"]]
     assert agent.execute({"kind": "launch_app", "args": {"name": "steam"}}) == {"ok": False, "error": "no app called steam is installed"}
 
 
@@ -1004,7 +1005,7 @@ def wayland_clip(monkeypatch):
 
 def test_clipboard_round_trip(wayland_clip):
     assert agent.do_clipboard_get({}) == {"text": "copied on the TV", "cut": False}
-    assert agent.do_clipboard_set({"text": "from my phone"}) == {"set": True, "chars": 13}
+    assert agent.do_clipboard_set({"text": "from my phone"}) == {"set": True, "chars": 13, "verified": True}
     assert wayland_clip["text"] == "from my phone" and ["wl-copy"] in wayland_clip["calls"]
 
 
@@ -1027,3 +1028,185 @@ def test_no_clipboard_tools_says_how_to_get_them(monkeypatch):
     monkeypatch.setattr(agent, "session_env", lambda: {})
     with pytest.raises(ValueError, match="--system"):
         agent.do_clipboard_get({})
+
+
+# ---- modes: gaming and exam ---------------------------------------------------------------------------
+
+@pytest.fixture
+def cfgdir(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent, "config_dir", lambda: tmp_path)
+    return tmp_path
+
+
+def test_a_running_game_is_noticed():
+    assert agent.game_running(["c:/program files (x86)/steam/steamapps/common/elden ring/game/eldenring.exe"]) == "elden ring"
+    assert agent.game_running(["/home/k/.local/share/steam/steamapps/common/hades/hades"]) == "hades"
+    assert agent.game_running(["c:/program files/epic games/fortnite/fortniteclient.exe"]) == "fortnite"
+    assert agent.game_running(["c:/windows/explorer.exe", "c:/program files/steam/steam.exe"]) is None   # the launcher isn't a game
+
+
+def test_gaming_mode_keeps_out_of_the_way(cfgdir, monkeypatch):
+    agent.write_mode("gaming")
+    refused = agent.execute({"kind": "open_url", "args": {"url": "https://x.example"}})
+    assert refused["ok"] is False and "gaming mode" in refused["error"]
+    monkeypatch.setattr(agent, "_run", lambda argv, timeout=5: "should not be called")
+    assert agent.gpus() == []                                                     # never the GPU while he plays
+    assert agent.execute({"kind": "mode", "args": {"mode": "normal"}})["data"]["mode"] == "normal"
+    assert agent.current_mode() == "normal"
+
+
+def test_auto_gaming_turns_off_only_what_it_turned_on(cfgdir, monkeypatch):
+    games = iter(["hades", None, None])
+    monkeypatch.setattr(agent, "game_running", lambda paths=None: next(games))
+    stop = agent.threading.Event()
+    calls = []
+    real_wait = stop.wait
+    monkeypatch.setattr(stop, "wait", lambda s: (calls.append(1), len(calls) > 2)[1])
+    agent.write_mode("normal")
+    agent.auto_gaming_loop(stop, 0)
+    assert agent.current_mode() == "normal" and len(calls) == 3                 # on with the game, off after it
+    agent.write_mode("gaming")                                                  # he set it himself: it stays
+    games = iter([None])
+    monkeypatch.setattr(agent, "game_running", lambda paths=None: next(games))
+    calls.clear()
+    monkeypatch.setattr(stop, "wait", lambda s: (calls.append(1), len(calls) > 1)[1])
+    agent.auto_gaming_loop(stop, 0)
+    assert agent.current_mode() == "gaming"
+
+
+def test_exam_mode_stops_everything_until_the_time_is_up(cfgdir, monkeypatch):
+    timers = []
+    monkeypatch.setattr(agent, "schedule_return", lambda secs: (timers.append(secs), "systemd")[1])
+    agent.STOP_AFTER_REPLY.clear()
+    got = agent.do_mode({"mode": "exam", "hours": 2})
+    assert got["mode"] == "exam" and timers == [7200] and agent.STOP_AFTER_REPLY.is_set()
+    agent.STOP_AFTER_REPLY.clear()
+    monkeypatch.setattr(agent, "load", lambda: (_ for _ in ()).throw(AssertionError("must not even connect")))
+    assert agent.cmd_run() == agent.EXIT_PAUSED                                 # started during the exam: stays stopped
+    assert agent.do_mode({"mode": "exam", "hours": 50})["until"] <= agent.time.time() + 12 * 3600 + 1   # at most 12 h
+    (cfgdir / "mode.json").write_text('{"mode": "exam", "until": 1}')           # the time is up
+    assert agent.read_mode() == {"mode": "normal", "ended": "exam"}
+
+
+def test_exam_mode_needs_a_way_back(cfgdir, monkeypatch):
+    monkeypatch.setattr(agent, "IS_WINDOWS", False)
+    monkeypatch.setattr(agent.shutil, "which", lambda n: None)
+    with pytest.raises(ValueError, match="stayed on"):
+        agent.do_mode({"mode": "exam"})
+    assert agent.current_mode() == "normal"
+
+
+def test_on_windows_the_guard_restarts_the_agent_but_not_in_exam_mode(monkeypatch, tmp_path):
+    spec = importlib.util.spec_from_file_location("guard", Path(__file__).resolve().parents[1] / "app/node_agent/aurelia_node_guard.py")
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    codes = iter([75, 1, 4])                                                     # updated, crashed, exam mode
+    runs = []
+    import subprocess as sp, time as tm
+    monkeypatch.setattr(guard.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(guard, "config_dir", lambda: tmp_path)
+    monkeypatch.setattr(sp, "call", lambda argv: (runs.append(argv), next(codes))[1])
+    monkeypatch.setattr(tm, "sleep", lambda s: None)
+    monkeypatch.setattr(guard.sys, "argv", ["guard", "run"])
+    with pytest.raises(SystemExit) as stop:
+        guard.main()
+    assert stop.value.code == 4 and len(runs) == 3
+
+
+def test_a_copy_that_doesnt_stay_on_the_clipboard_is_an_error_not_a_success(wayland_clip, monkeypatch):
+    monkeypatch.setattr(agent.time, "sleep", lambda s: None)
+    monkeypatch.setattr(agent, "_run_in", lambda argv, data, timeout=10: (0, "", ""))     # wl-copy "worked"
+    with pytest.raises(ValueError, match="didn't stay there"):
+        agent.do_clipboard_set({"text": "from my phone"})                       # but the old text is still there
+
+
+# ---- checking it happened (no ghost confirmations) -------------------------------------------------
+
+class HomeShell(FakeShell):
+    def __init__(self, pages, closes=True):
+        super().__init__(pages)
+        self.closes = closes
+
+    def home(self):
+        n = len([t for t in self._pages if not self.is_hers(t)])
+        if self.closes:
+            self._pages = [t for t in self._pages if self.is_hers(t)]
+        return n
+
+
+def test_open_url_in_her_shell_is_checked_among_its_pages(monkeypatch):
+    shell = HomeShell([{"id": "v", "url": "https://aurelia/view", "title": "Aurelia"}])
+    opened = []
+    shell.open = lambda url: (opened.append(url), shell._pages.append({"id": "n", "url": "https://www.youtube.com/watch?v=1", "title": "A video"}))
+    monkeypatch.setattr(agent, "SHELL", shell)
+    out = agent.do_open_url({"url": "https://youtube.com/watch?v=1"})
+    assert out == {"url": "https://youtube.com/watch?v=1", "in": "shell", "verified": True, "title": "A video"}
+
+
+_REAL = agent._shell_has
+
+
+def test_open_url_that_never_appears_is_an_error(monkeypatch):
+    shell = HomeShell([{"id": "v", "url": "https://aurelia/view", "title": "Aurelia"}])
+    shell.open = lambda url: None                                             # the browser ignored it
+    monkeypatch.setattr(agent, "SHELL", shell)
+    monkeypatch.setattr(agent, "_shell_has", lambda url: _REAL(url, wait=0))
+    with pytest.raises(ValueError, match="didn't open on my screen"):
+        agent.do_open_url({"url": "https://example.com/"})
+
+
+def test_the_default_browser_is_not_claimed_as_seen(spawned, monkeypatch):
+    monkeypatch.setattr(agent, "SHELL", None)
+    monkeypatch.setattr(agent, "IS_WINDOWS", False)
+    assert agent.do_open_url({"url": "https://example.com/"})["verified"] is False
+
+
+def test_an_app_counts_as_started_only_when_a_new_process_shows_up(apps_dir, spawned, monkeypatch):
+    procs = {1: "systemd", 50: "firefox"}
+    monkeypatch.setattr(agent, "proc_names", lambda: dict(procs))
+    monkeypatch.setattr(agent.time, "sleep", lambda s: None)
+    out = agent._started({"name": "Firefox", "id": "firefox", "exe": "firefox"}, dict(procs), wait=0)
+    assert out is None                                                        # it was already running: not proof
+    procs[77] = "vlc"
+    assert agent._started({"name": "VLC media player", "id": "org.videolan.vlc", "exe": "vlc"}, {1: "systemd"}, wait=0) == "vlc"
+    monkeypatch.setattr(agent, "_started", lambda app, before, wait=0: None)
+    out = agent.do_launch_app({"name": "vlc"})
+    assert out == {"app": "VLC media player", "verified": False}
+
+
+def test_installed_apps_know_their_program(apps_dir):
+    vlc = next(a for a in agent.installed_apps() if a["id"] == "org.videolan.vlc")
+    assert vlc["exe"] == "vlc"
+
+
+def test_going_home_is_checked(monkeypatch):
+    monkeypatch.setattr(agent, "player_busy", lambda: False)
+    pages = [{"id": "v", "url": "https://aurelia/view", "title": "Aurelia"},
+             {"id": "y", "url": "https://youtube.com/", "title": "YouTube"}]
+    monkeypatch.setattr(agent, "SHELL", HomeShell(list(pages)))
+    assert agent.do_home({}) == {"closed": 1, "verified": True}
+    monkeypatch.setattr(agent, "SHELL", HomeShell(list(pages), closes=False))
+    t = iter([0, 0, 10, 10])
+    monkeypatch.setattr(agent.time, "monotonic", lambda: next(t, 10))
+    monkeypatch.setattr(agent.time, "sleep", lambda s: None)
+    with pytest.raises(ValueError, match=r"still on top of me there \(YouTube\)"):
+        agent.do_home({})
+
+
+def test_going_home_says_so_when_the_player_wont_stop(monkeypatch):
+    class P:
+        def control(self, action, args):
+            return {"last": {"title": "Dune"}}
+    monkeypatch.setattr(agent, "player_busy", lambda: True)
+    monkeypatch.setattr(agent, "player", lambda: P())
+    monkeypatch.setattr(agent, "SHELL", HomeShell([{"id": "v", "url": "https://aurelia/view", "title": "Aurelia"}]))
+    with pytest.raises(ValueError, match="my player"):
+        agent.do_home({})
+
+
+def test_her_window_is_a_separate_app_window_named_after_this_computer(monkeypatch, tmp_path):
+    monkeypatch.setattr(agent, "config_dir", lambda: tmp_path)
+    argv = agent.app_argv("/usr/bin/chromium", "https://aura.example:8443/", "Kentrell's laptop")
+    assert argv[0] == "/usr/bin/chromium"
+    assert argv[1] == "--app=https://aura.example:8443/view?app=Kentrell%27s%20laptop"
+    assert f"--user-data-dir={tmp_path / 'app-profile'}" in argv                 # its own profile, not his browser's

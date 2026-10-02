@@ -61,7 +61,11 @@ async def listen(url, dev, seconds, out, report=True):
                 continue
             out.append(e)
             if report and e.get("type") == "panel.open" and e.get("data", {}).get("display") != "brief":
-                showing.append({"n": len(showing) + 1, "title": e["tool"], "tool": e["tool"], "tasks": [e["task_id"]]})
+                if not any(e["task_id"] in p["tasks"] for p in showing):
+                    showing.append({"n": len(showing) + 1, "title": e["tool"], "tool": e["tool"], "tasks": [e["task_id"]]})
+                await c.post(f"{base}/view/screen", json={"panels": showing, "visible": True},
+                             headers={"X-Aurelia-Device": str(dev)})
+            elif report and e.get("type") == "screen.check":                 # "report now", like the real page
                 await c.post(f"{base}/view/screen", json={"panels": showing, "visible": True},
                              headers={"X-Aurelia-Device": str(dev)})
 
@@ -243,12 +247,13 @@ def test_a_send_is_confirmed_or_kept_and_screens_says_what_is_where(stack):
         "name": "testfn", "description": "test", "url": stack["fn"],
         "tools": [{"name": n, "description": n, "input_schema": {"type": "object"}} for n in ("status", "look")]
     }).raise_for_status()
-    got = {"phone": [], "tab": []}
+    got = {"phone": [], "tab": [], "desk": []}
     original = app.state.llm
 
     async def scenario():
-        ls = [asyncio.create_task(listen(ws_url, phone, 22, got["phone"], report=False)),     # frozen in a pocket
-              asyncio.create_task(listen(ws_url, tab, 22, got["tab"]))]
+        ls = [asyncio.create_task(listen(ws_url, phone, 26, got["phone"], report=False)),     # frozen in a pocket
+              asyncio.create_task(listen(ws_url, tab, 26, got["tab"])),
+              asyncio.create_task(listen(ws_url, desk, 26, got["desk"], report=False))]
         await asyncio.sleep(1.0)
         async with httpx.AsyncClient(timeout=60) as c:
             app.state.llm = Model([{"calls": [("testfn__status", {"_on": "everywhere"})]}, {"text": "Done."}])
@@ -264,6 +269,9 @@ def test_a_send_is_confirmed_or_kept_and_screens_says_what_is_where(stack):
             # The phone comes back on screen: it picks up what was kept for it.
             kept = (await c.post(f"{orch}/view/queued", headers={"X-Aurelia-Device": str(phone)})).json()
             again = (await c.post(f"{orch}/view/queued", headers={"X-Aurelia-Device": str(phone)})).json()
+            await c.post(f"{orch}/view/screen", headers={"X-Aurelia-Device": str(phone)}, json={   # it shows it now
+                "visible": True, "panels": [{"n": 1, "title": "x", "tool": "testfn.status", "tasks": [kept["events"][0]["task_id"]]}]})
+            await asyncio.sleep(1.0)
         await asyncio.gather(*ls)
         return sent, row, kept, again
 
@@ -275,7 +283,10 @@ def test_a_send_is_confirmed_or_kept_and_screens_says_what_is_where(stack):
     tab_tasks = {e["task_id"] for e in opened(got["tab"]) if e["tool"] == "testfn.status"}
     assert len(tab_tasks) == 1
     phone_opens = [e for e in opened(got["phone"]) if e["tool"] == "testfn.status"]
-    assert len(phone_opens) == 2 and phone_opens[0]["task_id"] == phone_opens[1]["task_id"]    # sent, then once more
+    assert len(phone_opens) == 3 and len({e["task_id"] for e in phone_opens}) == 1             # three tries, one panel
+    assert len([e for e in got["phone"] if e.get("type") == "screen.check"]) == 3              # each asking for a report
+    told = [e for e in got["desk"] if e.get("type") == "sent.shown"]
+    assert len(told) == 1 and told[0]["data"]["to"] == "iPhone"                               # shown at last: the sender hears
     assert [e["type"] for e in kept["events"]] == ["panel.open", "panel.result", "panel.close"]
     assert kept["events"][0]["task_id"] == phone_opens[0]["task_id"] and again["events"] == []
     res = json.loads(row["result"]) if isinstance(row["result"], str) else row["result"]
