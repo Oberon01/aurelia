@@ -207,20 +207,21 @@ TOOLS = [
         name="back", description="Go back to the previous page on a screen (like a browser's back button).",
         input_schema={"type": "object", "properties": {"target": {"type": "string"}}}, cancellable=False),
     registry.ToolSpec(
-        name="media", description="Control what's playing on one of his computers. On the page of a screen running "
-                                  "your shell: play, pause, toggle, forward / back (seconds; default 10), seek (to "
-                                  "seconds from the start), restart, mute, unmute, volume (level 0-100), speed (rate "
-                                  "0.25-4), fullscreen, exit_fullscreen. amount takes his words instead of seconds "
-                                  "('2 minutes', '1:30'). For any player on the computer (Spotify, VLC, a browser "
-                                  "tab): next, previous, now_playing ('what's playing'); play / pause also reach "
-                                  "them when there's no video on the page. The computer's own volume is sound.",
+        name="media", description="Control what's playing on one of his computers: what your player is playing "
+                                  "there first (from quasar.play), else the video on a page of your shell, else any "
+                                  "player on the computer (Spotify, VLC, a browser tab). play, pause, toggle, stop, "
+                                  "forward / back (seconds; default 10), seek (to seconds from the start), restart, "
+                                  "mute, unmute, volume (level 0-100), speed (rate 0.25-4), next / previous (episode, "
+                                  "song), subtitles and audio (which: on, off, next, or a language), now_playing "
+                                  "('what's playing'), fullscreen, exit_fullscreen. amount takes his words instead of "
+                                  "seconds ('2 minutes', '1:30'). The computer's own volume is sound.",
         input_schema={"type": "object", "properties": {
             "target": {"type": "string"},
-            "action": {"type": "string", "enum": ["play", "pause", "toggle", "forward", "back", "seek", "restart", "mute",
-                                                  "unmute", "volume", "speed", "fullscreen", "exit_fullscreen",
-                                                  "next", "previous", "now_playing"]},
+            "action": {"type": "string", "enum": ["play", "pause", "toggle", "stop", "forward", "back", "seek", "restart",
+                                                  "mute", "unmute", "volume", "speed", "fullscreen", "exit_fullscreen",
+                                                  "next", "previous", "now_playing", "subtitles", "audio"]},
             "seconds": {"type": "number"}, "amount": {"type": "string"}, "level": {"type": "number"},
-            "rate": {"type": "number"}}, "required": ["action"]},
+            "rate": {"type": "number"}, "which": {"type": "string"}}, "required": ["action"]},
         cancellable=False),
     registry.ToolSpec(
         name="sound", description="The sound of one of his computers (not one video): action get (volume, mute, "
@@ -870,7 +871,8 @@ ROKU = {"pause": ("tv_remote", {"keys": "pause"}), "play": ("tv_remote", {"keys"
 async def media(app, user: str, args: dict) -> dict:
     action = str(args.get("action") or "").lower().replace(" ", "_")
     action = {"resume": "play", "unpause": "play", "rewind": "back", "fast_forward": "forward", "skip": "forward",
-              "full_screen": "fullscreen", "exit_full_screen": "exit_fullscreen"}.get(action, action)
+              "full_screen": "fullscreen", "exit_full_screen": "exit_fullscreen", "status": "now_playing",
+              "captions": "subtitles", "subs": "subtitles", "next_episode": "next", "prev": "previous"}.get(action, action)
     secs = seconds_in(args.get("amount"))
     if secs is None and args.get("seconds") not in (None, ""):
         secs = float(args["seconds"])
@@ -886,20 +888,22 @@ async def media(app, user: str, args: dict) -> dict:
             if tv is not None:
                 return tv
         raise ValueError(str(exc))
-    if action in PLAYER_ONLY or (action in PLAYER_TOO and node.get("shell") != "on"):
-        return await _player(app, node, action)
+    extra = {"seconds": secs or 0, "level": args.get("level"), "rate": args.get("rate"), "which": args.get("which")}
+    if action in PLAYER_ONLY or node.get("shell") != "on":
+        return await _player(app, node, action, extra)
     try:
-        data = await _ask_node(app, node, "page_media", {"action": action, "seconds": secs or 0, "level": args.get("level"),
-                                                         "rate": args.get("rate")})
+        data = await _ask_node(app, node, "page_media", {"action": action, **extra})
     except ValueError as exc:
         if "no video" not in str(exc):
             raise
         if action in PLAYER_TOO:                            # music in another app, or a tab that isn't mine
-            return await _player(app, node, action)
+            return await _player(app, node, action, extra)
         if action in ("mute", "unmute", "volume"):          # no video here: the computer's own sound
             return await sound(app, user, {"target": node["name"], "action": "set" if action == "volume" else action,
                                            "level": args.get("level")}, node=node)
         raise
+    if "player" in data:                                    # my player was on the screen: it did it
+        return mine(node, action, data["player"])
     v = _video(data.get("video")) or {}
     head = DONE.get(action, "Done") + (f" · {v['position']}" if v.get("position") and action in ("forward", "back", "seek", "restart", "pause", "play") else "")
     out = {"headline": head, "video": {"node": node["name"], "title": data.get("title") or "", **v}}
@@ -909,9 +913,37 @@ async def media(app, user: str, args: dict) -> dict:
     return out
 
 
-PLAYER_ONLY = ("next", "previous", "now_playing")
+PLAYER_ONLY = ("next", "previous", "now_playing", "stop", "subtitles", "audio")
 PLAYER_TOO = ("play", "pause", "toggle")
 PLAYER_DONE = {"play": "Playing", "pause": "Paused", "toggle": "Done", "next": "Next", "previous": "Previous"}
+MINE_DONE = {**DONE, "toggle": "Done", "next": "Next", "previous": "Previous", "now_playing": "Playing",
+             "subtitles": "Subtitles", "audio": "Audio"}
+
+
+def _clock(sec) -> str:
+    s = int(sec or 0)
+    return f"{s // 3600}:{s % 3600 // 60:02d}:{s % 60:02d}" if s >= 3600 else f"{s // 60}:{s % 60:02d}"
+
+
+def mine(node: dict, action: str, st: dict) -> dict:
+    """What my own player did and is doing (from the player itself)."""
+    from .quasar import now_block
+    if not st.get("active"):
+        last = st.get("last") or {}
+        if st.get("stopped") and last.get("title"):
+            return {"headline": f"Stopped {last['title']}"[:140], "now": {"node": node["name"], "active": False}}
+        return {"headline": f"Nothing is playing on {node['name']}", "now": {"node": node["name"], "active": False}}
+    title = st.get("title") or "it"
+    if action == "now_playing":
+        head = f"{'Paused' if st.get('paused') else 'Playing'}: {title} ({_clock(st.get('position'))}"
+        head += f" of {_clock(st['duration'])})" if st.get("duration") else ")"
+    elif action == "subtitles":
+        head = f"Subtitles {st.get('subtitles') or 'off'}"
+    elif action in ("forward", "back", "seek", "restart", "pause", "play"):
+        head = f"{MINE_DONE.get(action, 'Done')} · {_clock(st.get('position'))}"
+    else:
+        head = f"{MINE_DONE.get(action, 'Done')} · {title}"
+    return {"headline": head[:140], "now": now_block(node["name"], st)}
 
 
 def _track(p: dict) -> str:
@@ -919,9 +951,13 @@ def _track(p: dict) -> str:
     return f"{who} — {what}" if who and what else what or who or p.get("player") or "something"
 
 
-async def _player(app, node: dict, action: str) -> dict:
-    """Any media player on the computer (MPRIS through playerctl; the media keys on Windows)."""
-    data = await _ask_new(app, node, "player", {"action": "status" if action == "now_playing" else action})
+async def _player(app, node: dict, action: str, extra: dict | None = None) -> dict:
+    """My own player when it's playing there, else any media player on the computer (MPRIS through
+    playerctl; the media keys on Windows)."""
+    data = await _ask_new(app, node, "player", {"action": "status" if action == "now_playing" else action,
+                                                **{k: v for k, v in (extra or {}).items() if v not in (None, "")}})
+    if "player" in data:
+        return mine(node, action, data["player"])
     if data.get("windows"):
         return {"headline": f"{node['name']}: {PLAYER_DONE.get(action, 'Done')}",
                 "did": {"node": node["name"], "what": f"Pressed the {action} media key"}}

@@ -728,14 +728,22 @@ def test_windows_uses_the_media_keys(monkeypatch):
 # ---- the live view -------------------------------------------------------------------------------
 
 class FakeTab:
+    """A page's control connection: a screencast that has one new frame each time it's asked."""
+
     def __init__(self, target, timeout=8):
-        self.target, self.calls, self.closed = target, [], False
+        self.target, self.calls, self.closed, self.queued = target, [], False, []
 
     def call(self, method, **params):
         self.calls.append((method, params))
-        if method == "Page.getLayoutMetrics":
-            return {"cssVisualViewport": {"pageX": 0, "pageY": 240, "clientWidth": 1920, "clientHeight": 1080}}
-        return {"data": "/9j/frame"}
+        if method == "Page.startScreencast":
+            self.queued.append({"data": "/9j/frame", "sessionId": 1, "metadata": {"deviceWidth": 1280, "deviceHeight": 720}})
+        return {"data": "/9j/still"}
+
+    def notify(self, method, **params):
+        self.calls.append((method, params))
+
+    def event(self, method, timeout):
+        return self.queued.pop(0) if self.queued else None
 
     def close(self):
         self.closed = True
@@ -761,12 +769,23 @@ class FakeShell:
         return mine[0]
 
 
-def test_a_live_frame_is_the_visible_page_scaled_down():
+def test_live_uses_the_screencast_which_never_resizes_the_page():
     tab = FakeTab({"id": "a"})
-    data, w, h = agent.live_frame(tab)
-    shot = dict(tab.calls)["Page.captureScreenshot"]
+    agent.live_start(tab)
+    data, w, h = agent.live_frame(tab, 0.1)
+    names = [c[0] for c in tab.calls]
     assert data == "/9j/frame" and (w, h) == (1280, 720)
-    assert shot["clip"] == {"x": 0, "y": 240, "width": 1920.0, "height": 1080.0, "scale": 1280 / 1920}  # what's scrolled into view
+    assert "Page.captureScreenshot" not in names and "Page.screencastFrameAck" in names    # acked, or it stops sending
+    assert dict(tab.calls)["Page.startScreencast"]["maxWidth"] == agent.LIVE_WIDTH
+    assert agent.live_frame(tab, 0.01) is None                                            # nothing new: keep the last
+
+
+def test_a_look_screenshot_comes_from_the_screencast_too():
+    class T(FakeTab):
+        pass
+    t = T({"id": "a"})
+    assert agent.Tab.shot(t) == "/9j/frame"
+    assert [c[0] for c in t.calls] == ["Page.startScreencast", "Page.screencastFrameAck", "Page.stopScreencast"]
 
 
 def test_live_follows_the_screen_and_stops_when_nobody_watches(monkeypatch):
@@ -778,6 +797,7 @@ def test_live_follows_the_screen_and_stops_when_nobody_watches(monkeypatch):
     monkeypatch.setattr(agent, "call", lambda server, path, body, key, timeout=10: (sent.append((path, body)), {"keep": next(keeps)})[1])
     agent.live_stream("https://aurelia", "k", agent.threading.Event())
     assert len(sent) == 3 and all(p == "/nodes/live/frame" for p, _ in sent)
+    assert "jpeg" not in sent[1][1]                                           # the page didn't change: no new frame
     body = sent[0][1]
     assert body["site"] == "accounts.spotify.com" and body["title"] == "Log in - Spotify" and body["jpeg"] == "/9j/frame"
     assert "secret-token" not in str(sent)                                   # the address's query never leaves
@@ -806,3 +826,27 @@ def test_live_ends_when_the_server_cant_be_reached(monkeypatch):
     monkeypatch.setattr(agent, "call", down)
     agent.live_stream("https://aurelia", "k", agent.threading.Event())
     assert calls == [1]                                                     # back to waiting, not a busy loop
+
+
+# ---- her player ----------------------------------------------------------------------------------
+
+def test_she_plays_only_her_own_streams(monkeypatch):
+    monkeypatch.setattr(agent, "SERVER_URL", "https://aurelia.example:8443")
+    for bad in ([{"path": "/../etc/passwd"}], [{"path": "https://evil.example/x.mp4"}], [{"url": "file:///etc/passwd"}],
+                [{"path": "/nodes/media/" + "a" * 32 + "/../x"}], []):
+        with pytest.raises(ValueError):
+            agent.do_play({"items": bad})
+
+
+def test_a_long_home_still_gets_a_player_socket(monkeypatch, tmp_path):
+    deep = tmp_path / ("x" * 90)
+    deep.mkdir()
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(deep))
+    path = agent.mpv_socket()
+    assert len(path) <= 100 and path.endswith(".sock")
+
+
+def test_without_mpv_she_says_how_to_get_it(monkeypatch):
+    monkeypatch.setattr(agent, "find_mpv", lambda: None)
+    with pytest.raises(ValueError, match="--system"):
+        agent.Mpv(path="/tmp/nowhere.sock").start()

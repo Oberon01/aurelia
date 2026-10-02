@@ -342,7 +342,12 @@ async def live_frame(body: LiveFrame, request: Request):
         if len(raw) > LIVE_MAX_BYTES or not raw.startswith(b"\xff\xd8"):
             raise HTTPException(400, "not a JPEG, or too big")
         await redis.set(LIVE_FRAME.format(dev["id"]), raw, ex=LIVE_FRAME_SECONDS)
-        meta["problem"] = ""
+    elif not body.problem:                                   # the page hasn't changed: the last frame stays
+        await redis.expire(LIVE_FRAME.format(dev["id"]), LIVE_FRAME_SECONDS)
+        old = await redis.get(LIVE_META.format(dev["id"]))
+        if old:
+            prev = json.loads(old)
+            meta.update(w=prev.get("w", 0), h=prev.get("h", 0))
     await redis.set(LIVE_META.format(dev["id"]), json.dumps(meta), ex=LIVE_FRAME_SECONDS)
     return {"keep": bool(await redis.exists(LIVE_WANT.format(dev["id"])))}
 

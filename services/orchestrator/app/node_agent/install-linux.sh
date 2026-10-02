@@ -5,7 +5,7 @@
 #   ... | bash -s -- <address> "Living room TV" --shell      also make this screen hers (asks for sudo once)
 #   ... | bash -s -- <address> --no-shell                    back to a normal desktop at login
 #   ... | bash -s -- <address> --system                      one-time sudo: restart/shutdown/sleep without a
-#                                                            password, shutdowns that can't hang, the system log
+#                                                            password, shutdowns that can't hang, the system log, her player (mpv)
 #   ... | bash -s -- <address> --role=server                 what it's for (presentation, workstation, server);
 #                                                            guessed if left out, changeable on the devices panel
 #
@@ -113,7 +113,9 @@ RULES
   sudo apt-get install -y wlopm >/dev/null 2>&1 || echo "  (wlopm isn't available; screen off/on may not work in her shell)"
   # 4. Media players (play, pause, next, what's playing) through playerctl.
   sudo apt-get install -y playerctl >/dev/null 2>&1 || echo "  (playerctl isn't available; I can't control media players here)"
-  # 5. Reading the whole system log (diagnostics), not only this account's.
+  # 5. Her player (video and music she plays here, full screen, controlled over its own socket).
+  sudo apt-get install -y mpv >/dev/null 2>&1 || echo "  (mpv isn't available; I can't play video or music here)"
+  # 6. Reading the whole system log (diagnostics), not only this account's.
   sudo usermod -aG adm "$ME" && echo "  She can read the system log after the next login or restart."
   echo "Done. Restart and shutdown no longer need a password for this account."
 fi

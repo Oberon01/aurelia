@@ -71,6 +71,9 @@ services:
       - ./config:/config:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"   # reach a local Ollama on the host (Linux)
+    networks:
+      - default
+      - homelab                           # to reach Jellyfin (Quasar), which publishes no port
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -165,7 +168,7 @@ services:
       - ${AURELIA_FILES:-./data/files}:/files:ro   # your file server (AURELIA_FILES in .env), read-only
     networks:
       - default
-      - homelab                           # only Kepler joins it, to reach Trilium; nothing else in Aurelia does
+      - homelab                           # Kepler joins it to reach Trilium (the orchestrator, for Jellyfin)
     depends_on:
       orchestrator:
         condition: service_healthy

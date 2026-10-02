@@ -58,7 +58,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.5.8"
+VERSION = "0.5.9"
 IS_WINDOWS = platform.system() == "Windows"
 EXIT_REVOKED = 3                                   # the service manager doesn't restart after this
 EXIT_UPDATED = 75                                  # restart me: a new version is in place
@@ -1224,6 +1224,11 @@ def parse_players(out: str) -> list[dict]:
 
 def do_player(args: dict) -> dict:
     action = str(args.get("action") or "status")
+    if player_busy() and action in PLAYER_STEP_ACTIONS:      # her own player, when it's playing
+        p = player()
+        return {"player": p.status() if action == "status" else p.control(action, args)}
+    if action in PLAYER_STEP_ACTIONS and action not in PLAYER_ACTIONS:
+        raise ValueError("nothing of mine is playing here")
     if action not in PLAYER_ACTIONS:
         raise ValueError("player actions: " + ", ".join(PLAYER_ACTIONS))
     if IS_WINDOWS:
@@ -1232,6 +1237,8 @@ def do_player(args: dict) -> dict:
         _key(VK["toggle" if action in ("play", "pause", "toggle") else action])
         return {"windows": True}
     if not shutil.which("playerctl"):
+        if action == "status":                                  # mine isn't playing, and I can't see the others
+            return {"player": {"active": False}}
         raise ValueError("I can't reach media players here (playerctl isn't installed: run the installer with --system)")
     players = _players()
     if not players:
@@ -1244,6 +1251,298 @@ def do_player(args: dict) -> dict:
         time.sleep(0.4)
         players = _players()
     return {"players": players[:5]}
+
+
+# ---- her player ----------------------------------------------------------------------------------
+#
+# Video and music that Aurelia plays here go to her own player (mpv), not a web page: she hands it
+# links to her own server (Jellyfin through Aurelia, never anything else), and it tells her exactly
+# what it's doing (title, position, paused, volume, subtitles) over its control socket. Full
+# screen on top of her shell while it plays; her shell is back when it stops. It reports its state
+# to Aurelia every few seconds while it plays (so "what's playing" and resume points are exact).
+
+SERVER_URL: str = ""
+NODE_KEY: str = ""
+PLAYER_STEP_ACTIONS = ("play", "pause", "toggle", "stop", "forward", "back", "seek", "restart", "volume", "mute",
+                       "unmute", "next", "previous", "subtitles", "audio", "speed", "status")
+
+
+def mpv_socket() -> str:
+    if IS_WINDOWS:
+        return r"\\.\pipe\aurelia-mpv"
+    run = os.environ.get("XDG_RUNTIME_DIR") or session_env().get("XDG_RUNTIME_DIR")
+    base = Path(run) if run and Path(run).is_dir() else config_dir()
+    path = str(base / "aurelia-mpv.sock")
+    if len(path) > 100:                                   # a socket's address is limited to about 108 bytes
+        d = Path("/tmp") / f"aurelia-{os.getuid()}"
+        d.mkdir(mode=0o700, exist_ok=True)
+        path = str(d / "mpv.sock")
+    return path
+
+
+def find_mpv() -> str | None:
+    exe = shutil.which("mpv")
+    if exe or not IS_WINDOWS:
+        return exe
+    for root in (os.environ.get("ProgramFiles", ""), os.environ.get("LOCALAPPDATA", "")):
+        for sub in ("mpv\\mpv.exe", "Programs\\mpv\\mpv.exe"):
+            if root and Path(root, sub).exists():
+                return str(Path(root, sub))
+    return None
+
+
+class Mpv:
+    """Her player: one mpv process, idle (no window) until it has something to play."""
+
+    def __init__(self, path: str | None = None):
+        self.path = path or mpv_socket()
+        self.proc: subprocess.Popen | None = None
+        self.items: list[dict] = []
+        self.last: dict = {}
+        self.next_id = 0
+        self.lock = threading.Lock()
+        self.reporting = False
+        self.ended: dict | None = None                                  # where the one it just left got to
+
+    def argv(self, exe: str) -> list[str]:
+        extra = os.environ.get("AURELIA_MPV_ARGS", "").split()          # tests: --vo=null --ao=null
+        return [exe, "--idle=yes", "--force-window=no", "--fs", "--no-terminal", "--really-quiet", "--no-config",
+                "--load-scripts=no", "--ytdl=no", "--hwdec=auto-safe", "--keep-open=no", "--audio-display=no",
+                "--title=Aurelia", f"--input-ipc-server={self.path}", *extra]
+
+    def running(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
+
+    def start(self) -> None:
+        if self.running():
+            return
+        exe = find_mpv()
+        if not exe:
+            raise ValueError("I can't play here yet: my player (mpv) isn't installed (run the installer with --system)")
+        if not IS_WINDOWS:
+            try:
+                os.unlink(self.path)
+            except OSError:
+                pass
+        kw = {} if IS_WINDOWS else {"start_new_session": True}
+        self.proc = subprocess.Popen(self.argv(exe), env=session_env(), stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True, **kw)
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            try:
+                self.command("get_property", "idle-active")
+                return
+            except (OSError, ValueError):
+                if not self.running():
+                    break
+                time.sleep(0.15)
+        raise ValueError("my player didn't start here")
+
+    def _open(self):
+        if IS_WINDOWS:
+            return open(self.path, "r+b", buffering=0)
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(5)
+        s.connect(self.path)
+        return s.makefile("rwb", buffering=0), s
+
+    def command(self, *args):
+        with self.lock:
+            self.next_id += 1
+            rid = self.next_id
+            opened = self._open()
+            f, sock = opened if isinstance(opened, tuple) else (opened, None)
+            try:
+                f.write((json.dumps({"command": list(args), "request_id": rid}) + "\n").encode())
+                while True:
+                    line = f.readline()
+                    if not line:
+                        raise OSError("the player closed its control socket")
+                    msg = json.loads(line)
+                    if msg.get("request_id") == rid:
+                        if msg.get("error") not in (None, "success"):
+                            raise ValueError(str(msg["error"]))
+                        return msg.get("data")
+            finally:
+                f.close()
+                if sock:
+                    sock.close()
+
+    def get(self, prop: str, default=None):
+        try:
+            v = self.command("get_property", prop)
+            return default if v is None else v
+        except (OSError, ValueError):
+            return default
+
+    def active(self) -> bool:
+        return self.running() and not self.get("idle-active", True)
+
+    def status(self) -> dict:
+        if not self.active():
+            return {"active": False, **({"last": self.last} if self.last else {})}
+        pos = int(self.get("playlist-pos", 0) or 0)
+        it = self.items[pos] if 0 <= pos < len(self.items) else {}
+        subs = [t for t in (self.get("track-list", []) or []) if isinstance(t, dict) and t.get("type") == "sub"]
+        on = next((t for t in subs if t.get("selected")), None)
+        dur = self.get("duration")
+        st = {"active": True, "title": it.get("title") or self.get("media-title", ""), "item": it.get("item"),
+              "kind": it.get("kind") or "video", "position": round(float(self.get("time-pos", 0) or 0), 1),
+              "duration": round(float(dur), 1) if dur else None, "paused": bool(self.get("pause", False)),
+              "volume": round(float(self.get("volume", 0) or 0)), "muted": bool(self.get("mute", False)),
+              "index": pos, "count": len(self.items),
+              "subtitles": ((on.get("lang") or on.get("title") or "on") if on else "off") if subs else None,
+              "next": self.items[pos + 1].get("title") if pos + 1 < len(self.items) else None}
+        self.last = {k: st[k] for k in ("title", "item", "kind", "position", "duration")}
+        return st
+
+    def play(self, items: list[dict], start: float = 0.0, header: str | None = None) -> dict:
+        self.start()
+        if header:
+            self.command("set_property", "http-header-fields", header)
+        self.items, self.last = items, {}
+        self.command("set_property", "pause", False)
+        self.command("loadfile", items[0]["url"], "replace")
+        for it in items[1:]:
+            self.command("loadfile", it["url"], "append")
+        deadline, seen_busy = time.monotonic() + 20, False
+        while time.monotonic() < deadline:                    # confirmed from the player itself
+            idle = self.get("idle-active", True)
+            seen_busy = seen_busy or not idle
+            if not idle and (self.get("duration") or self.get("time-pos") is not None):
+                break
+            if seen_busy and idle:
+                raise ValueError("my player couldn't open it (the stream may be unavailable)")
+            time.sleep(0.2)
+        else:
+            raise ValueError("my player didn't start playing it within 20 seconds")
+        if start and start > 5:
+            self.command("seek", float(start), "absolute+exact")
+        time.sleep(0.2)
+        return self.status()
+
+    def control(self, action: str, args: dict) -> dict:
+        secs = float(args.get("seconds") or 0)
+        if action == "play":
+            self.command("set_property", "pause", False)
+        elif action == "pause":
+            self.command("set_property", "pause", True)
+        elif action == "toggle":
+            self.command("cycle", "pause")
+        elif action == "stop":
+            last = self.status()
+            self.command("stop")
+            self.items = []
+            return {"active": False, "stopped": True, "last": {k: last.get(k) for k in ("title", "item", "kind", "position", "duration")}}
+        elif action in ("forward", "back"):
+            self.command("seek", (secs or 10) * (1 if action == "forward" else -1), "relative+exact")
+        elif action == "seek":
+            self.command("seek", secs, "absolute+exact")
+        elif action == "restart":
+            self.command("seek", 0, "absolute")
+        elif action == "volume":
+            self.command("set_property", "volume", max(0, min(130, float(args.get("level") or 0))))
+        elif action in ("mute", "unmute"):
+            self.command("set_property", "mute", action == "mute")
+        elif action in ("next", "previous"):
+            cur = self.status()
+            self.ended = {k: cur.get(k) for k in ("title", "item", "kind", "position", "duration")}
+            try:
+                self.command("playlist-next" if action == "next" else "playlist-prev", "weak")
+            except ValueError:
+                raise ValueError("that's the last one" if action == "next" else "that's the first one")
+        elif action == "speed":
+            self.command("set_property", "speed", max(0.25, min(4.0, float(args.get("rate") or 1))))
+        elif action in ("subtitles", "audio"):
+            self._track("sub" if action == "subtitles" else "audio", str(args.get("which") or "next").lower().strip())
+        elif action != "status":
+            raise ValueError("my player can " + ", ".join(PLAYER_STEP_ACTIONS))
+        time.sleep(0.35)
+        return self.status()
+
+    def _track(self, kind: str, which: str) -> None:
+        prop = "sid" if kind == "sub" else "aid"
+        if which in ("off", "none", "no") and kind == "sub":
+            self.command("set_property", prop, "no")
+            return
+        tracks = [t for t in (self.get("track-list", []) or []) if isinstance(t, dict) and t.get("type") == kind]
+        if not tracks:
+            raise ValueError("this has no subtitles" if kind == "sub" else "this has only one audio track")
+        if which in ("on", "next", ""):
+            if which == "on" and any(t.get("selected") for t in tracks):
+                return
+            self.command("cycle", prop)
+            return
+        want = [t for t in tracks if which in str(t.get("lang") or "").lower() or which in str(t.get("title") or "").lower()
+                or {"english": "en", "japanese": "ja", "spanish": "es"}.get(which, "\x00") == str(t.get("lang") or "")[:2]]
+        if not want:
+            raise ValueError("no track like that; it has " + ", ".join(str(t.get("lang") or t.get("title") or t.get("id")) for t in tracks))
+        self.command("set_property", prop, want[0]["id"])
+
+    def report(self) -> None:
+        """While something plays: its state to Aurelia every few seconds, and once more when it stops."""
+        if self.reporting or not SERVER_URL:
+            return
+        self.reporting = True
+
+        def go():
+            try:
+                while True:
+                    try:
+                        st = self.status()
+                    except Exception:
+                        st = {"active": False}
+                    ended, self.ended = self.ended, None
+                    if ended and st.get("active") and ended.get("item") != st.get("item"):
+                        st = {**st, "last": ended}
+                    try:
+                        call(SERVER_URL, "/nodes/player/state", st, NODE_KEY, timeout=10)
+                    except Revoked:
+                        return
+                    except (OSError, RuntimeError, ValueError):
+                        pass
+                    if not st.get("active"):
+                        return
+                    for _ in range(20):                       # every 10 s; sooner when it moves on
+                        time.sleep(0.5)
+                        if not self.active() or int(self.get("playlist-pos", 0) or 0) != st.get("index"):
+                            break
+            finally:
+                self.reporting = False
+        threading.Thread(target=go, daemon=True).start()
+
+
+PLAYER: Mpv | None = None
+
+
+def player() -> Mpv:
+    global PLAYER
+    if PLAYER is None:
+        PLAYER = Mpv()
+    return PLAYER
+
+
+def player_busy() -> bool:
+    return PLAYER is not None and PLAYER.active()
+
+
+def do_play(args: dict) -> dict:
+    """Play streams from Aurelia's own server (/nodes/media/<ticket>), in order, full screen; start:
+    seconds into the first. Nothing else: no other address, no files, no scripts."""
+    raw = args.get("items")
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("nothing to play")
+    items = []
+    for it in raw[:500]:
+        path = str((it or {}).get("path") or "")
+        if not SERVER_URL or not re.fullmatch(r"/nodes/media/[0-9a-f]{32}", path):
+            raise ValueError("I only play what Aurelia sends from her own server")
+        items.append({"url": SERVER_URL.rstrip("/") + path, "title": str(it.get("title") or "")[:200], "item": str(it.get("item") or "")[:64],
+                      "kind": "audio" if it.get("kind") == "audio" else "video"})
+    p = player()
+    st = p.play(items, float(args.get("start") or 0), f"Authorization: Bearer {NODE_KEY}" if NODE_KEY else None)
+    p.report()
+    return {"player": st}
 
 
 # ---- diagnostics (stage 1 of node fixes: read-only) ---------------------------------------------
@@ -2103,6 +2402,7 @@ class Tab:
             self.sock.close()
             raise CDPError("the browser refused the control connection")
         self.ctx: int | None = None
+        self.events: list[dict] = []                                  # kept while waiting for an answer
 
     def __enter__(self):
         return self
@@ -2178,6 +2478,30 @@ class Tab:
                 if "error" in msg:
                     raise CDPError(str(msg["error"].get("message") or "the browser said no"))
                 return msg.get("result") or {}
+            if msg.get("method"):
+                self.events = (self.events + [msg])[-20:]
+
+    def notify(self, method: str, **params) -> None:
+        """A message that needs no answer (its answer is skipped when it comes)."""
+        self.next_id += 1
+        self._send(1, json.dumps({"id": self.next_id, "method": method, "params": params}).encode())
+
+    def event(self, method: str, timeout: float) -> dict | None:
+        """The next event of this kind, or None after `timeout` seconds."""
+        import select
+        end = time.monotonic() + timeout
+        while True:
+            for i, e in enumerate(self.events):
+                if e.get("method") == method:
+                    return self.events.pop(i).get("params") or {}
+            left = end - time.monotonic()
+            if left <= 0:
+                return None
+            if not self.buf and not select.select([self.sock], [], [], left)[0]:
+                return None
+            msg = json.loads(self._recv())
+            if msg.get("method"):
+                self.events = (self.events + [msg])[-20:]
 
     def close(self) -> None:
         try:
@@ -2223,12 +2547,22 @@ class Tab:
         vp = self.run("viewport")
         self.call("Input.dispatchMouseEvent", type="mouseWheel", x=vp["w"] // 2, y=vp["h"] // 2, deltaX=0, deltaY=dy)
 
-    def shot(self, width: int = 1280) -> str:
-        """What the screen shows (with her numbers on it), as a JPEG in base64."""
-        vp = self.run("viewport")
-        scale = min(1.0, width / max(1, vp["w"]))
-        return self.call("Page.captureScreenshot", format="jpeg", quality=60,
-                         clip={"x": vp["x"], "y": vp["y"], "width": vp["w"], "height": vp["h"], "scale": scale})["data"]
+    def shot(self, width: int = 1280, quality: int = 60) -> str:
+        """What the screen shows (with her numbers on it), as a JPEG in base64. Taken from the
+        browser's screencast, which never resizes the page (a scaled screenshot briefly does, and
+        on a TV that shows as the picture jumping)."""
+        self.call("Page.startScreencast", format="jpeg", quality=quality, maxWidth=width, maxHeight=width, everyNthFrame=1)
+        try:
+            f = self.event("Page.screencastFrame", 2.5)
+            if f:
+                self.notify("Page.screencastFrameAck", sessionId=f.get("sessionId"))
+                return f["data"]
+        finally:
+            try:
+                self.call("Page.stopScreencast")
+            except CDPError:
+                pass
+        return self.call("Page.captureScreenshot", format="jpeg", quality=quality)["data"]   # unscaled: no resize
 
 
 # ---- the live view -------------------------------------------------------------------------------
@@ -2254,14 +2588,24 @@ def live_target() -> dict:
         return next((t for t in pages if SHELL.is_hers(t)), pages[0])
 
 
-def live_frame(tab: "Tab") -> tuple[str, int, int]:
-    m = tab.call("Page.getLayoutMetrics")
-    vv = m.get("cssVisualViewport") or m.get("visualViewport") or {}
-    w, h = float(vv.get("clientWidth") or 1280), float(vv.get("clientHeight") or 720)
-    scale = min(1.0, LIVE_WIDTH / max(1.0, w))
-    data = tab.call("Page.captureScreenshot", format="jpeg", quality=LIVE_QUALITY,
-                    clip={"x": vv.get("pageX", 0), "y": vv.get("pageY", 0), "width": w, "height": h, "scale": scale})["data"]
-    return data, round(w * scale), round(h * scale)
+def live_frame(tab: "Tab", wait: float) -> tuple[str, int, int] | None:
+    """The newest frame of the browser's screencast (started by live_start), or None if the page
+    hasn't changed. The screencast never resizes the page, unlike a scaled screenshot."""
+    newest = None
+    f = tab.event("Page.screencastFrame", wait)
+    while f:
+        tab.notify("Page.screencastFrameAck", sessionId=f.get("sessionId"))
+        newest = f
+        f = tab.event("Page.screencastFrame", 0)
+    if not newest:
+        return None
+    m = newest.get("metadata") or {}
+    return newest["data"], int(m.get("deviceWidth") or 0), int(m.get("deviceHeight") or 0)
+
+
+def live_start(tab: "Tab") -> None:
+    tab.call("Page.startScreencast", format="jpeg", quality=LIVE_QUALITY, maxWidth=LIVE_WIDTH, maxHeight=LIVE_WIDTH,
+             everyNthFrame=1)
 
 
 def live_stream(server: str, key: str, stop: threading.Event) -> None:
@@ -2277,10 +2621,14 @@ def live_stream(server: str, key: str, stop: threading.Event) -> None:
                     if tab:
                         tab.close()
                     tab, tab_id = Tab(t, timeout=8), t["id"]
-                data, w, h = live_frame(tab)
+                    live_start(tab)
+                got = live_frame(tab, max(0.05, 1 / LIVE_FPS - (time.monotonic() - started)))
                 u = urllib.parse.urlsplit(t.get("url") or "")
-                body = {"jpeg": data, "w": w, "h": h, "title": str(t.get("title") or "")[:120],
-                        "site": "" if SHELL.is_hers(t) else (u.hostname or "")}
+                body = {"title": str(t.get("title") or "")[:120], "site": "" if SHELL.is_hers(t) else (u.hostname or "")}
+                if got:                                           # nothing new: the last frame stays
+                    body.update(jpeg=got[0], w=got[1], h=got[2])
+                if player_busy():
+                    body["problem"] = "my player is on the screen (video isn't shown here)"
             except (CDPError, OSError, ValueError, KeyError) as exc:
                 if tab:
                     tab.close()
@@ -2292,7 +2640,7 @@ def live_stream(server: str, key: str, stop: threading.Event) -> None:
                 return
             if not r.get("keep"):                                 # nobody is watching any more
                 return
-            stop.wait(max(0.05, 1 / LIVE_FPS - (time.monotonic() - started)))
+            stop.wait(max(0.0, 1 / LIVE_FPS - (time.monotonic() - started)))
     finally:
         if tab:
             tab.close()
@@ -2470,6 +2818,10 @@ MEDIA = ("play", "pause", "toggle", "forward", "back", "seek", "restart", "mute"
 
 def do_page_media(args: dict) -> dict:
     action = str(args.get("action") or "")
+    if player_busy() and action in PLAYER_STEP_ACTIONS + ("fullscreen", "exit_fullscreen"):   # her player is on top
+        if action in ("fullscreen", "exit_fullscreen"):
+            return {"player": player().status()}                       # it's always full screen
+        return {"player": player().control(action, args)}
     if action not in MEDIA:
         raise ValueError(f"I can {', '.join(MEDIA)}")
     with _tab() as tab:
@@ -2610,7 +2962,7 @@ def do_page_clear(args: dict) -> dict:
         return {}
 
 
-COMMANDS.update({"logins": do_logins, "sign_in": do_sign_in})
+COMMANDS.update({"logins": do_logins, "sign_in": do_sign_in, "play": do_play})
 COMMANDS.update({"page_look": do_page_look, "page_click": do_page_click, "page_type": do_page_type,
                  "page_key": do_page_key, "page_scroll": do_page_scroll, "page_back": do_page_back,
                  "page_media": do_page_media, "page_clear": do_page_clear})
@@ -2759,9 +3111,10 @@ def cmd_pair(server: str, name: str) -> int:
 
 
 def cmd_run() -> int:
-    global SHELL
+    global SHELL, SERVER_URL, NODE_KEY
     cfg, key = load()
     server, backoff, said_hello_at = cfg["server"], 2.0, 0.0
+    SERVER_URL, NODE_KEY = server, key
     log(f"Aurelia node {VERSION} for {cfg['name']} -> {server}")
     if cfg.get("shell"):
         SHELL = Shell(server, key)

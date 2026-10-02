@@ -59,7 +59,8 @@ def node(stack, tmp_path):
     for tool in ("xdg-open", "gtk-launch"):
         (bin_ / tool).write_text(f"#!/bin/sh\necho \"{tool} $1\" >> {record}\n")
         (bin_ / tool).chmod(0o755)
-    env = {"HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config"), "PATH": f"{bin_}:/usr/bin:/bin"}
+    env = {"HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config"), "PATH": f"{bin_}:/usr/bin:/bin",
+           "AURELIA_MPV_ARGS": "--vo=null --ao=null"}                # her player, with nothing to show or hear
     proc = subprocess.Popen([sys.executable, str(AGENT), "run"], env=env, stderr=subprocess.PIPE, text=True)
     deadline = time.time() + 10
     while time.time() < deadline:                  # online once it has said hello and is polling

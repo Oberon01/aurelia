@@ -1,0 +1,17 @@
+# Quasar — video and music on your computers, played by her own player (Phase 7; Phase 15 brought
+# forward). Sources are services with APIs, never web pages: your Jellyfin library first; Roku apps,
+# YouTube and Spotify next. Control while it plays (pause, skip, subtitles) is Constellation's media.
+function: quasar
+enabled: true
+
+tools:
+  find:            { tier: reference }   # your library: search, continue watching, next up, recently added
+  play:            { tier: act }         # play it full screen on one of your computers; checked with the player
+
+rate_limit_per_minute: 60
+
+rules:
+  # Jellyfin's address and your sign-in stay on the server (.env). A computer only gets a short-lived
+  # link per stream, usable only with its own key, and only for that computer. The node agent plays
+  # nothing but those links (no other address, no files, no scripts).
+  streams_only_through_aurelia: true

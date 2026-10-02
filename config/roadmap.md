@@ -51,9 +51,10 @@ Built so far:
 - Power and presence: lock, sleep, screen off/on, idle time, restart and shutdown (always confirmed; I watch for it to come back), wake-on-LAN; shutdowns that can't hang (installer --system); diagnostics say how the last shutdown went.
 - Sound and media: the computer's volume, mute and which output it plays through; next, previous and what's playing for any player (Spotify, VLC, a browser tab).
 - Watching a screen live in a panel ("show me the TV PC screen"), even while I'm signing in; the frames go only to your display, never to me.
+- Video and music with my own player (Quasar, brought forward from Phase 15): I play from services with APIs, never by working a web page. Step 1: your Jellyfin library (find, play a show where you left off and keep going, movies, albums), full screen on any computer, controlled and confirmed through the player itself, with your resume points kept in Jellyfin. The live view now uses the browser's screencast, so the TV no longer jumps.
 - Long answers open as a panel; a Raphael speaking style on trial.
 - I read my own releases and this roadmap, and harder questions (why, explain, improve, compare) use a stronger model.
-Still to do: a shared clipboard, app install and removal, the Windows installer with exam and gaming modes, the phone web app with push notifications, and the field check.
+Still to do: the rest of Quasar's sources (Roku apps opened straight on a show by name; YouTube, including your home feed, read with the TV PC's own sign-in; Spotify through its API with my computers as Spotify speakers), a shared clipboard, app install and removal, the Windows installer with exam and gaming modes, the phone web app with push notifications, and the field check.
 
 ## 8. Iris — Not started
 Builds: sight. Models that take images (screenshots, photos, later cameras); pixel-level control of a whole desktop, not just my browser, on Linux and Windows. What's on screen is data; I never type passwords; anything that buys, sends or deletes waits for your OK. Later, with the GPU box: home cameras you choose, processed locally.
@@ -83,8 +84,8 @@ Done when: from across the room, "Aurelia, pause the TV" works, a spoken "yes" c
 Builds: files and storage across your computers: search, scans with live results and early exit, space used.
 Done when: a file scan streams results and ends early with partial results kept.
 
-## 15. Quasar — Not started
-Builds: media: find videos and play them where you are, playback control.
+## 15. Quasar — Started (in Phase 7)
+Builds: media: find videos and music and play them where you are, with my own player and services' APIs (never by working a web page). Jellyfin, Roku apps, YouTube and Spotify are built in Phase 7; this phase adds the rest: following you from room to room, music in several rooms at once, and casting from your phone.
 Done when: "play the second one on the TV" plays that search result.
 
 ## 16. Libra — Not started

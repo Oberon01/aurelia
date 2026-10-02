@@ -22,6 +22,13 @@ ambient:
   longitude:
   units: fahrenheit
 
+quasar:
+  # Video and music on your computers, played by my own player from your Jellyfin library.
+  # Jellyfin's address and your sign-in go in .env (JELLYFIN_URL, JELLYFIN_USER, JELLYFIN_PASSWORD).
+  resume: true            # pick up where you left off
+  queue_episodes: 12      # a show keeps going with the next episodes
+  ticket_hours: 8         # how long a computer's link to one stream works
+
 retention:
   # Saved result panels: full for hot_days, then a summary until warm_days,
   # then only the task's metadata (timing, outcome) is kept. Pinned panels stay full.

@@ -272,12 +272,52 @@ Zip, promo and gift codes are ordinary boxes. `sign_in` takes a site's "Log in
 with a password" option when it offers one; when it only offers a code, she
 stops and asks you for it.
 
+**Quasar: video and music with her own player (agent 0.5.9).** She doesn't
+work web pages or TV menus to play things any more. She asks a service with an
+API what to play and hands it to her own player on the computer (mpv, full
+screen on top of her shell), which tells her exactly what it's doing. Step 1 is
+your Jellyfin library; Roku apps, YouTube and Spotify come next.
+
+| Say | What happens |
+|---|---|
+| `what can I watch` / `what's in my library` | `quasar.find`: continue, next up, recently added (posters; tap one to play it) |
+| `find frieren` | `quasar.find` with a search |
+| `play Frieren on the TV` | the next-up episode, from where you left off, and the rest of the season after it |
+| `play Frieren season 1 episode 3 from the start` | that episode, from the beginning |
+| `play the album Discovery` / `shuffle Daft Punk` | music, in order or mixed |
+| `pause` / `skip ahead 2 minutes` / `next episode` / `subtitles on` / `stop` | `constellation.media`, through the player |
+| `what's playing on the TV` | from the player itself: title, time, paused, subtitles, what's next |
+
+Set up: Jellyfin publishes no port, so the orchestrator joins the home-lab
+network (like Kepler does for Trilium) and talks to the Lazytainer in front of
+Jellyfin, which wakes it when traffic arrives (Quasar waits up to a minute,
+`JELLYFIN_WAKE_SECONDS`). Find which Lazytainer it is with
+`docker inspect jellyfin --format '{{.HostConfig.NetworkMode}}'` (it says
+`container:<id>`; `docker ps --no-trunc | grep <id>` names it). Put
+`JELLYFIN_URL=http://<that lazytainer>:8096`, `JELLYFIN_USER` and
+`JELLYFIN_PASSWORD` in `.env`, run `docker compose up -d orchestrator`, and
+open `/quasar/check` on Aurelia's address from a paired browser: it wakes
+Jellyfin, signs in, and says what's wrong if it can't.
+Then rerun the installer with `--system` on each computer that should play (it
+installs mpv). Her sign-in to Jellyfin stays on the server: a computer gets a
+short-lived link per stream (`/nodes/media/<ticket>`), usable only with its own
+key and only by that computer, and Aurelia streams it through from Jellyfin
+(seeking works). The agent plays nothing but those links. Jellyfin hears where
+you got to as you watch, so "continue watching" and watched marks stay right in
+every Jellyfin app. When the TV PC plays, the Roku TV is turned on and switched
+to its input first (`screens` in constellation.yaml).
+
 **Watching a screen live (agent 0.5.7).** "Show me the TV PC screen", "let me
 see what you're doing", "watch the sign-in" (`watch`) open a panel on the
 display you asked from with that screen live, about three frames a second:
 the page she has open (or her own view), with the site and page title under
 it. It keeps going while she works there, sign-ins included (the agent sends
 frames on its own channel, apart from its commands). Tap the picture to pause.
+Frames come from the browser's screencast (agent 0.5.9): the earlier scaled
+screenshots made the TV's own picture shrink for a moment on every frame, which
+is what made it jump.
+Frames come from the browser's screencast; the earlier screenshots made the
+TV's own picture shrink for a moment on every frame, which is what made it jump.
 It runs only while the panel is open and on screen: close it or switch away
 and the computer stops sending within seconds. Frames live ten seconds in
 Redis, only for that panel: never stored, never indexed, and never shown to
@@ -626,7 +666,7 @@ health shows Trilium as not set up.
 
 How Kepler reaches it: Trilium runs in the home-lab stack (`docker-home`) and
 sleeps behind Lazytainer (`lazytainer-a`), which starts it when traffic arrives.
-Kepler, and only Kepler, joins that stack's `docker-home_proxy` network
+Kepler (and, for Jellyfin, the orchestrator) joins that stack's `docker-home_proxy` network
 (`HOMELAB_NETWORK` in `.env` to change it), so the token never leaves the
 machine and no port is published. It talks to `lazytainer-a` rather than
 Trilium itself, so its traffic wakes Trilium; while Trilium starts, Kepler

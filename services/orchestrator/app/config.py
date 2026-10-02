@@ -33,6 +33,14 @@ class AmbientConfig(BaseModel):
     units: str = "fahrenheit"                 # or "celsius"
 
 
+class QuasarConfig(BaseModel):
+    """Playing video and music on his computers (her player) from his Jellyfin library. Jellyfin's
+    address and his sign-in are in .env (JELLYFIN_URL, JELLYFIN_USER, JELLYFIN_PASSWORD)."""
+    resume: bool = True                       # pick up where he left off (Jellyfin's resume point)
+    queue_episodes: int = 12                  # a show keeps going: this many episodes are queued after the one asked for
+    ticket_hours: float = 8                   # how long a computer's link to one stream works
+
+
 class RetentionConfig(BaseModel):
     hot_days: int = 7
     warm_days: int = 90
@@ -100,6 +108,7 @@ class RegistryConfig(BaseModel):
 class RuntimeConfig(BaseModel):
     display: DisplayConfig = DisplayConfig()
     ambient: AmbientConfig = AmbientConfig()
+    quasar: QuasarConfig = QuasarConfig()
     retention: RetentionConfig = RetentionConfig()
     memory: MemoryConfig = MemoryConfig()
     digest: DigestConfig = DigestConfig()
