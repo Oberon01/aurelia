@@ -15,7 +15,7 @@ Commands are queued per node in Redis. A node is online while it keeps polling
 Keys are checked here as well as at the proxy: only an approved *node* key reaches
 these endpoints, and each node only ever sees its own queue.
 
-Serving the agent itself (/node/agent.py, /node/install-linux.sh) needs no key: it's
+Serving the agent itself (/node/agent.py, /node/install-linux.sh, /node/install-windows.ps1) needs no key: it's
 code, no secrets, and a machine can't have a key before it pairs.
 """
 import asyncio
@@ -392,4 +392,10 @@ async def guard_file():
 @router.get("/node/install-linux.sh", include_in_schema=False)
 async def linux_installer():
     return PlainTextResponse((AGENT_DIR / "install-linux.sh").read_text(encoding="utf-8"),
+                             headers={"Cache-Control": "no-store"})
+
+
+@router.get("/node/install-windows.ps1", include_in_schema=False)
+async def windows_installer():
+    return PlainTextResponse((AGENT_DIR / "install-windows.ps1").read_text(encoding="utf-8"),
                              headers={"Cache-Control": "no-store"})

@@ -13,7 +13,9 @@ CHANNEL = "aurelia:events"
 
 EventType = Literal["panel.open", "panel.progress", "panel.result", "panel.close",
                     "mailbox.changed",          # the "N for review" chip
-                    "confirm.ask"]              # a confirmation card that came after her reply (a slow tool)
+                    "confirm.ask",              # a confirmation card that came after her reply (a slow tool)
+                    "screen.check",             # "say what you're showing, now" (checking a send)
+                    "sent.shown"]               # something kept for another display was shown there at last
 
 
 class PanelEvent(BaseModel):

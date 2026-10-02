@@ -591,7 +591,7 @@ const TITLES = { "aurelia.reply": "Aurelia",
   "constellation.devices": "Devices", "constellation.open": "Open", "constellation.apps": "Apps",
   "constellation.home": "Home", "constellation.look": "On the screen", "constellation.click": "Click",
   "constellation.type": "Type", "constellation.press": "Key", "constellation.scroll": "Scroll",
-  "constellation.back": "Back", "constellation.media": "Playing", "constellation.sound": "Sound", "constellation.watch": "Live", "quasar.find": "Library", "quasar.play": "Playing", "constellation.install": "Install", "constellation.clipboard": "Clipboard", "constellation.copy": "Copied", "constellation.paste": "Paste", "constellation.install_package": "Install", "constellation.uninstall": "Remove", "constellation.remove_package": "Remove", "constellation.submit": "Press",
+  "constellation.back": "Back", "constellation.media": "Playing", "constellation.sound": "Sound", "constellation.watch": "Live", "quasar.find": "Library", "quasar.play": "Playing", "constellation.install": "Install", "constellation.clipboard": "Clipboard", "constellation.mode": "Mode", "constellation.copy": "Copied", "constellation.paste": "Paste", "constellation.install_package": "Install", "constellation.uninstall": "Remove", "constellation.remove_package": "Remove", "constellation.submit": "Press",
   "constellation.health": "Computer health", "constellation.list_processes": "Processes",
   "constellation.close_process": "Close a program", "constellation.kill_process": "Close a program",
 };
@@ -1188,6 +1188,12 @@ function body(tool, d) {
   if (d.onscreen && typeof d.onscreen === "object") { wrap.append(onscreenView(d.onscreen, !!d.did)); used.add("onscreen"); used.add("headline"); }
   if (d.did && typeof d.did === "object") { wrap.prepend(didView(d.did)); used.add("did"); used.add("headline"); }
   if (d.packages && Array.isArray(d.packages.items)) { wrap.append(packagesView(d.packages)); used.add("packages"); used.add("headline"); }
+  if (d.mode && typeof d.mode === "object" && d.mode.node) {
+    const m = d.mode, box = el("div"); box.style.cssText = "display:flex;flex-direction:column;gap:8px";
+    if (m.until) box.append(el("div", "facts", `Back at ${new Date(m.until * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`));
+    if (m.note) box.append(el("div", "lib-note", m.note));
+    wrap.append(box); used.add("mode"); used.add("headline");
+  }
   if (d.clipboard && Array.isArray(d.clipboard.items)) { wrap.append(clipboardView(d.clipboard)); used.add("clipboard"); used.add("headline"); }
   if (d.catalog && typeof d.catalog === "object") { wrap.append(catalogView(d.catalog)); used.add("catalog"); used.add("headline"); }
   if (d.now && typeof d.now === "object" && d.now.node) { wrap.append(nowView(d.now)); used.add("now"); used.add("headline"); }
@@ -2476,6 +2482,8 @@ function onEvent(ev) {
   const id = ev.task_id, d = ev.data || {};
   // A presentation display shows only what's addressed to it (the server already sends only that).
   if (document.body.classList.contains("ambient") && ev.type.startsWith("panel.") && ev.device == null) return;
+  if (ev.type === "screen.check") { reportScreen(); return; }      // checking a send: report now
+  if (ev.type === "sent.shown") { say(`Shown on ${d.to} now (it was kept until it opened).`); return; }
   if (ev.type === "confirm.ask") {                     // a slow tool finished after her reply and needs his OK
     if (d.action && !panels.has("confirm-" + d.action.action_id)) showConfirm(d.action);
     return;

@@ -215,6 +215,21 @@ elif [[ "$SHELL_MODE" == "off" ]]; then
   echo "Back to the normal desktop at the next login."
 fi
 
+if [[ "$SHELL_MODE" != "on" && "$ROLE" != "presentation" && "$ROLE" != "server" ]] && ! python3 "$AGENT" status 2>/dev/null | grep -q '"shell": true'; then
+  # Her own window on this computer (paired once, like any display), in the app list as "Aurelia".
+  mkdir -p "$HOME/.local/share/applications"
+  cat > "$HOME/.local/share/applications/aurelia.desktop" <<DESK
+[Desktop Entry]
+Type=Application
+Name=Aurelia
+Comment=Talk to Aurelia
+Exec=python3 $AGENT app
+Icon=user-available
+Categories=Utility;
+DESK
+  echo "Her window: 'Aurelia' in your apps (pin it, or give it a shortcut in Settings > Keyboard). Approve it in the mailbox the first time."
+fi
+
 mkdir -p "$UNIT_DIR"
 cat > "$UNIT_DIR/aurelia-node.service" <<EOF
 [Unit]
@@ -225,8 +240,9 @@ After=network-online.target
 ExecStart=/usr/bin/env python3 $DIR/aurelia_node_guard.py run
 Restart=on-failure
 RestartSec=5
-# Exit 3 = this computer's key was revoked: don't keep knocking. (75 = updated itself: restart.)
-RestartPreventExitStatus=3
+# Exit 3 = this computer's key was revoked: don't keep knocking. 4 = exam mode: stay stopped (a timer
+# brings it back). 75 = updated itself: restart.
+RestartPreventExitStatus=3 4
 
 [Install]
 WantedBy=default.target

@@ -117,6 +117,47 @@ It shows a code: approve it in the mailbox. A systemd user service keeps it
 running through its guard (`journalctl --user -u aurelia-node -f` for its log).
 Revoking the computer on the devices panel stops it.
 
+**Install on Windows** (the laptop, the projector PC, the desk), in PowerShell
+as you, no admin:
+
+```powershell
+& ([scriptblock]::Create((irm https://atlas-ai.<tailnet>.ts.net:8443/node/install-windows.ps1))) -Server https://atlas-ai.<tailnet>.ts.net:8443 -Name "Desk"
+```
+
+It installs Python for you if it's missing (winget, user scope), keeps the agent
+in `%LOCALAPPDATA%\Aurelia\node` and its key in `%APPDATA%\aurelia-node`, and
+starts it when you sign in (Task Scheduler, "Aurelia node", as you, not admin).
+Approve the code in the mailbox. Its guard restarts it after an update or a
+crash, and puts the old version back if an update doesn't reconnect. The log is
+`%APPDATA%\aurelia-node\agent.log`. A Start-menu folder "Aurelia" has the mode
+shortcuts. My player (mpv) isn't installed on Windows yet.
+
+**My window on your workstations (agent 0.6.5).** A Workstation or a laptop
+gets an "Aurelia" app: on Windows in the Start menu and on the desktop
+(**Ctrl+Alt+A** opens it, or brings it to the front if it's already open), on
+Linux in the app list. It's me in my own window (Edge, Chrome or Chromium in app
+mode, with its own profile, not your browser's), so you don't need a browser tab.
+The first time it opens it shows a pairing code: approve it in the mailbox, once.
+After that it's a display named after the computer ("Desk"), so "send this to
+the desk" lands in it. From a terminal: `aurelia_node.py app`. Presentation and
+Server computers don't get it. Existing computers get it with the installer rerun.
+
+**Modes (agent 0.6.4).** *Gaming mode* ("gaming mode on the desk"): I keep out
+of the way while you play: only quick things (lock, sound, the clipboard) are
+answered, nothing heavy runs, and I never touch the GPU. It also turns on by
+itself while a game runs (anything from Steam, Epic, GOG, Riot, EA, Ubisoft,
+Battle.net or Xbox game folders) and off when the game closes, unless you set it
+yourself; "end gaming mode" ends it. *Exam mode* ("exam mode on the desk for 2
+hours", 3 by default, at most 12): nothing of mine runs on that computer at all.
+The agent answers, stops, switches its autostart off, and a one-time system task
+(Task Scheduler on Windows, a systemd timer on Linux) brings it back when the
+time is up. If the computer restarts during the exam, I stay stopped. I can't
+end it early from anywhere else; you can, on that computer: Start menu,
+"Aurelia - back to normal" (or `aurelia_node.py mode normal`). Until then,
+asking me to do something there gets "the desk is in exam mode for another
+1 h 20 min". Linux computers need the installer once more for exam mode (their
+service learns to stay stopped).
+
 **What each device is for (roles).** Every computer and browser has a role,
 and her behavior follows from it:
 
@@ -144,11 +185,24 @@ iPhone" or "show the house on the TV" runs the look-up once and opens it only
 there, never here first (look-ups only; an action happens where you ask).
 
 **Every send is checked.** Each display tells her which panels it's showing
-whenever that changes. After sending, she checks the panel appears in that
-display's report; if it doesn't within a few seconds she sends it once more,
-and if it still doesn't (a phone that's locked, a tab in the background) she
-keeps it, and it shows the moment that display is back on screen. Her answer
-says exactly where it was confirmed and where it's waiting. "What's on my
+whenever that changes. A send is only "shown" when the display's own report
+says so, matched to that send. After sending she asks the display to report
+right away; if the panel isn't there she tries again, three times in all over
+about 13 seconds. If it still isn't (a phone that's locked, a tab in the
+background) she keeps it, and it shows the moment that display is back on
+screen; then the display you sent it from gets a line: "Shown on iPhone now
+(it was kept until it opened)." Her answer says exactly where it was confirmed
+and where it's waiting.
+
+**Every action is checked on the computer itself.** What I tell you happened is
+what the computer can see, not what was asked for. A page I open in my shell is
+looked for among its pages; an app is looked for among the running programs (a
+new one, not one that was already open); "go home" stops my player, closes the
+pages and checks nothing is left on top; something put on a clipboard is read
+back. If the check fails it's an error ("the page didn't open on my screen").
+If a thing can't be checked (a page opened in your own browser, an app that
+starts slowly), I say "asked" instead of "opened": "Asked the desk to start VLC;
+I can't see it running yet." "What's on my
 screens?" (or "what's on the TV?") shows each display with its panels, whether
 it's on screen, anything kept for it, and what a TV is playing. If the TV
 is showing something she opened, the panel waits behind it and she says so.
@@ -215,7 +269,7 @@ system's or her own. It asks first and ends a program only if you say force.
 Problems past the lines in Constellation's policy (`health`) show on the devices
 panel and in the digest; urgent ones (a disk 97% full, 95°C) also get a mailbox
 card, once a day per problem. Windows reporting is written but gets its real test
-with the Windows installer.
+on your first Windows computer.
 
 | Say | Does |
 | --- | --- |
@@ -302,7 +356,7 @@ the install card instead of failing. Run the installer with `--system` once on
 each Linux computer: it installs PackageKit and a polkit rule letting the agent's
 account install trusted packages, remove packages and manage snaps, nothing
 else (never local or untrusted packages). After that, new needs come as cards,
-not installer reruns. Windows comes with the Windows installer.
+not installer reruns. Installing apps on Windows isn't built yet.
 
 **Quasar: video and music with her own player (agent 0.5.9).** She doesn't
 work web pages or TV menus to play things any more. She asks a service with an

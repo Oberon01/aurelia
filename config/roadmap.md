@@ -52,18 +52,21 @@ Built so far:
 - Sound and media: the computer's volume, mute and which output it plays through; next, previous and what's playing for any player (Spotify, VLC, a browser tab).
 - Watching a screen live in a panel ("show me the TV PC screen"), even while I'm signing in; the frames go only to your display, never to me.
 - Video and music with my own player (Quasar, brought forward from Phase 15): I play from services with APIs, never by working a web page. Step 1: your Jellyfin library (find, play a show where you left off and keep going, movies, albums), full screen on any computer, controlled and confirmed through the player itself, with your resume points kept in Jellyfin. The live view now uses the browser's screencast, so the TV no longer jumps.
+- The Windows installer (PowerShell, no admin; Python installed for you), and modes: gaming (I keep out of the way, never the GPU; on by itself while a game runs) and exam (nothing of mine runs until a timer brings me back).
 - A shared clipboard across your devices (text; a computer's clipboard, a phone's Copy card; never passwords or keys).
 - Installing and removing apps (Ubuntu's packages and snaps, always confirmed, never the system's core); a computer notices a new agent within about 25 seconds and never updates mid-playback.
+- My own window on your workstations and laptops (an "Aurelia" app, Ctrl+Alt+A on Windows), so you don't need a browser tab.
+- No ghost confirmations: sends are tried three times and confirmed only by the display's own report (and you hear when a kept one finally shows); opening a page or an app, going home and the clipboard are checked on the computer itself, and anything I couldn't see happen is called "asked", not "done".
 - Long answers open as a panel; a Raphael speaking style on trial.
 - I read my own releases and this roadmap, and harder questions (why, explain, improve, compare) use a stronger model.
-Still to do: the rest of Quasar's sources (Roku apps opened straight on a show by name; YouTube, including your home feed, read with the TV PC's own sign-in; Spotify through its API with my computers as Spotify speakers), the Windows installer with exam and gaming modes, the phone web app with push notifications, and the field check.
+Still to do: the rest of Quasar's sources (Roku apps opened straight on a show by name; YouTube, including your home feed, read with the TV PC's own sign-in; Spotify through its API with my computers as Spotify speakers), the phone web app with push notifications, and the field check.
 
 ## 8. Iris — Not started
 Builds: sight. Models that take images (screenshots, photos, later cameras); pixel-level control of a whole desktop, not just my browser, on Linux and Windows. What's on screen is data; I never type passwords; anything that buys, sends or deletes waits for your OK. Later, with the GPU box: home cameras you choose, processed locally.
 Done when: on your Windows desktop I finish a task in an app I have no integration for, by seeing it, and a send button still asks first.
 
 ## 9. Admiral — Not started
-Builds: planning and long tasks. A big request becomes a checked plan of governed steps that survives restarts, retries or replans, asks questions through the mailbox, runs independent steps in parallel, and checks the result against what you asked. Also the scheduling engine, and Morpho (synthesis): plans that worked become reusable skills, skills learn their variations, and trust is earned for low-impact actions.
+Builds: planning and long tasks. A big request becomes a checked plan of governed steps that survives restarts, retries or replans, asks questions through the mailbox, runs independent steps in parallel, and checks the result against what you asked. Every step that acts on a device is validated by the state the device itself reports afterwards (the page among its pages, the program among its processes, the panel in the display's report), never by "the command was sent"; a step that can't be checked is marked unconfirmed, and the plan treats it as not done until it is. Also the scheduling engine, and Morpho (synthesis): plans that worked become reusable skills, skills learn their variations, and trust is earned for low-impact actions.
 Done when: "find the best computer within a $1000 budget" becomes a plan across Nebula, Kepler and Constellation that ends in a checked compare-and-contrast report; afterwards it's kept as a skill.
 
 ## 10. Pulsar — Not started

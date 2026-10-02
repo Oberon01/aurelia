@@ -131,7 +131,9 @@ async function ask() {
   } finally { $("go").disabled = false; }
 }
 
-$("name").value = guessName().name;
+// Opened by a computer's own Aurelia window (/view?app=Desk): name it after that computer.
+const asked = (() => { try { return new URL(next(), location.origin).searchParams.get("app"); } catch (e) { return null; } })();
+$("name").value = (asked || "").slice(0, 60) || guessName().name;
 $("go").addEventListener("click", ask);
 $("name").addEventListener("keydown", e => { if (e.key === "Enter") ask(); });
 $("again").addEventListener("click", () => show("ask"));

@@ -52,7 +52,7 @@ MAX_PENDING = 5                                         # at most this many wait
 KEY_CACHE_SECONDS = 30
 SEEN_EVERY_SECONDS = 60
 PUBLIC = {"/pair", "/pair/request", "/pair/status", "/pair/screen", "/health", "/favicon.ico",
-          "/node/agent.py", "/node/guard.py", "/node/install-linux.sh"}   # the node agent: code, no secrets
+          "/node/agent.py", "/node/guard.py", "/node/install-linux.sh", "/node/install-windows.ps1"}   # the node agent: code, no secrets
 SCOPES = {"node": ("/nodes/",), "terminal": ("/ask",)}  # prefixes; browser keys aren't limited
 
 _cache: dict[str, tuple[float, dict[str, Any]]] = {}

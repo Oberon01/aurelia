@@ -388,6 +388,21 @@ fastpath:
       tool: quasar.find
       args: {}
       reply: "Here's your library."
+    - name: exam-mode
+      match: '^(?:(?:start|turn on|use) )?exam mode on (?:the |my )?(?P<target>.+?)(?: for (?P<hours>\d+(?:\.\d+)?) ?(?:h|hrs?|hours?))?$'
+      tool: constellation.mode
+      args: { mode: exam, target: "{target}", hours: "{hours|3}" }
+      reply: "Exam mode."
+    - name: gaming-mode
+      match: '^(?:(?:start|turn on|use) )?(?:gaming|game) mode on (?:the |my )?(?P<target>.+?)$'
+      tool: constellation.mode
+      args: { mode: gaming, target: "{target}" }
+      reply: "Gaming mode."
+    - name: gaming-mode-off
+      match: '^(?:end|stop|turn off|exit|leave) (?:gaming|game) mode(?: on (?:the |my )?(?P<target>.+?))?$'
+      tool: constellation.mode
+      args: { mode: normal, target: "{target|}" }
+      reply: "Back to normal."
     - name: clipboard-show
       match: '^(?:what(?:''s| is) on (?:my|the) clipboard|(?:show|open)(?: me)? (?:my|the) clipboard)\??$'
       tool: constellation.clipboard

@@ -23,6 +23,7 @@ tools:
   restart:         { tier: change }      # restart or shut down a computer: always confirmed
   wake:            { tier: act }         # wake-on-LAN
   diagnose:        { tier: read }        # read-only checks: services, logs, network, storage (stage 1 of node fixes)
+  mode:            { tier: act }         # gaming (keep out of the way) or exam (stop completely, back on a timer)
   clipboard:       { tier: reference }   # his shared clipboard (a day, 20 entries, in Redis only)
   copy:            { tier: act }         # onto the shared clipboard (text, or what's copied on a computer); never secrets
   paste:           { tier: act }         # onto a computer's clipboard, or a Copy card on a display

@@ -106,7 +106,17 @@ async def report_screen(request: Request):
                        "tool": str(p.get("tool") or "")[:80], "queued": bool(p.get("queued")),
                        "tasks": [str(t)[:40] for t in (p.get("tasks") or [])[:20]]})
     report = {"panels": panels, "visible": body.get("visible") is not False, "at": int(datetime.now().timestamp())}
-    await request.app.state.redis.set(SCREEN_REPORT.format(dev["id"]), json.dumps(report), ex=REPORT_SECONDS)
+    redis = request.app.state.redis
+    await redis.set(SCREEN_REPORT.format(dev["id"]), json.dumps(report), ex=REPORT_SECONDS)
+    if report["visible"]:                                    # something kept for this display is on it at last
+        from .constellation import SENT_KEY
+        from .events import PanelEvent, publish
+        for t in {t for p in panels for t in p["tasks"]}:
+            raw = await redis.getdel(SENT_KEY.format(t))
+            if raw:
+                s = json.loads(raw)
+                await publish(redis, PanelEvent(type="sent.shown", task_id=t, tool="constellation.send",
+                                                device=s["sender"], data={"to": s["to"]}))
     return {"ok": True}
 
 

@@ -271,6 +271,17 @@ TOOLS = [
             "removes": {"type": "array", "items": {"type": "string"}}}, "required": ["name"]},
         cancellable=False),
     registry.ToolSpec(
+        name="mode", description="One of his computers' mode. gaming: you keep out of the way while he plays "
+                                 "(nothing heavy, never the GPU; it also turns on by itself while a game runs). "
+                                 "exam: nothing of yours runs there at all for hours (default 3, at most 12): you "
+                                 "stop completely and come back on your own when it's over; he can end it early "
+                                 "only on that computer (Start menu: 'Aurelia - back to normal'). normal: back to "
+                                 "everything. For 'exam mode on the desk for 2 hours', 'I'm gaming', 'end gaming mode'.",
+        input_schema={"type": "object", "properties": {
+            "target": {"type": "string"}, "mode": {"type": "string", "enum": ["normal", "gaming", "exam"]},
+            "hours": {"type": "number", "minimum": 0.25, "maximum": 12}}, "required": ["mode"]},
+        cancellable=False),
+    registry.ToolSpec(
         name="clipboard", description="His shared clipboard: what he (or you) copied lately, newest first, across "
                                       "his devices; each one can be copied onto the device he's using with a tap.",
         input_schema={"type": "object", "properties": {}}, cancellable=False, freshness_seconds=0, display="panel"),
@@ -376,7 +387,7 @@ async def target(app, asked: str | None, screen: bool = False) -> dict:
     for r in rows:
         info = r["info"] if isinstance(r["info"], dict) else json.loads(r["info"] or "{}")
         ns.append({"id": r["id"], "name": r["name"], "hostname": info.get("hostname"), "shell": info.get("shell"),
-                   "online": await nodes.online(app, r["id"])})
+                   "online": await nodes.online(app, r["id"]), "mode": info.get("mode"), "mode_until": info.get("mode_until")})
     if not ns:
         raise NoSuchNode("None of your computers runs my node yet.")
     if asked and asked.strip():
@@ -404,6 +415,10 @@ async def target(app, asked: str | None, screen: bool = False) -> dict:
                                                   else "None of them is online right now."))
         node = live[0]
     if not node["online"]:
+        until = float(node.get("mode_until") or 0)
+        if node.get("mode") == "exam" and until > time.time():
+            raise NoSuchNode(f"{node['name']} is in exam mode for another {_hours(until - time.time())}: nothing of mine "
+                             "runs there until then (it can be ended early only on that computer).")
         raise NoSuchNode(f"{node['name']} isn't online right now.")
     return node
 
@@ -518,21 +533,31 @@ async def open_(app, user: str, args: dict) -> dict:
 
 async def _open_on_node(app, node: dict, url: str, name: str) -> dict:
     if url:
-        await _ask_node(app, node, "open_url", {"url": url})
-        return _opened(node, url, "page")
+        d = await _ask_node(app, node, "open_url", {"url": url})
+        return _opened(node, url, "page", d)
     try:
         data = await _ask_node(app, node, "launch_app", {"name": name})
-        return _opened(node, data.get("app") or name, "app")
+        return _opened(node, data.get("app") or name, "app", data)
     except ValueError as exc:
         site = site_for(name)
         if site is None or "no app called" not in str(exc):
             raise
-    await _ask_node(app, node, "open_url", {"url": site})     # YouTube, Netflix…: the site, when no app is installed
-    return _opened(node, site, "page")
+    d = await _ask_node(app, node, "open_url", {"url": site})  # YouTube, Netflix…: the site, when no app is installed
+    return _opened(node, site, "page", d)
 
 
-def _opened(node: dict, what: str, kind: str) -> dict:
-    return {"headline": f"Opened on {node['name']}", "opened": {"node": node["name"], "what": what, "kind": kind}}
+def _opened(node: dict, what: str, kind: str, d: dict | None = None) -> dict:
+    """Only what the computer could see happened is called done."""
+    seen = (d or {}).get("verified")
+    if seen is False:
+        head = (f"Asked {node['name']}'s browser to open it" if kind == "page"
+                else f"Asked {node['name']} to start {what}; I can't see it running yet")
+    else:
+        head = f"Opened on {node['name']}"
+    out = {"headline": head, "opened": {"node": node["name"], "what": what, "kind": kind}}
+    if seen is False:
+        out["opened"]["unconfirmed"] = True
+    return out
 
 
 async def _roku(app, user: str, tv_name: str, app_name: str) -> dict | None:
@@ -1208,12 +1233,19 @@ async def _panel_for(app, user: str, d: dict, tool: str, args: dict, data: dict,
     ]
 
 
-async def deliver(app, user: str, targets: list[dict], tool: str, args: dict, data: dict, sent_from: str) -> dict:
+SEND_TRIES = (4.0, 4.0, 5.0)                # each try: send, ask the display to report now, wait this long
+SENT_KEY = "aurelia:sent:{}"               # a send kept for later: who to tell when it's finally shown
+
+
+async def deliver(app, user: str, targets: list[dict], tool: str, args: dict, data: dict, sent_from: str,
+                  sender: int | None = None) -> dict:
     """Puts a panel on each display and checks it arrived: sent, then confirmed from that display's
-    own report of what it shows. One that doesn't confirm is sent once more; still nothing, or a
-    display that isn't open (or is hidden, like a phone in a pocket), and it's kept for when it
-    next opens. Returns who showed it, who'll get it later, and the task behind each."""
-    from .events import publish
+    own report of what it shows (a report naming this send's own new task, so never an old one).
+    Tried three times, each time asking the display to report at once. A display that isn't open
+    (or is hidden, like a phone in a pocket), or never confirms, keeps it for when it next opens;
+    when it's shown there at last, the display that sent it hears so. Returns who showed it, who'll
+    get it later, and the task behind each."""
+    from .events import PanelEvent, publish
     redis = app.state.redis
     pending: dict[int, tuple[dict, str, list]] = {}
     shown, later, tasks = [], [], {}
@@ -1225,25 +1257,30 @@ async def deliver(app, user: str, targets: list[dict], tool: str, args: dict, da
             await _queue(app, d["id"], events)
             later.append(d["name"])
             continue
-        for e in events:
-            await publish(redis, e)
         pending[d["id"]] = (d, task_id, events)
-    for attempt in (1, 2):
-        deadline = asyncio.get_running_loop().time() + CONFIRM_SECONDS
-        while pending and asyncio.get_running_loop().time() < deadline:
+    loop = asyncio.get_running_loop()
+    for attempt, window in enumerate(SEND_TRIES):
+        for dev_id, (d, task_id, events) in pending.items():
+            for e in events:                                     # (again, after the first try: a reload, a blip)
+                await publish(redis, e)
+            await publish(redis, PanelEvent(type="screen.check", task_id=task_id, tool=tool, device=dev_id))
+        deadline = loop.time() + window
+        while pending and loop.time() < deadline:
             for dev_id, (d, task_id, _) in list(pending.items()):
                 if await _shows(app, dev_id, task_id):
                     shown.append(d["name"])
                     del pending[dev_id]
             if pending:
                 await asyncio.sleep(0.25)
-        if attempt == 1:
-            for d, task_id, events in pending.values():          # once more, in case it was a moment away
-                for e in events:
-                    await publish(redis, e)
+        if not pending:
+            break
     for dev_id, (d, task_id, events) in pending.items():         # it didn't show: there when it next opens
         await _queue(app, dev_id, events)
         later.append(d["name"])
+    for d in targets:
+        if d["name"] in later and sender:
+            await redis.set(SENT_KEY.format(tasks[d["name"]]), json.dumps({"sender": sender, "to": d["name"]}),
+                            ex=QUEUE_HOURS * 3600)
     return {"shown": shown, "later": later, "tasks": tasks}
 
 
@@ -1295,7 +1332,7 @@ async def send(app, user: str, args: dict) -> dict:
                 failed.append(f"{d['name']} ({exc})")
             continue
         panel_targets.append(d)
-    sent = await deliver(app, user, panel_targets, tool, targs, data, sent_from or "another display") \
+    sent = await deliver(app, user, panel_targets, tool, targs, data, sent_from or "another display", sender=asker) \
         if panel_targets else {"shown": [], "later": [], "tasks": {}}
     for d in panel_targets:
         if d["node"] and d["name"] in sent["shown"]:
@@ -1669,6 +1706,42 @@ async def paste(app, user: str, args: dict) -> dict:
     return {**sent, "headline": sent["headline"].replace("On ", "Ready to copy on ", 1)}
 
 
+# ---- modes (gaming, exam) ---------------------------------------------------------------------------
+
+MODES_SINCE = (0, 6, 4)
+
+
+def _hours(sec: float) -> str:
+    h, m = int(sec // 3600), int(sec % 3600 // 60)
+    return f"{h} h {m} min" if h and m else f"{h} h" if h else f"{m} min"
+
+
+async def mode(app, user: str, args: dict) -> dict:
+    want = str(args.get("mode") or "")
+    if want not in ("normal", "gaming", "exam"):
+        raise ValueError("Normal, gaming or exam mode?")
+    node = await target(app, args.get("target"))
+    info = (await _node_row(node["id"]))["info"]
+    if _version(info.get("agent_version")) < MODES_SINCE:
+        raise ValueError(f"{node['name']} is running an older agent without modes; it updates itself within a minute.")
+    hours = float(args.get("hours") or 3)
+    d = await _ask_new(app, node, "mode", {"mode": want, "hours": hours}, 60)
+    patch = {"mode": d.get("mode", want), "mode_until": d.get("until")}
+    await db.pool().execute("UPDATE devices SET info = info || $2::jsonb WHERE id=$1", node["id"],
+                            json.dumps({k: v for k, v in patch.items() if v is not None}
+                                       | ({} if d.get("until") else {"mode_until": None})))
+    if want == "exam":
+        await app.state.redis.delete(nodes.ONLINE.format(node["id"]))      # it's gone until the exam is over
+        left = max(0, (d.get("until") or 0) - time.time())
+        return {"headline": f"Exam mode on {node['name']} for {_hours(left)}",
+                "mode": {"node": node["name"], "mode": "exam", "until": d.get("until"),
+                         "note": "Nothing of mine runs there now, and I come back by myself when it's over. To end it "
+                                 "early, open \"Aurelia - back to normal\" from that computer's Start menu."}}
+    say = {"gaming": f"Gaming mode on {node['name']}: I'll keep out of the way",
+           "normal": f"{node['name']} is back to normal"}[want]
+    return {"headline": say, "mode": {"node": node["name"], "mode": want}}
+
+
 LIVE_SINCE = (0, 5, 7)
 
 
@@ -1767,7 +1840,7 @@ HANDLERS = {"devices": devices, "open": open_, "apps": apps, "home": home, "look
             "sign_in": sign_in, "logins": logins, "send": send, "screens": screens, "diagnose": diagnose_node,
             "power": power, "restart": restart, "wake": wake, "sound": sound, "watch": watch,
             "install": install, "install_package": install_package, "uninstall": uninstall, "remove_package": remove_package,
-            "clipboard": clipboard, "copy": copy, "paste": paste}
+            "clipboard": clipboard, "copy": copy, "paste": paste, "mode": mode}
 
 
 @router.get("/shots/{sid}.jpg", include_in_schema=False)

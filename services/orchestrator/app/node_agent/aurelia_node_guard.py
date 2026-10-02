@@ -25,8 +25,7 @@ def config_dir() -> Path:
     return Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "aurelia-node"
 
 
-def main() -> None:
-    state = config_dir() / "update.json"
+def boot_count(state: Path) -> None:
     try:
         st = json.loads(state.read_text())
     except (OSError, ValueError):
@@ -40,7 +39,26 @@ def main() -> None:
             st = {**{k: v for k, v in st.items() if k not in ("to", "from", "boots")}, "rolled_back": st["to"]}
         state.parent.mkdir(parents=True, exist_ok=True)
         state.write_text(json.dumps(st))
-    os.execv(sys.executable, [sys.executable, str(AGENT), *(sys.argv[1:] or ["run"])])
+
+
+STAY_STOPPED = (3, 4)          # revoked, or exam mode
+
+
+def main() -> None:
+    state = config_dir() / "update.json"
+    args = sys.argv[1:] or ["run"]
+    if args[0] != "run":                                    # exam-end and other one-off commands
+        os.execv(sys.executable, [sys.executable, str(AGENT), *args])
+    if platform.system() != "Windows":                      # systemd restarts it (and knows exits 3 and 4)
+        boot_count(state)
+        os.execv(sys.executable, [sys.executable, str(AGENT), *args])
+    import subprocess, time                                  # Windows: no service manager restarts it, so I do
+    while True:
+        boot_count(state)
+        code = subprocess.call([sys.executable, str(AGENT), *args])
+        if code in STAY_STOPPED:
+            sys.exit(code)
+        time.sleep(5)
 
 
 if __name__ == "__main__":

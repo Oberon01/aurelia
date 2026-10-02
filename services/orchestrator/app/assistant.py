@@ -422,7 +422,8 @@ async def _run_for_display(app, user: str, qualified: str, args: dict, on: str, 
     me = await db.pool().fetchval("SELECT name FROM devices WHERE id=$1", asker) if asker else None
 
     async def deliver(result: dict) -> dict:
-        return await constellation.deliver(app, user, targets, qualified, args, result, me or "another display")
+        return await constellation.deliver(app, user, targets, qualified, args, result, me or "another display",
+                                           sender=asker)
 
     result = await wait_for_result(task_id, app.state.config.current.llm.wait_for_result_seconds)
     if result is None:                                  # a slow look-up: it goes over when it's done

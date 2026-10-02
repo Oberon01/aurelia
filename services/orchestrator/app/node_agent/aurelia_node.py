@@ -58,10 +58,11 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.6.3"
+VERSION = "0.6.5"
 IS_WINDOWS = platform.system() == "Windows"
 EXIT_REVOKED = 3                                   # the service manager doesn't restart after this
 EXIT_UPDATED = 75                                  # restart me: a new version is in place
+EXIT_PAUSED = 4                                    # exam mode: stay stopped (a timer or he brings me back)
 DEBUG_PORT = int(os.environ.get("AURELIA_DEBUG_PORT", "9333"))
 HELLO_SECONDS = float(os.environ.get("AURELIA_HELLO_SECONDS", "600"))   # re-introduce itself (and check for updates)
 POLL_WAIT = int(os.environ.get("AURELIA_POLL_WAIT", "25"))              # how long each wait for work lasts
@@ -74,7 +75,17 @@ def config_dir() -> Path:
 
 
 def log(*parts) -> None:
-    print(time.strftime("%H:%M:%S"), *parts, file=sys.stderr, flush=True)
+    if sys.stderr is not None:
+        print(time.strftime("%H:%M:%S"), *parts, file=sys.stderr, flush=True)
+        return
+    try:                                                     # Windows, started without a console (pythonw): a file
+        f = config_dir() / "agent.log"
+        if f.exists() and f.stat().st_size > 1_000_000:
+            f.replace(f.with_suffix(".log.old"))
+        with f.open("a", encoding="utf-8") as out:
+            out.write(" ".join([time.strftime("%Y-%m-%d %H:%M:%S"), *map(str, parts)]) + "\n")
+    except OSError:
+        pass
 
 
 # ---- talking to Aurelia ------------------------------------------------------------------
@@ -145,6 +156,10 @@ def machine_info() -> dict:
         pass
     if role_hint():
         info["role"] = role_hint()          # his choice at install; the devices panel has the last word
+    m = read_mode()
+    info["mode"] = m.get("mode", "normal")
+    if m.get("until"):
+        info["mode_until"] = int(m["until"])
     if not IS_WINDOWS:
         env = session_env()
         info.update(distro=rel.get("ID"), session=env.get("XDG_SESSION_TYPE") or None,
@@ -240,6 +255,8 @@ def _run(argv: list[str], timeout: float = 4) -> str:
 
 
 def gpus(live: bool = True) -> list[dict]:
+    if current_mode() == "gaming":                           # never touch the GPU while he plays
+        return []
     out = _run(["nvidia-smi", "--query-gpu=name,memory.total,memory.used,utilization.gpu,temperature.gpu",
                 "--format=csv,noheader,nounits"])
     found = []
@@ -819,7 +836,8 @@ def installed_apps() -> list[dict]:
             if p.stem in seen:
                 continue
             seen.add(p.stem)
-            apps.append({"name": e.get("Name"), "id": p.stem, "path": str(p)})
+            exe = os.path.basename((e.get("Exec") or "").split()[0]) if e.get("Exec") else ""
+            apps.append({"name": e.get("Name"), "id": p.stem, "path": str(p), **({"exe": exe} if exe else {})})
     return apps
 
 
@@ -840,6 +858,62 @@ def find_app(name: str) -> dict | None:
 
 # ---- what it will do ----------------------------------------------------------------------------
 
+# ---- checking it happened -------------------------------------------------------------------------
+#
+# What she tells him is what the computer can see happened, not what was asked for: a page she
+# opened is checked among the browser's pages, an app among the running programs, going home by the
+# pages left. "verified": False means it was asked for but couldn't be seen (yet), and she says so.
+
+VERIFY_SECONDS = 8.0
+
+
+def proc_names() -> dict[int, str]:
+    """Running programs by pid: their names, lower case, without .exe."""
+    if IS_WINDOWS:
+        return {pid: str(r["name"]).lower().removesuffix(".exe") for pid, r in _windows_procs().items() if isinstance(pid, int)}
+    out = {}
+    for d in PROC.iterdir() if PROC.exists() else []:
+        if d.name.isdigit():
+            try:
+                out[int(d.name)] = (d / "comm").read_text().strip().lower()
+            except OSError:
+                pass
+    return out
+
+
+def _started(app: dict, before: dict[int, str], wait: float = VERIFY_SECONDS) -> str | None:
+    """A program that wasn't running before and looks like this app (by its name or its executable)."""
+    words = {w for w in re.findall(r"[a-z0-9]+", f"{app.get('name', '')} {app.get('id', '')}".lower()) if len(w) > 2}
+    exe = str(app.get("exe") or "").lower().removesuffix(".exe")
+    end = time.monotonic() + wait
+    while True:
+        for pid, name in proc_names().items():
+            if pid in before and before[pid] == name:
+                continue
+            if name == exe or name in words or any(name.startswith(w) for w in words if len(w) > 3):
+                return name
+        if time.monotonic() > end:
+            return None
+        time.sleep(0.4)
+
+
+def _shell_has(url: str, wait: float = VERIFY_SECONDS) -> dict | None:
+    """The page among her shell's pages (same site), once the browser has it."""
+    host = (urllib.parse.urlsplit(url).hostname or "").lower().removeprefix("www.")
+    end = time.monotonic() + wait
+    while True:
+        try:
+            for t in SHELL.pages():
+                h = (urllib.parse.urlsplit(t.get("url") or "").hostname or "").lower().removeprefix("www.")
+                if h and (h == host or h.endswith("." + host) or host.endswith("." + h)):
+                    return t
+        except Exception:
+            pass
+        if time.monotonic() > end:
+            return None
+        time.sleep(0.4)
+
+
 def do_open_url(args: dict) -> dict:
     url = str(args.get("url") or "")
     parts = urllib.parse.urlsplit(url)
@@ -847,14 +921,17 @@ def do_open_url(args: dict) -> dict:
         raise ValueError("only http and https pages")
     if SHELL and SHELL.running():
         SHELL.open(url)                                      # inside her shell, on top of her view
-        return {"url": url, "in": "shell"}
+        page = _shell_has(url)
+        if page is None:
+            raise ValueError("the page didn't open on my screen")
+        return {"url": url, "in": "shell", "verified": True, "title": str(page.get("title") or "")[:120]}
     if IS_WINDOWS:
         os.startfile(url)                                    # the default browser
     elif shutil.which("xdg-open"):
         spawn(["xdg-open", url])
     else:
         raise ValueError("there's no way to open a browser here")
-    return {"url": url}
+    return {"url": url, "verified": False}                   # his own browser: I can't see its pages
 
 
 def do_launch_app(args: dict) -> dict:
@@ -864,6 +941,7 @@ def do_launch_app(args: dict) -> dict:
     app = find_app(name)
     if app is None:
         raise ValueError(f"no app called {name} is installed")
+    before = proc_names()
     if IS_WINDOWS:
         os.startfile(app["path"])
     elif shutil.which("gtk-launch"):
@@ -872,7 +950,8 @@ def do_launch_app(args: dict) -> dict:
         spawn(["gio", "launch", app["path"]])
     else:
         raise ValueError("there's no way to launch apps here")
-    return {"app": app["name"]}
+    running = _started(app, before)
+    return {"app": app["name"], "verified": bool(running), **({"process": running} if running else {})}
 
 
 def do_list_apps(args: dict) -> dict:
@@ -890,9 +969,18 @@ def do_home(args: dict) -> dict:
         stopped = (player().control("stop", {}).get("last") or {}).get("title") or "the video"
     if not (SHELL and SHELL.running()):
         if stopped:
-            return {"closed": 0, "stopped": stopped}
+            return {"closed": 0, "stopped": stopped, "verified": not player_busy()}
         raise ValueError("my shell isn't running on this computer")
-    return {"closed": SHELL.home(), **({"stopped": stopped} if stopped else {})}
+    closed = SHELL.home()
+    end = time.monotonic() + 3
+    while True:                                               # the browser takes a moment to close them
+        left = [t for t in SHELL.pages() if not SHELL.is_hers(t)]
+        if not left or time.monotonic() > end:
+            break
+        time.sleep(0.25)
+    if left or player_busy():
+        raise ValueError("something is still on top of me there (" + (str(left[0].get("title") or "a page") if left else "my player") + ")")
+    return {"closed": closed, "verified": True, **({"stopped": stopped} if stopped else {})}
 
 
 # ---- power and presence ---------------------------------------------------------------------
@@ -1560,6 +1648,224 @@ def do_play(args: dict) -> dict:
     return {"player": st}
 
 
+# ---- her window on a workstation --------------------------------------------------------------------
+#
+# On his own computers, Aurelia is a window of her own, not a browser tab: an app window (Edge,
+# Chrome or Chromium) with its own profile, paired once like any display (named after this computer,
+# approved in the mailbox), so "send this to the desk" lands in it. The installer puts it in the
+# Start menu / app list with a key: Ctrl+Alt+A opens it, or brings it to the front if it's open.
+
+def _win_find_window(title: str) -> int | None:
+    c, w, _ = _win()
+    user32 = c.windll.user32
+    found = []
+
+    @c.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
+    def each(hwnd, _):
+        n = user32.GetWindowTextLengthW(hwnd)
+        if n and user32.IsWindowVisible(hwnd):
+            buf = c.create_unicode_buffer(n + 1)
+            user32.GetWindowTextW(hwnd, buf, n + 1)
+            cls = c.create_unicode_buffer(64)
+            user32.GetClassNameW(hwnd, cls, 64)
+            if buf.value == title and cls.value.startswith("Chrome_WidgetWin"):
+                found.append(hwnd)
+        return True
+    user32.EnumWindows(each, 0)
+    return found[0] if found else None
+
+
+def app_argv(browser: str, server: str, name: str) -> list[str]:
+    return [browser, f"--app={server.rstrip('/')}/view?app={urllib.parse.quote(name)}",
+            f"--user-data-dir={config_dir() / 'app-profile'}", "--window-size=520,900", "--no-first-run",
+            "--no-default-browser-check"]
+
+
+def cmd_app() -> int:
+    cfg, _ = load()
+    if IS_WINDOWS:
+        hwnd = _win_find_window("Aurelia")
+        if hwnd:                                              # already open: to the front
+            user32 = ctypes.windll.user32
+            user32.ShowWindow(hwnd, 9)                        # SW_RESTORE
+            user32.SetForegroundWindow(hwnd)
+            return 0
+    browser = find_browser()
+    if not browser:
+        print("Her window needs Edge, Chrome or Chromium.")
+        return 1
+    argv = app_argv(browser, cfg["server"], cfg.get("name") or socket.gethostname())
+    if IS_WINDOWS:
+        subprocess.Popen(argv, close_fds=True, creationflags=0x00000008)   # DETACHED_PROCESS
+    else:
+        spawn(argv)
+    return 0
+
+
+# ---- modes: normal, gaming, exam ----------------------------------------------------------------
+#
+# Gaming: the agent stays connected but does nothing heavy (no screen work, no installs, no player,
+# no GPU queries); only quick things (lock, sound, the clipboard, its mode) are answered. It turns on
+# by itself while a game runs (from Steam, Epic, GOG, Riot, EA, Ubisoft or Battle.net folders) and off
+# when the game closes, unless he set it himself.
+# Exam: nothing of Aurelia runs on this computer at all. The agent stops, its autostart is switched
+# off, and a one-time system timer brings it back when the exam is over. He can end it early on the
+# computer itself (Start menu: "Aurelia - end exam mode", or `aurelia_node.py mode normal`).
+
+MODES = ("normal", "gaming", "exam")
+GAMING_OK = {"mode", "power", "sound", "player", "clipboard_get", "clipboard_set", "health"}
+GAME_DIRS = ("steamapps/common/", "epic games/", "gog galaxy/games/", "riot games/", "ea games/",
+             "ubisoft game launcher/games/", "battle.net/", "xboxgames/")
+MODE_CHANGED = threading.Event()
+TASK_NAME = "Aurelia node"
+EXAM_TASK = "Aurelia exam end"
+
+
+def mode_file() -> Path:
+    return config_dir() / "mode.json"
+
+
+def read_mode() -> dict:
+    try:
+        m = json.loads(mode_file().read_text())
+    except (OSError, ValueError):
+        return {"mode": "normal"}
+    if m.get("mode") == "exam" and m.get("until") and time.time() >= float(m["until"]):
+        return {"mode": "normal", "ended": "exam"}                 # the exam is over
+    return m if m.get("mode") in MODES else {"mode": "normal"}
+
+
+def write_mode(mode: str, until: float | None = None, auto: bool = False) -> dict:
+    m = {"mode": mode, **({"until": int(until)} if until else {}), **({"auto": True} if auto else {})}
+    mode_file().parent.mkdir(parents=True, exist_ok=True)
+    mode_file().write_text(json.dumps(m))
+    MODE_CHANGED.set()
+    return m
+
+
+def current_mode() -> str:
+    return read_mode().get("mode", "normal")
+
+
+def game_paths() -> list[str]:
+    """Executable paths of what's running (lower case, forward slashes)."""
+    paths = []
+    if IS_WINDOWS:
+        c, w, k32 = _win()
+        procs = _windows_procs()
+        k32.OpenProcess.restype = w.HANDLE
+        for pid in [p for p in procs if isinstance(p, int)]:
+            h = k32.OpenProcess(0x1000, False, pid)
+            if not h:
+                continue
+            buf, size = c.create_unicode_buffer(1024), w.DWORD(1024)
+            if k32.QueryFullProcessImageNameW(h, 0, buf, c.byref(size)):
+                paths.append(buf.value.replace("\\", "/").lower())
+            k32.CloseHandle(h)
+        return paths
+    for d in PROC.iterdir() if PROC.exists() else []:
+        if d.name.isdigit():
+            try:
+                paths.append(os.readlink(d / "exe").lower())
+            except OSError:
+                pass
+    return paths
+
+
+def game_running(paths: list[str] | None = None) -> str | None:
+    for p in game_paths() if paths is None else paths:
+        for marker in GAME_DIRS:
+            if marker in p:
+                rest = p.split(marker, 1)[1]
+                return rest.split("/", 1)[0] or marker.rstrip("/")
+    return None
+
+
+def auto_gaming_loop(stop: threading.Event, every: float = 30) -> None:
+    while not stop.wait(every):
+        try:
+            m, game = read_mode(), game_running()
+            if game and m.get("mode") == "normal":
+                write_mode("gaming", auto=True)
+                log(f"gaming mode on ({game})")
+            elif not game and m.get("mode") == "gaming" and m.get("auto"):
+                write_mode("normal")
+                log("gaming mode off (the game closed)")
+        except Exception as exc:
+            log("couldn't check for games:", repr(exc))
+
+
+def _win_tasks(script: str, env: dict | None = None) -> tuple[int, str, str]:
+    """A fixed PowerShell script for the scheduled tasks; values only through environment variables."""
+    exe = shutil.which("powershell") or "powershell"
+    try:
+        r = subprocess.run([exe, "-NoProfile", "-NonInteractive", "-Command", script], capture_output=True, text=True,
+                           timeout=60, env={**os.environ, **(env or {})})
+        return r.returncode, r.stdout, r.stderr
+    except (OSError, subprocess.SubprocessError):
+        return 1, "", "powershell didn't run"
+
+
+def _pythonw() -> str:
+    w = Path(sys.executable).with_name("pythonw.exe")
+    return str(w if w.exists() else sys.executable)
+
+
+def schedule_return(seconds: float) -> str:
+    """The one-time timer that ends exam mode, and switching autostart off meanwhile."""
+    guard = Path(__file__).resolve().with_name("aurelia_node_guard.py")
+    if IS_WINDOWS:
+        code, _, err = _win_tasks(
+            "$a = New-ScheduledTaskAction -Execute $env:AUR_PY -Argument ('\"' + $env:AUR_GUARD + '\" exam-end');"
+            "$t = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds([int]$env:AUR_SECONDS);"
+            "Register-ScheduledTask -TaskName $env:AUR_EXAM -Action $a -Trigger $t -Force | Out-Null;"
+            "Disable-ScheduledTask -TaskName $env:AUR_TASK -ErrorAction SilentlyContinue | Out-Null",
+            {"AUR_PY": _pythonw(), "AUR_GUARD": str(guard), "AUR_SECONDS": str(int(seconds)),
+             "AUR_EXAM": EXAM_TASK, "AUR_TASK": TASK_NAME})
+        if code != 0:
+            raise ValueError(f"I couldn't set the timer that brings me back ({_clean(err) or code}), so I stayed on")
+        return "task"
+    if shutil.which("systemd-run"):
+        code, _, err = _run_full(["systemd-run", "--user", f"--on-active={int(seconds)}", "--unit=aurelia-exam-end",
+                                  "--collect", "systemctl", "--user", "start", "aurelia-node.service"], 15)
+        if code != 0:
+            raise ValueError(f"I couldn't set the timer that brings me back ({_clean(err) or code}), so I stayed on")
+        return "systemd"
+    raise ValueError("this computer has no way to bring me back on a timer, so I stayed on")
+
+
+def end_exam() -> None:
+    """Exam mode is over (the timer, or him on this computer): autostart back on, and start."""
+    write_mode("normal")
+    if IS_WINDOWS:
+        _win_tasks("Enable-ScheduledTask -TaskName $env:AUR_TASK -ErrorAction SilentlyContinue | Out-Null;"
+                   "Unregister-ScheduledTask -TaskName $env:AUR_EXAM -Confirm:$false -ErrorAction SilentlyContinue;"
+                   "Start-ScheduledTask -TaskName $env:AUR_TASK -ErrorAction SilentlyContinue",
+                   {"AUR_TASK": TASK_NAME, "AUR_EXAM": EXAM_TASK})
+    elif shutil.which("systemctl"):
+        _run_full(["systemctl", "--user", "stop", "aurelia-exam-end.timer"], 10)
+        _run_full(["systemctl", "--user", "start", "aurelia-node.service"], 10)
+
+
+STOP_AFTER_REPLY = threading.Event()
+
+
+def do_mode(args: dict) -> dict:
+    mode = str(args.get("mode") or "")
+    if mode not in MODES:
+        raise ValueError("modes: normal, gaming, exam")
+    if mode == "exam":
+        hours = max(0.25, min(12.0, float(args.get("hours") or 3)))
+        until = time.time() + hours * 3600
+        how = schedule_return(hours * 3600)
+        m = write_mode("exam", until)
+        STOP_AFTER_REPLY.set()                                 # answer first, then stop completely
+        return {**m, "how": how}
+    if mode == "gaming":
+        return write_mode("gaming")
+    return write_mode("normal")
+
+
 # ---- the clipboard (only when he asks) ----------------------------------------------------------
 #
 # Text only. Read when he asks ("copy what's on the desk"), written when he asks ("put it on the TV
@@ -1652,7 +1958,19 @@ def do_clipboard_set(args: dict) -> dict:
         code, _, err = _run_in(["xclip", "-selection", "clipboard", "-i"], text)
     if code != 0:
         raise ValueError(f"the clipboard said no ({_clean(err) or code})")
-    return {"set": True, "chars": len(text)}
+    back = None
+    for _ in range(3):                                        # read it back: it's really there
+        try:
+            back = do_clipboard_get({}).get("text", "")
+        except ValueError:
+            back = None
+            break
+        if back.rstrip("\r\n") == text[:CLIP_MAX].rstrip("\r\n"):
+            break
+        time.sleep(0.2)                                       # the clipboard can take a moment to settle
+    if back is not None and back.rstrip("\r\n") != text[:CLIP_MAX].rstrip("\r\n"):
+        raise ValueError("I put it on the clipboard, but it didn't stay there")
+    return {"set": True, "chars": len(text), "verified": back is not None}
 
 
 # ---- installing and removing apps (always his confirmation) -----------------------------------------
@@ -2218,6 +2536,9 @@ COMMANDS = {"open_url": do_open_url, "launch_app": do_launch_app, "list_apps": d
 
 def execute(cmd: dict) -> dict:
     fn = COMMANDS.get(cmd.get("kind"))
+    if fn is not None and cmd.get("kind") not in GAMING_OK and current_mode() == "gaming":
+        return {"ok": False, "error": "this computer is in gaming mode, so I'm keeping out of the way (say \"end "
+                                      "gaming mode\" first)", "data": {"mode": "gaming"}}
     if fn is None:
         return {"ok": False, "error": f"this node doesn't do '{cmd.get('kind')}'"}
     try:
@@ -3280,7 +3601,7 @@ def do_page_clear(args: dict) -> dict:
 COMMANDS.update({"logins": do_logins, "sign_in": do_sign_in, "play": do_play, "packages_find": do_packages_find,
                  "package_check_remove": do_package_check_remove, "package_install": do_package_install,
                  "package_remove": do_package_remove, "clipboard_get": do_clipboard_get,
-                 "clipboard_set": do_clipboard_set})
+                 "clipboard_set": do_clipboard_set, "mode": do_mode})
 COMMANDS.update({"page_look": do_page_look, "page_click": do_page_click, "page_type": do_page_type,
                  "page_key": do_page_key, "page_scroll": do_page_scroll, "page_back": do_page_back,
                  "page_media": do_page_media, "page_clear": do_page_clear})
@@ -3434,6 +3755,12 @@ def cmd_pair(server: str, name: str) -> int:
 
 def cmd_run() -> int:
     global SHELL, SERVER_URL, NODE_KEY
+    m = read_mode()
+    if m.get("ended") == "exam":
+        write_mode("normal")
+    elif m.get("mode") == "exam":
+        log("exam mode: staying stopped until it ends")      # nothing of Aurelia runs meanwhile
+        return EXIT_PAUSED
     cfg, key = load()
     server, backoff, said_hello_at = cfg["server"], 2.0, 0.0
     SERVER_URL, NODE_KEY = server, key
@@ -3442,11 +3769,14 @@ def cmd_run() -> int:
         SHELL = Shell(server, key)
         threading.Thread(target=SHELL.supervise, daemon=True).start()
         threading.Thread(target=live_loop, args=(server, key, SHELL.stop_event), daemon=True).start()
+    if not cfg.get("shell"):                                  # a desktop someone games on (her shell isn't a desktop)
+        threading.Thread(target=auto_gaming_loop, args=(threading.Event(),), daemon=True).start()
     while True:
         try:
-            if time.time() - said_hello_at > HELLO_SECONDS or (SHELL and SHELL.changed.is_set()):
+            if time.time() - said_hello_at > HELLO_SECONDS or (SHELL and SHELL.changed.is_set()) or MODE_CHANGED.is_set():
                 if SHELL:
                     SHELL.changed.clear()
+                MODE_CHANGED.clear()
                 hello = call(server, "/nodes/hello", {"info": machine_info(), "specs": specs(), "vitals": vitals()}, key)
                 said_hello_at = time.time()
                 log("connected")
@@ -3457,6 +3787,14 @@ def cmd_run() -> int:
                 log("command:", cmd.get("kind"))
                 result = execute(cmd)
                 call(server, f"/nodes/commands/{cmd['id']}/result", result, key)
+                if STOP_AFTER_REPLY.is_set():                        # exam mode: he has the answer; now stop
+                    log("exam mode: stopping")
+                    if SHELL:
+                        SHELL.stop_event.set()
+                        SHELL.stop()
+                    if player_busy():
+                        player().control("stop", {})
+                    return EXIT_PAUSED
             maybe_update(server, key, got.get("agent") or {})        # seen within a poll, not ten minutes
         except Revoked:
             log("this computer's key was revoked or isn't valid anymore; stopping. Pair it again to reconnect.")
@@ -3469,6 +3807,31 @@ def cmd_run() -> int:
             said_hello_at = 0.0
             time.sleep(backoff)
             backoff = min(backoff * 2, 60.0)
+
+
+def cmd_mode(mode: str, hours: float) -> int:
+    """On this computer itself: the Start-menu shortcuts and the terminal."""
+    if mode == "normal":
+        was = read_mode().get("mode")
+        end_exam() if was == "exam" else write_mode("normal")
+        print("Back to normal." + (" Starting again." if was == "exam" else ""))
+        return 0
+    if mode == "gaming":
+        write_mode("gaming")
+        print("Gaming mode: I keep out of the way until you set it back (mode normal).")
+        return 0
+    try:
+        schedule_return(hours * 3600)
+    except ValueError as exc:
+        print(f"Not in exam mode: {exc}.")
+        return 1
+    write_mode("exam", time.time() + hours * 3600)
+    if IS_WINDOWS:
+        _win_tasks("Stop-ScheduledTask -TaskName $env:AUR_TASK -ErrorAction SilentlyContinue", {"AUR_TASK": TASK_NAME})
+    elif shutil.which("systemctl"):
+        _run_full(["systemctl", "--user", "stop", "aurelia-node.service"], 15)
+    print(f"Exam mode for {hours:g} h: nothing of mine runs here until then (mode normal ends it early).")
+    return 0
 
 
 def cmd_status() -> int:
@@ -3557,7 +3920,19 @@ def main(argv=None) -> int:
     lg.add_argument("site", nargs="?", default="")
     lg.add_argument("--origin", default="", help="the sign-in page's address (for sites she doesn't know)")
     lg.add_argument("--start", default="", help="where to open to sign in, if not the origin itself")
+    md = sub.add_parser("mode", help="normal, gaming, or exam (stops me completely; --hours, default 3)")
+    md.add_argument("mode", choices=list(MODES))
+    md.add_argument("--hours", type=float, default=3)
+    sub.add_parser("exam-end", help="(the timer's) end exam mode and start again")
+    sub.add_parser("app", help="open her window on this computer (or bring it to the front)")
     a = ap.parse_args(argv)
+    if a.cmd == "mode":
+        return cmd_mode(a.mode, a.hours)
+    if a.cmd == "exam-end":
+        end_exam()
+        return 0
+    if a.cmd == "app":
+        return cmd_app()
     if a.cmd == "login":
         return cmd_login(a.action, a.site, a.origin, a.start)
     if a.cmd == "pair":
