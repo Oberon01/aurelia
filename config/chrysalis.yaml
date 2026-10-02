@@ -18,5 +18,7 @@ verify:
   functions_timeout_seconds: 45    # every function online before must re-register
   smoke_test: true                 # run a real probe.echo task end to end
   watch_seconds: 120               # after going live, roll back if a changed service turns unhealthy
+  proxy_url: "http://proxy:80"     # also load Aurelia through Traefik, the way your devices do ("" to skip)
+  proxy_timeout_seconds: 45
 
 keep_releases: 5                   # good releases whose images are kept for instant rollback

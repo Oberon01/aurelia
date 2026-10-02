@@ -73,6 +73,23 @@ class Verifier:
                 await asyncio.sleep(2)
             passed.append("orchestrator ready")
 
+            if cfg.proxy_url:                       # the way his devices reach her, not just from inside
+                deadline, last = loop.time() + cfg.proxy_timeout_seconds, "no answer"
+                async with httpx.AsyncClient(timeout=10) as px:
+                    while True:
+                        try:
+                            r = await px.get(f"{cfg.proxy_url.rstrip('/')}/health")
+                            if r.status_code == 200:
+                                break
+                            last = f"HTTP {r.status_code}"
+                        except httpx.HTTPError as exc:
+                            last = exc.__class__.__name__
+                        if loop.time() > deadline:
+                            raise VerifyError(f"Aurelia isn't reachable through the proxy ({last}): the new "
+                                              "orchestrator is up, but his devices can't reach it")
+                        await asyncio.sleep(2)
+                passed.append("reachable through the proxy")
+
             deadline = loop.time() + cfg.functions_timeout_seconds
             while True:
                 missing = expected_functions - await self.reachable_functions()

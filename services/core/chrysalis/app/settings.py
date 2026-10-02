@@ -20,6 +20,11 @@ class VerifyConfig(BaseModel):
     functions_timeout_seconds: float = 45
     smoke_test: bool = True
     watch_seconds: float = 120
+    # Also load Aurelia the way his devices do, through the proxy (Traefik): a new orchestrator can
+    # be healthy inside its container yet unreachable from outside (e.g. Traefik picked an address on
+    # a network it isn't on), and that's a failed release. "" turns the check off.
+    proxy_url: str = "http://proxy:80"
+    proxy_timeout_seconds: float = 45
 
 
 class ChrysalisConfig(BaseModel):
