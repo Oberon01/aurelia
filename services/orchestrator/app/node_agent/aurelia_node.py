@@ -58,7 +58,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.5.9"
+VERSION = "0.6.0"
 IS_WINDOWS = platform.system() == "Windows"
 EXIT_REVOKED = 3                                   # the service manager doesn't restart after this
 EXIT_UPDATED = 75                                  # restart me: a new version is in place
@@ -1281,6 +1281,9 @@ def mpv_socket() -> str:
 
 
 def find_mpv() -> str | None:
+    forced = os.environ.get("AURELIA_MPV")                     # tests: a path, or "none"
+    if forced:
+        return None if forced == "none" else forced
     exe = shutil.which("mpv")
     if exe or not IS_WINDOWS:
         return exe
@@ -1311,7 +1314,13 @@ class Mpv:
                 "--title=Aurelia", f"--input-ipc-server={self.path}", *extra]
 
     def running(self) -> bool:
-        return self.proc is not None and self.proc.poll() is None
+        if self.proc is not None and self.proc.poll() is None:
+            return True
+        try:                                                  # one left playing by the agent before an update
+            self.command("get_property", "idle-active")
+            return True
+        except (OSError, ValueError):
+            return False
 
     def start(self) -> None:
         if self.running():
@@ -1543,6 +1552,197 @@ def do_play(args: dict) -> dict:
     st = p.play(items, float(args.get("start") or 0), f"Authorization: Bearer {NODE_KEY}" if NODE_KEY else None)
     p.report()
     return {"player": st}
+
+
+# ---- installing and removing apps (always his confirmation) -----------------------------------------
+#
+# Only from the system's own signed sources: Ubuntu's packages through PackageKit (pkcon), and snaps.
+# Never a file, a script or a web download. Aurelia finds what would be installed or removed first
+# and puts it in front of him; these commands run only with confirmed=True, which the orchestrator
+# sends only after he said yes. A removal that would take other packages with it is refused, and
+# the system's core (and its security software, and what Aurelia herself runs on) is never removed.
+# Permission comes from the installer's --system step (a polkit rule for this account and only
+# these actions: install trusted packages, remove packages, manage snaps).
+
+PKG_NAME = re.compile(r"^[a-z0-9][a-z0-9+.\-]{0,62}$")
+PKG_TERM = re.compile(r"^[A-Za-z0-9 +.\-]{1,60}$")
+PROTECTED_PKG = re.compile(
+    r"^(linux-|systemd|libc|libsystemd|python3|openssh|sudo|polkit|policykit|packagekit|apt|dpkg|snapd|core\d*$|bare$|"
+    r"tailscale|network-manager|netplan|gdm3|ubuntu-|cage$|grub|shim|initramfs|base-|coreutils|bash$|dash$|login$|passwd$|"
+    r"util-linux|dbus|udev|firmware|xorg|xwayland|wayland|gnome-shell|mutter|pipewire|wireplumber|pulseaudio|"
+    r"ufw|apparmor|clamav|fail2ban|unattended-upgrades|ca-certificates|gnupg|openssl|chromium|google-chrome|firefox$)")
+
+
+def _run_c(argv: list[str], timeout: float = 30) -> tuple[int, str, str]:
+    """A fixed program by argument list, in the C locale (its output is parsed)."""
+    exe = shutil.which(argv[0])
+    if not exe:
+        return 127, "", ""
+    try:
+        r = subprocess.run([exe, *argv[1:]], capture_output=True, text=True, timeout=timeout,
+                           env={**os.environ, "LC_ALL": "C", "LANG": "C"})
+        return r.returncode, r.stdout, r.stderr
+    except subprocess.TimeoutExpired:
+        return 124, "", "it took too long"
+    except (OSError, subprocess.SubprocessError):
+        return 1, "", ""
+
+
+def parse_apt_search(out: str) -> list[dict]:
+    found = []
+    for line in out.splitlines():
+        name, sep, summary = line.partition(" - ")
+        if sep and PKG_NAME.match(name.strip()):
+            found.append({"source": "apt", "name": name.strip(), "summary": summary.strip()[:120]})
+    return found
+
+
+def parse_snap_find(out: str) -> list[dict]:
+    found = []
+    for line in out.splitlines()[1:]:
+        f = line.split(None, 4)
+        if len(f) >= 4 and PKG_NAME.match(f[0]):
+            found.append({"source": "snap", "name": f[0], "summary": (f[4] if len(f) > 4 else "").strip()[:120],
+                          "publisher": f[2].rstrip("✓*✪")})
+    return found
+
+
+def parse_apt_removal(out: str) -> list[str]:
+    """What `apt-get -s remove` says would go: one name per 'Remv' line."""
+    return [m.group(1) for m in re.finditer(r"^Remv (\S+)", out, re.M)]
+
+
+def _apt_installed(names: list[str]) -> set[str]:
+    if not names:
+        return set()
+    _, out, _ = _run_c(["dpkg-query", "-W", "-f", "${Package} ${db:Status-Status}\n", *names])
+    return {l.split()[0] for l in out.splitlines() if l.endswith(" installed")}
+
+
+def _snap_installed() -> set[str]:
+    _, out, _ = _run_c(["snap", "list"])
+    return {l.split()[0] for l in out.splitlines()[1:] if l.strip()}
+
+
+def _essential(name: str) -> bool:
+    _, out, _ = _run_c(["dpkg-query", "-W", "-f", "${Essential} ${Priority}", name])
+    return out.startswith("yes") or " required" in out or " important" in out
+
+
+def do_packages_find(args: dict) -> dict:
+    """What could be installed for his words (and whether it already is). Changes nothing."""
+    if IS_WINDOWS:
+        raise ValueError("installing apps on Windows comes with the Windows installer")
+    term = " ".join(str(args.get("name") or "").split())
+    if not PKG_TERM.match(term):
+        raise ValueError("say the app's name (letters, numbers, spaces)")
+    want = term.lower().replace(" ", "-")
+    apt = []
+    if shutil.which("apt-cache"):
+        _, out, _ = _run_c(["apt-cache", "search", "--names-only", term])
+        apt = parse_apt_search(out)
+    snaps = []
+    if shutil.which("snap"):
+        _, out, _ = _run_c(["snap", "find", term], 40)
+        snaps = parse_snap_find(out)
+    rank = lambda c: (c["name"] != want, not c["name"].startswith(want), len(c["name"]))
+    apt, snaps = sorted(apt, key=rank)[:6], sorted(snaps, key=rank)[:4]
+    have, have_snap = _apt_installed([c["name"] for c in apt]), (_snap_installed() if snaps else set())
+    for c in apt:
+        c["installed"] = c["name"] in have
+    for c in snaps:
+        c["installed"] = c["name"] in have_snap
+    cands = sorted(apt + snaps, key=rank)
+    return {"candidates": cands, "can_install": bool(shutil.which("pkcon")) or bool(shutil.which("snap"))}
+
+
+def _removal(name: str) -> list[str]:
+    code, out, err = _run_c(["apt-get", "-s", "remove", name], 60)
+    if code != 0:
+        raise ValueError(f"I can't tell what removing {name} would take with it ({_clean(err) or code})")
+    return parse_apt_removal(out)
+
+
+def do_package_check_remove(args: dict) -> dict:
+    """What removing it would take away, before he's asked. Changes nothing."""
+    name, source = _pkg_args(args)
+    if source == "snap":
+        if name not in _snap_installed():
+            raise ValueError(f"{name} isn't installed (as a snap)")
+        return {"name": name, "source": "snap", "removes": [name]}
+    if PROTECTED_PKG.match(name) or _essential(name):
+        raise ValueError(f"{name} is part of the system (or keeps me or this computer safe), so I won't remove it")
+    if name not in _apt_installed([name]):
+        raise ValueError(f"{name} isn't installed here")
+    removes = _removal(name)
+    extra = [x for x in removes if x != name]
+    if extra:
+        raise ValueError(f"removing {name} would also remove {', '.join(extra[:8])}" + ("…" if len(extra) > 8 else "")
+                         + ", so I won't")
+    return {"name": name, "source": "apt", "removes": removes or [name]}
+
+
+def _pkg_args(args: dict) -> tuple[str, str]:
+    if IS_WINDOWS:
+        raise ValueError("installing apps on Windows comes with the Windows installer")
+    name, source = str(args.get("name") or "").strip(), str(args.get("source") or "apt")
+    if not PKG_NAME.match(name) or source not in ("apt", "snap"):
+        raise ValueError("which package? (its exact name, from apt or snap)")
+    return name, source
+
+
+def _need_permission(err: str) -> bool:
+    low = err.lower()
+    return "not authorized" in low or "authorization" in low or "permission denied" in low or "access denied" in low
+
+
+def do_package_install(args: dict) -> dict:
+    if args.get("confirmed") is not True:
+        raise ValueError("installing an app needs his confirmation")
+    name, source = _pkg_args(args)
+    if source == "snap":
+        if not shutil.which("snap"):
+            raise ValueError("snaps aren't available here")
+        code, out, err = _run_c(["snap", "install", name], 900)
+        installed = name in _snap_installed()
+    else:
+        if not shutil.which("pkcon"):
+            raise ValueError("I can't install here yet: run the installer with --system once (it lets me install with your OK)")
+        code, out, err = _run_c(["pkcon", "-y", "-p", "install", name], 900)
+        if code not in (0, 4) and "not found" in (out + err).lower():
+            _run_c(["pkcon", "-p", "refresh"], 300)              # an old package list: refresh once and try again
+            code, out, err = _run_c(["pkcon", "-y", "-p", "install", name], 900)
+        installed = name in _apt_installed([name])
+    if not installed:
+        why = err or out
+        if _need_permission(why):
+            raise ValueError("this computer didn't let me install (run the installer with --system once)")
+        raise ValueError(f"{name} didn't install ({_clean(why.strip().splitlines()[-1] if why.strip() else str(code))})")
+    return {"name": name, "source": source, "installed": True}
+
+
+def do_package_remove(args: dict) -> dict:
+    if args.get("confirmed") is not True:
+        raise ValueError("removing an app needs his confirmation")
+    expected = [str(x) for x in args.get("removes") or []]
+    checked = do_package_check_remove(args)                       # again, now: nothing may have changed
+    if expected and sorted(checked["removes"]) != sorted(expected):
+        raise ValueError("what removing it would take away has changed since you were asked, so I didn't")
+    name, source = checked["name"], checked["source"]
+    if source == "snap":
+        code, out, err = _run_c(["snap", "remove", name], 600)
+        gone = name not in _snap_installed()
+    else:
+        if not shutil.which("pkcon"):
+            raise ValueError("I can't remove apps here yet: run the installer with --system once")
+        code, out, err = _run_c(["pkcon", "-y", "-p", "remove", name], 600)
+        gone = name not in _apt_installed([name])
+    if not gone:
+        why = err or out
+        if _need_permission(why):
+            raise ValueError("this computer didn't let me remove it (run the installer with --system once)")
+        raise ValueError(f"{name} wasn't removed ({_clean(why.strip().splitlines()[-1] if why.strip() else str(code))})")
+    return {"name": name, "source": source, "removed": True}
 
 
 # ---- diagnostics (stage 1 of node fixes: read-only) ---------------------------------------------
@@ -2962,7 +3162,9 @@ def do_page_clear(args: dict) -> dict:
         return {}
 
 
-COMMANDS.update({"logins": do_logins, "sign_in": do_sign_in, "play": do_play})
+COMMANDS.update({"logins": do_logins, "sign_in": do_sign_in, "play": do_play, "packages_find": do_packages_find,
+                 "package_check_remove": do_package_check_remove, "package_install": do_package_install,
+                 "package_remove": do_package_remove})
 COMMANDS.update({"page_look": do_page_look, "page_click": do_page_click, "page_type": do_page_type,
                  "page_key": do_page_key, "page_scroll": do_page_scroll, "page_back": do_page_back,
                  "page_media": do_page_media, "page_clear": do_page_clear})
@@ -3004,8 +3206,12 @@ def after_hello(server: str, key: str, hello: dict) -> None:
         st = read_state()
         st.pop("attempts", None), st.pop("gave_up", None), st.pop("reported", None)
         write_state(st)
-    want = hello.get("agent") or {}
-    if want.get("version") and want["version"] != VERSION:
+    maybe_update(server, key, hello.get("agent") or {})
+
+
+def maybe_update(server: str, key: str, want: dict) -> None:
+    """A newer agent is out: take it now, unless something is playing (then at the next chance)."""
+    if want.get("version") and want["version"] != VERSION and not player_busy():
         update(server, key, want)
 
 
@@ -3135,6 +3341,7 @@ def cmd_run() -> int:
                 log("command:", cmd.get("kind"))
                 result = execute(cmd)
                 call(server, f"/nodes/commands/{cmd['id']}/result", result, key)
+            maybe_update(server, key, got.get("agent") or {})        # seen within a poll, not ten minutes
         except Revoked:
             log("this computer's key was revoked or isn't valid anymore; stopping. Pair it again to reconnect.")
             if SHELL:

@@ -78,6 +78,8 @@ def run_tool(stack, tool, args, confirmed=False):
 
 
 def wait_registered(stack):
+    from .conftest import register_testfn
+    register_testfn(stack["orch"], stack["fn"])                       # it lapses in a long run
     for _ in range(50):
         if any(f["name"] == "mnemosyne" for f in httpx.get(f"{stack['orch']}/registry/functions").json()):
             return

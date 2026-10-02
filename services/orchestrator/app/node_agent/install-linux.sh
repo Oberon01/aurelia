@@ -5,7 +5,8 @@
 #   ... | bash -s -- <address> "Living room TV" --shell      also make this screen hers (asks for sudo once)
 #   ... | bash -s -- <address> --no-shell                    back to a normal desktop at login
 #   ... | bash -s -- <address> --system                      one-time sudo: restart/shutdown/sleep without a
-#                                                            password, shutdowns that can't hang, the system log, her player (mpv)
+#                                                            password, shutdowns that can't hang, the system log, her player (mpv),
+#                                                            installing apps you approve (PackageKit, snaps)
 #   ... | bash -s -- <address> --role=server                 what it's for (presentation, workstation, server);
 #                                                            guessed if left out, changeable on the devices panel
 #
@@ -94,6 +95,20 @@ polkit.addRule(function (action, subject) {
                  "org.freedesktop.login1.power-off-multiple-sessions", "org.freedesktop.login1.power-off-ignore-inhibit",
                  "org.freedesktop.login1.suspend", "org.freedesktop.login1.suspend-multiple-sessions",
                  "org.freedesktop.login1.suspend-ignore-inhibit", "org.freedesktop.login1.lock-sessions"];
+  if (subject.user == "$ME" && allowed.indexOf(action.id) >= 0) { return polkit.Result.YES; }
+});
+RULES
+  # 1b. Install and remove apps after you said yes in Aurelia: this account only, and only from the
+  #     system's signed sources (Ubuntu's packages through PackageKit, and snaps). Never a local file
+  #     (package-install-untrusted stays with you).
+  sudo apt-get install -y packagekit packagekit-tools >/dev/null 2>&1 || echo "  (PackageKit isn't available; I can't install apps here)"
+  sudo tee /etc/polkit-1/rules.d/49-aurelia-packages.rules >/dev/null <<RULES
+// Aurelia's node agent runs as $ME. After Kentrell confirms in Aurelia, it may install packages from
+// the system's trusted sources, remove packages, refresh the package lists, and install or remove
+// snaps. Never untrusted (local) packages. (Installed by install-linux.sh --system.)
+polkit.addRule(function (action, subject) {
+  var allowed = ["org.freedesktop.packagekit.package-install", "org.freedesktop.packagekit.package-remove",
+                 "org.freedesktop.packagekit.system-sources-refresh", "io.snapcraft.snapd.manage"];
   if (subject.user == "$ME" && allowed.indexOf(action.id) >= 0) { return polkit.Result.YES; }
 });
 RULES

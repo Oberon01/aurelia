@@ -37,7 +37,10 @@ tools:
   move_file:       { tier: change }
   delete_file:     { tier: change }
   kill_process:    { tier: change }      # closing those exact processes: always his confirmation
-  install:         { tier: change }
+  install:         { tier: act }         # finds the package; never installs itself (puts install_package before him)
+  install_package: { tier: change }      # exactly that package from Ubuntu's packages or snaps: always confirmed
+  uninstall:       { tier: act }         # checks what would go; never removes itself (puts remove_package before him)
+  remove_package:  { tier: change }      # only that package, nothing that takes others with it: always confirmed
   read_secrets:    { tier: never }
 
 rate_limit_per_minute: 120

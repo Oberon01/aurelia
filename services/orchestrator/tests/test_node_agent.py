@@ -850,3 +850,114 @@ def test_without_mpv_she_says_how_to_get_it(monkeypatch):
     monkeypatch.setattr(agent, "find_mpv", lambda: None)
     with pytest.raises(ValueError, match="--system"):
         agent.Mpv(path="/tmp/nowhere.sock").start()
+
+
+# ---- installing and removing apps -------------------------------------------------------------------
+
+APT_SEARCH = "vlc - multimedia player and streamer\nvlc-bin - binaries from VLC\nbad name - nope\n"
+SNAP_FIND = ("Name        Version  Publisher     Notes  Summary\n"
+             "vlc         3.0.20   videolan✓     -      The ultimate media player\n"
+             "vlc-remote  1.0      someone       -      Control VLC\n")
+
+
+def test_package_listings_are_read_safely():
+    assert agent.parse_apt_search(APT_SEARCH) == [
+        {"source": "apt", "name": "vlc", "summary": "multimedia player and streamer"},
+        {"source": "apt", "name": "vlc-bin", "summary": "binaries from VLC"}]
+    snaps = agent.parse_snap_find(SNAP_FIND)
+    assert snaps[0] == {"source": "snap", "name": "vlc", "summary": "The ultimate media player", "publisher": "videolan"}
+    assert agent.parse_apt_removal("Remv vlc [3.0]\nRemv vlc-bin [3.0]\nInst x\n") == ["vlc", "vlc-bin"]
+
+
+class Pkgs:
+    """A fake package system: apt-cache, dpkg-query, apt-get -s, pkcon, snap."""
+
+    def __init__(self, installed=(), deps=None, allowed=True):
+        self.installed, self.deps, self.allowed, self.calls = set(installed), deps or {}, allowed, []
+
+    def __call__(self, argv, timeout=30):
+        self.calls.append(argv)
+        if argv[0] == "apt-cache":
+            return 0, APT_SEARCH, ""
+        if argv[0] == "snap" and argv[1] == "find":
+            return 0, SNAP_FIND, ""
+        if argv[0] == "snap" and argv[1] == "list":
+            return 0, "Name Version\n", ""
+        if argv[0] == "dpkg-query" and "${Essential} ${Priority}" in argv:
+            return 0, "yes required" if argv[-1] == "bash-ish" else "no optional", ""
+        if argv[0] == "dpkg-query":
+            return 0, "".join(f"{n} {'installed' if n in self.installed else 'not-installed'}\n" for n in argv[4:]), ""
+        if argv[0] == "apt-get":
+            return 0, "".join(f"Remv {x} [1]\n" for x in [argv[-1], *self.deps.get(argv[-1], [])]), ""
+        if argv[0] == "pkcon" and "install" in argv:
+            if not self.allowed:
+                return 1, "", "Fatal error: Not authorized"
+            self.installed.add(argv[-1])
+            return 0, "Finished", ""
+        if argv[0] == "pkcon" and "remove" in argv:
+            self.installed.discard(argv[-1])
+            return 0, "Finished", ""
+        return 127, "", ""
+
+
+@pytest.fixture
+def pkgs(monkeypatch):
+    fake = Pkgs(installed={"vlc-bin"})
+    monkeypatch.setattr(agent, "IS_WINDOWS", False)
+    monkeypatch.setattr(agent, "_run_c", fake)
+    monkeypatch.setattr(agent.shutil, "which", lambda n: f"/usr/bin/{n}")
+    return fake
+
+
+def test_finding_an_app_changes_nothing(pkgs):
+    got = agent.do_packages_find({"name": "VLC"})["candidates"]
+    assert got[0]["name"] == "vlc" and {c["source"] for c in got} == {"apt", "snap"}
+    assert next(c for c in got if c["name"] == "vlc-bin")["installed"] is True
+    assert not [c for c in pkgs.calls if c[0] in ("pkcon",) or c[:2] == ["snap", "install"]]
+    with pytest.raises(ValueError):
+        agent.do_packages_find({"name": "vlc; rm -rf /"})
+
+
+def test_installing_needs_his_yes_and_a_real_package_name(pkgs):
+    with pytest.raises(ValueError, match="confirmation"):
+        agent.do_package_install({"name": "vlc"})
+    for bad in ("../x.deb", "/tmp/evil.deb", "https://x/y.deb", "VLC Player"):
+        with pytest.raises(ValueError):
+            agent.do_package_install({"name": bad, "confirmed": True})
+    assert agent.do_package_install({"name": "vlc", "confirmed": True}) == {"name": "vlc", "source": "apt", "installed": True}
+    assert ["pkcon", "-y", "-p", "install", "vlc"] in pkgs.calls
+
+
+def test_without_permission_it_says_how_to_fix_it(pkgs):
+    pkgs.allowed = False
+    with pytest.raises(ValueError, match="--system"):
+        agent.do_package_install({"name": "vlc", "confirmed": True})
+
+
+def test_removing_never_takes_the_system_or_other_packages(pkgs):
+    pkgs.installed |= {"vlc", "systemd", "libvlc5", "steam"}
+    pkgs.deps = {"libvlc5": ["vlc", "vlc-bin"]}
+    assert agent.do_package_check_remove({"name": "vlc"}) == {"name": "vlc", "source": "apt", "removes": ["vlc"]}
+    with pytest.raises(ValueError, match="part of the system"):
+        agent.do_package_check_remove({"name": "systemd"})
+    with pytest.raises(ValueError, match="would also remove vlc, vlc-bin"):
+        agent.do_package_check_remove({"name": "libvlc5"})
+    with pytest.raises(ValueError, match="confirmation"):
+        agent.do_package_remove({"name": "steam"})
+    pkgs.deps["steam"] = ["steam-libs"]                                       # changed after he was asked
+    with pytest.raises(ValueError):
+        agent.do_package_remove({"name": "steam", "confirmed": True, "removes": ["steam"]})
+    assert agent.do_package_remove({"name": "vlc", "confirmed": True, "removes": ["vlc"]})["removed"] is True
+    assert "vlc" not in pkgs.installed
+
+
+def test_updates_wait_while_something_plays(monkeypatch):
+    seen = []
+    monkeypatch.setattr(agent, "update", lambda server, key, want: seen.append(want["version"]))
+    monkeypatch.setattr(agent, "player_busy", lambda: True)
+    agent.maybe_update("s", "k", {"version": "9.9.9"})
+    assert seen == []
+    monkeypatch.setattr(agent, "player_busy", lambda: False)
+    agent.maybe_update("s", "k", {"version": agent.VERSION})
+    agent.maybe_update("s", "k", {"version": "9.9.9"})
+    assert seen == ["9.9.9"]

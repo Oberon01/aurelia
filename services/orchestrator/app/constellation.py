@@ -237,6 +237,39 @@ TOOLS = [
             "device": {"type": "string", "description": "part of an output's name"}}, "required": ["action"]},
         cancellable=False),
     registry.ToolSpec(
+        name="install", description="Install an app on one of his computers (Linux): app is his words ('VLC', "
+                                    "'Steam', 'mpv'). Only from Ubuntu's own packages or the Snap Store, never a file "
+                                    "or a download. This never installs anything itself: it finds the package and puts "
+                                    "a confirmation card in front of him (install_package), or shows the choices when "
+                                    "there are several; call it again with package (and source) for the one he picks.",
+        input_schema={"type": "object", "properties": {
+            "target": {"type": "string"}, "app": {"type": "string"},
+            "package": {"type": "string", "description": "the exact package name, from the choices"},
+            "source": {"type": "string", "enum": ["apt", "snap"]}}, "required": ["app"]},
+        cancellable=False),
+    registry.ToolSpec(
+        name="install_package", description="Install exactly this package (name and source from install). Always "
+                                            "needs his confirmation; use install, which prepares it.",
+        input_schema={"type": "object", "properties": {
+            "target": {"type": "string"}, "name": {"type": "string"}, "source": {"type": "string", "enum": ["apt", "snap"]}},
+                      "required": ["name"]},
+        cancellable=False),
+    registry.ToolSpec(
+        name="uninstall", description="Remove an app from one of his computers (Linux). Never removes anything "
+                                      "itself: it checks what removing it would take away and puts a confirmation card "
+                                      "in front of him (remove_package). The system's core, its security software, "
+                                      "and anything other packages need are never removed.",
+        input_schema={"type": "object", "properties": {
+            "target": {"type": "string"}, "app": {"type": "string"},
+            "package": {"type": "string"}, "source": {"type": "string", "enum": ["apt", "snap"]}}, "required": ["app"]},
+        cancellable=False),
+    registry.ToolSpec(
+        name="remove_package", description="Remove exactly this package (from uninstall). Always needs his confirmation.",
+        input_schema={"type": "object", "properties": {
+            "target": {"type": "string"}, "name": {"type": "string"}, "source": {"type": "string", "enum": ["apt", "snap"]},
+            "removes": {"type": "array", "items": {"type": "string"}}}, "required": ["name"]},
+        cancellable=False),
+    registry.ToolSpec(
         name="watch", description="Show him one of his screens live, in a panel on the display he's using: what's "
                                   "on that computer's screen right now, a few frames a second, for as long as the "
                                   "panel is open. For 'show me the TV PC screen', 'let me see what you're doing', "
@@ -1434,6 +1467,90 @@ async def wake(app, user: str, args: dict) -> dict:
                                                          "note": f"Sent the wake signal from {via}. I'll tell you when it's back."}}
 
 
+SOURCE_SAY = {"apt": "Ubuntu's packages", "snap": "the Snap Store"}
+
+
+def _want(name: str) -> str:
+    return "-".join(re.findall(r"[a-z0-9+.]+", name.lower()))
+
+
+def _pick(cands: list[dict], words: str, package: str | None, source: str | None) -> dict | None:
+    pool = [c for c in cands if not source or c.get("source") == source]
+    if package:
+        return next((c for c in pool if c.get("name") == package), None)
+    exact = [c for c in pool if c.get("name") == _want(words)]
+    return (sorted(exact, key=lambda c: c.get("source") != "apt") or [None])[0]   # Ubuntu's own first
+
+
+async def install(app, user: str, args: dict) -> dict:
+    """Find exactly what would be installed, and hand him the confirmation (install_package, a change)."""
+    node = await target(app, args.get("target"))
+    words = " ".join(str(args.get("app") or args.get("package") or "").split())
+    if not words:
+        raise ValueError("Install what?")
+    d = await _ask_new(app, node, "packages_find", {"name": args.get("package") or words}, 90)
+    cands = [c for c in d.get("candidates") or [] if isinstance(c, dict)]
+    c = _pick(cands, words, args.get("package"), args.get("source"))
+    if c is None:
+        if not cands:
+            raise ValueError(f"There's no app called {words} in Ubuntu's packages or the Snap Store.")
+        return {"headline": f"Which {words}?", "packages": {"node": node["name"], "query": words, "items": cands[:10],
+                                                            "action": "install"}}
+    if c.get("installed"):
+        return {"headline": f"{c['name']} is already installed on {node['name']}",
+                "did": {"node": node["name"], "what": f"{c['name']} is already installed"}}
+    where = SOURCE_SAY[c["source"]] + (f", from {c['publisher']}" if c.get("publisher") else "")
+    about = f" ({c['summary']})" if c.get("summary") else ""
+    return {"headline": "Waiting for you", "did": {"node": node["name"], "what": f"Didn't install {c['name']} yet"},
+            "confirm": {"tool": f"{NAME}.install_package", "reason": f"Install {c['name']}{about} on {node['name']}, "
+                                                                     f"from {where}?",
+                        "reply": f"Installed {c['name']}.",
+                        "args": {"target": node["name"], "name": c["name"], "source": c["source"]}}}
+
+
+async def install_package(app, user: str, args: dict) -> dict:
+    """He confirmed (a change): exactly this package, from that source."""
+    node = await target(app, args.get("target"))
+    name, source = str(args.get("name") or ""), str(args.get("source") or "apt")
+    d = await _ask_new(app, node, "package_install", {"name": name, "source": source, "confirmed": True}, 960)
+    return {"headline": f"Installed {d.get('name') or name} on {node['name']}",
+            "did": {"node": node["name"], "what": f"Installed {d.get('name') or name} from {SOURCE_SAY.get(source, source)}"}}
+
+
+async def uninstall(app, user: str, args: dict) -> dict:
+    node = await target(app, args.get("target"))
+    words = " ".join(str(args.get("app") or args.get("package") or "").split())
+    if not words:
+        raise ValueError("Remove what?")
+    name, source = args.get("package"), args.get("source")
+    if not name:
+        d = await _ask_new(app, node, "packages_find", {"name": words}, 90)
+        mine = [c for c in d.get("candidates") or [] if isinstance(c, dict) and c.get("installed")]
+        c = _pick(mine, words, None, source) or (mine[0] if len(mine) == 1 else None)
+        if c is None:
+            if not mine:
+                raise ValueError(f"I don't see {words} installed on {node['name']} (from Ubuntu's packages or snaps).")
+            return {"headline": f"Which {words}?", "packages": {"node": node["name"], "query": words, "items": mine[:10],
+                                                                "action": "remove"}}
+        name, source = c["name"], c["source"]
+    chk = await _ask_new(app, node, "package_check_remove", {"name": name, "source": source or "apt"}, 90)
+    return {"headline": "Waiting for you", "did": {"node": node["name"], "what": f"Didn't remove {name} yet"},
+            "confirm": {"tool": f"{NAME}.remove_package",
+                        "reason": f"Remove {name} from {node['name']}? Nothing else goes with it.",
+                        "reply": f"Removed {name}.",
+                        "args": {"target": node["name"], "name": name, "source": chk.get("source") or source or "apt",
+                                 "removes": chk.get("removes") or [name]}}}
+
+
+async def remove_package(app, user: str, args: dict) -> dict:
+    node = await target(app, args.get("target"))
+    name, source = str(args.get("name") or ""), str(args.get("source") or "apt")
+    d = await _ask_new(app, node, "package_remove", {"name": name, "source": source, "confirmed": True,
+                                                     "removes": args.get("removes") or []}, 660)
+    return {"headline": f"Removed {d.get('name') or name} from {node['name']}",
+            "did": {"node": node["name"], "what": f"Removed {d.get('name') or name}"}}
+
+
 LIVE_SINCE = (0, 5, 7)
 
 
@@ -1484,7 +1601,8 @@ HANDLERS = {"devices": devices, "open": open_, "apps": apps, "home": home, "look
             "press": press, "scroll": scroll, "back": back, "media": media, "submit": submit, "health": health,
             "list_processes": list_processes, "close_process": close_process, "kill_process": kill_process,
             "sign_in": sign_in, "logins": logins, "send": send, "screens": screens, "diagnose": diagnose_node,
-            "power": power, "restart": restart, "wake": wake, "sound": sound, "watch": watch}
+            "power": power, "restart": restart, "wake": wake, "sound": sound, "watch": watch,
+            "install": install, "install_package": install_package, "uninstall": uninstall, "remove_package": remove_package}
 
 
 @router.get("/shots/{sid}.jpg", include_in_schema=False)

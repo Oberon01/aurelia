@@ -73,7 +73,7 @@ def stack(tmp_path_factory):
         "  look: {tier: read}\n  click: {tier: act}\n  type: {tier: act}\n  press: {tier: act}\n  scroll: {tier: act}\n"
         "  back: {tier: act}\n  media: {tier: act}\n  submit: {tier: change}\n"
         "  health: {tier: reference}\n  list_processes: {tier: reference}\n  close_process: {tier: act}\n"
-        "  kill_process: {tier: change}\n  sign_in: {tier: change}\n  logins: {tier: reference}\n  send: {tier: act}\n  screens: {tier: reference}\n  diagnose: {tier: read}\n  power: {tier: act}\n  restart: {tier: change}\n  wake: {tier: act}\n  sound: {tier: act}\n  watch: {tier: read}\n"
+        "  kill_process: {tier: change}\n  sign_in: {tier: change}\n  logins: {tier: reference}\n  send: {tier: act}\n  screens: {tier: reference}\n  diagnose: {tier: read}\n  power: {tier: act}\n  restart: {tier: change}\n  wake: {tier: act}\n  sound: {tier: act}\n  watch: {tier: read}\n  install: {tier: act}\n  install_package: {tier: change}\n  uninstall: {tier: act}\n  remove_package: {tier: change}\n"
         "rules:\n  screen:\n    confirm_before: [buy, place order, pay, send, delete]\n"
         "  screens:\n    - {computer: Den PC, tv: Den TV, input: HDMI 2}\n    - {computer: Attic PC, tv: Attic TV, input: ''}\n")
     (tmp / "aurelia.yaml").write_text(
@@ -137,13 +137,7 @@ def stack(tmp_path_factory):
                 break
         except httpx.HTTPError:
             time.sleep(0.2)
-    httpx.post(f"{orch}/registry/functions", json={
-        "name": "testfn", "description": "test", "url": f"http://127.0.0.1:{fn_port}",
-        "tools": [{"name": "status", "description": "state", "input_schema": {"type": "object"},
-                   "progress_unit": "devices", "freshness_seconds": 30},
-                  {"name": "switch", "description": "act", "input_schema": {"type": "object"}},
-                  {"name": "look", "description": "another look-up", "input_schema": {"type": "object"},
-                   "freshness_seconds": 30}]}).raise_for_status()
+    register_testfn(orch, f"http://127.0.0.1:{fn_port}")
     httpx.post(f"{orch}/registry/functions", json={
         "name": "parallax", "description": "test", "url": f"http://127.0.0.1:{fn_port}",
         "tools": [{"name": "digest", "description": "d", "input_schema": {"type": "object"}},
@@ -153,3 +147,19 @@ def stack(tmp_path_factory):
     for s in servers:
         s.should_exit = True
 
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "node_env(**env): extra environment for the test's node agent")
+
+
+def register_testfn(orch: str, fn: str) -> None:
+    """The stand-in function's registration (it lapses in a long run; tests that use it renew it)."""
+    import httpx
+    httpx.post(f"{orch}/registry/functions", json={
+        "name": "testfn", "description": "test", "url": fn,
+        "tools": [{"name": "status", "description": "state", "input_schema": {"type": "object"},
+                   "progress_unit": "devices", "freshness_seconds": 30},
+                  {"name": "switch", "description": "act", "input_schema": {"type": "object"}},
+                  {"name": "look", "description": "another look-up", "input_schema": {"type": "object"},
+                   "freshness_seconds": 30}]}).raise_for_status()

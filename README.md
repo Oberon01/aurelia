@@ -179,12 +179,14 @@ inside it; "go home on the TV PC" closes them. GNOME stays on the login screen
 as a way back in; `--no-shell` returns to it at the next login.
 
 **Updates (your standing decision, Constellation's policy `updates`).** Nodes keep
-their agent current without asking: each check-in compares versions, and a newer
-one Aurelia serves (only ever from a release) is downloaded, checked against its
+their agent current without asking: every wait for work (about every 25 s, since
+0.6.0; before that, each 10-minute check-in) says which agent Aurelia serves, and a
+newer one (only ever from a release) is downloaded, checked against its
 checksum, compiled, and swapped in with the old one kept. The guard, which never
 updates itself, puts the old one back if the new one doesn't reconnect. After
 three failed tries it stops and a mailbox card tells you; **Retry** starts over.
-The devices panel shows each computer's agent version. Agents from before this
+It never updates in the middle of something playing on her player (it waits
+until it stops). The devices panel shows each computer's agent version. Agents from before this
 (0.2.x) can't update themselves: run the install line once more on them.
 
 | Say | Does |
@@ -271,6 +273,22 @@ her: "the code is 123 456" goes in digit by digit, so split boxes move along.
 Zip, promo and gift codes are ordinary boxes. `sign_in` takes a site's "Log in
 with a password" option when it offers one; when it only offers a code, she
 stops and asks you for it.
+
+**Installing and removing apps (agent 0.6.0, always confirmed).** "Install VLC
+on the desk", "remove Steam from the TV PC" (`install`, `uninstall`). They only
+prepare: the computer looks the app up in Ubuntu's own packages and the Snap
+Store (never a file or a download) and you get a card ("Install vlc (multimedia
+player) on Living room TV, from Ubuntu's packages?"). Nothing changes until you
+say yes (`install_package`, `remove_package`, change tier). Several matches show
+as a list to pick from. Removal is checked first and refused if it would take
+other packages with it, or if it's part of the system, its security software, or
+what Aurelia runs on; it's checked again just before, and stops if anything
+changed. When something she needs is missing (her player, mpv), playing offers
+the install card instead of failing. Run the installer with `--system` once on
+each Linux computer: it installs PackageKit and a polkit rule letting the agent's
+account install trusted packages, remove packages and manage snaps, nothing
+else (never local or untrusted packages). After that, new needs come as cards,
+not installer reruns. Windows comes with the Windows installer.
 
 **Quasar: video and music with her own player (agent 0.5.9).** She doesn't
 work web pages or TV menus to play things any more. She asks a service with an

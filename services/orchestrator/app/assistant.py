@@ -209,6 +209,10 @@ async def _fastpath_plain(app, body: Ask, fp, resolved) -> dict[str, Any]:
     return out
 
 
+# A function may hand him a confirmation for another function's tool only where it's named here.
+HANDOFFS = {"quasar": ("constellation.install_package",)}     # "the TV PC needs my player: install it?"
+
+
 async def _follow_up(app, user: str, tool: str, result: dict | None, out: dict) -> str | None:
     """A tool that stopped short of something he has to decide (e.g. a click that would buy or
     send) returns `confirm`: the same function's tool and args to run if he says yes. It's held
@@ -224,8 +228,8 @@ async def _follow_up(app, user: str, tool: str, result: dict | None, out: dict) 
     c = data.get("confirm") if isinstance(data, dict) else None
     if not isinstance(c, dict) or not isinstance(c.get("tool"), str):
         return None
-    if c["tool"].split(".", 1)[0] != tool.split(".", 1)[0]:        # only its own function's tools
-        return None
+    if c["tool"].split(".", 1)[0] != tool.split(".", 1)[0] and c["tool"] not in HANDOFFS.get(tool.split(".", 1)[0], ()):
+        return None                                                 # only its own function's tools (or a named handoff)
     reason = str(c.get("reason") or "That needs your confirmation.")[:300]
     action = await _hold(app, c["tool"], dict(c.get("args") or {}), user, reason,
                          reply=str(c["reply"])[:200] if c.get("reply") else None)

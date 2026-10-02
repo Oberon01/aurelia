@@ -591,7 +591,7 @@ const TITLES = { "aurelia.reply": "Aurelia",
   "constellation.devices": "Devices", "constellation.open": "Open", "constellation.apps": "Apps",
   "constellation.home": "Home", "constellation.look": "On the screen", "constellation.click": "Click",
   "constellation.type": "Type", "constellation.press": "Key", "constellation.scroll": "Scroll",
-  "constellation.back": "Back", "constellation.media": "Playing", "constellation.sound": "Sound", "constellation.watch": "Live", "quasar.find": "Library", "quasar.play": "Playing", "constellation.submit": "Press",
+  "constellation.back": "Back", "constellation.media": "Playing", "constellation.sound": "Sound", "constellation.watch": "Live", "quasar.find": "Library", "quasar.play": "Playing", "constellation.install": "Install", "constellation.install_package": "Install", "constellation.uninstall": "Remove", "constellation.remove_package": "Remove", "constellation.submit": "Press",
   "constellation.health": "Computer health", "constellation.list_processes": "Processes",
   "constellation.close_process": "Close a program", "constellation.kill_process": "Close a program",
 };
@@ -1187,6 +1187,7 @@ function body(tool, d) {
   }
   if (d.onscreen && typeof d.onscreen === "object") { wrap.append(onscreenView(d.onscreen, !!d.did)); used.add("onscreen"); used.add("headline"); }
   if (d.did && typeof d.did === "object") { wrap.prepend(didView(d.did)); used.add("did"); used.add("headline"); }
+  if (d.packages && Array.isArray(d.packages.items)) { wrap.append(packagesView(d.packages)); used.add("packages"); used.add("headline"); }
   if (d.catalog && typeof d.catalog === "object") { wrap.append(catalogView(d.catalog)); used.add("catalog"); used.add("headline"); }
   if (d.now && typeof d.now === "object" && d.now.node) { wrap.append(nowView(d.now)); used.add("now"); used.add("headline"); }
   if (d.live && typeof d.live === "object" && d.live.node_id) { wrap.append(liveView(d.live)); used.add("live"); used.add("headline"); }
@@ -1716,6 +1717,22 @@ function videoView(v) {
                  v.speed && v.speed !== 1 ? `${v.speed}×` : null, v.fullscreen ? "full screen" : null].filter(Boolean);
   line.append(el("span", "vflags", flags.join(" · ")));
   box.append(bar, line);
+  return box;
+}
+// Apps that match what he asked to install (or remove): Ubuntu's packages and snaps. A tap picks one,
+// which only brings the confirmation card.
+function packagesView(p) {
+  const box = el("div", "procs");
+  const src = { apt: "Ubuntu", snap: "Snap Store" };
+  p.items.forEach(c => {
+    const row = el("button", "card"); row.style.cssText = "display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:8px 0;background:none;border:0;border-bottom:1px solid var(--cyan-soft);color:inherit;font:inherit;text-align:left;cursor:pointer;width:100%";
+    const top = el("div", null, c.name); top.style.color = "var(--ink-strong)";
+    row.append(top, el("div", "facts", [src[c.source] || c.source, c.publisher, c.installed ? "installed" : null].filter(Boolean).join(" · ")));
+    if (c.summary) row.append(el("div", "more", c.summary));
+    const verb = p.action === "remove" ? "remove" : "install";
+    row.addEventListener("click", () => ask(`${verb} the ${c.source === "snap" ? "snap" : "Ubuntu package"} ${c.name} on the ${p.node.toLowerCase()}`));
+    box.append(row);
+  });
   return box;
 }
 // His library (Jellyfin): posters, numbered, grouped when there's no search. A tap plays it.

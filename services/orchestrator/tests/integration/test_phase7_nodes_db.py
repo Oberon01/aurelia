@@ -33,7 +33,7 @@ def run_task(orch, tool, args, wait=20):
 
 
 @pytest.fixture
-def node(stack, tmp_path):
+def node(stack, tmp_path, request):
     orch = stack["orch"]
     import asyncio, asyncpg
     async def clean():
@@ -61,6 +61,8 @@ def node(stack, tmp_path):
         (bin_ / tool).chmod(0o755)
     env = {"HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config"), "PATH": f"{bin_}:/usr/bin:/bin",
            "AURELIA_MPV_ARGS": "--vo=null --ao=null"}                # her player, with nothing to show or hear
+    marker = request.node.get_closest_marker("node_env")
+    env.update(marker.kwargs if marker else {})
     proc = subprocess.Popen([sys.executable, str(AGENT), "run"], env=env, stderr=subprocess.PIPE, text=True)
     deadline = time.time() + 10
     while time.time() < deadline:                  # online once it has said hello and is polling
@@ -70,6 +72,7 @@ def node(stack, tmp_path):
         time.sleep(0.3)
     yield {"orch": orch, "record": record, "proc": proc, "id": got["device_id"], "key": got["key"]}
     proc.kill()
+    subprocess.run(["pkill", "-f", r"^\S*mpv --idle=yes"], capture_output=True)   # her player outlives the agent (by design)
 
 
 def started(node):
@@ -115,7 +118,7 @@ def test_a_long_poll_really_waits(node):
     """redis-py 8 reads with a 5 s timeout by default; a node's wait must outlast it."""
     t = time.time()
     r = httpx.get(f"{node['orch']}/nodes/commands?wait=8", headers={"Authorization": f"Bearer {node['key']}"}, timeout=20)
-    assert r.status_code == 200 and r.json() == {"commands": []} and time.time() - t >= 7.5
+    assert r.status_code == 200 and r.json()["commands"] == [] and time.time() - t >= 7.5
 
 
 def test_a_revoked_node_stops_and_goes_offline(node):
@@ -431,3 +434,83 @@ def test_sound_and_music(node):
 def test_watching_needs_her_shell(node):
     status, res, err = run_task(node["orch"], "constellation.watch", {"target": "living room tv"}, wait=30)
     assert status == "failed" and "only while it runs my shell" in err
+
+
+FAKE_PKG = r'''#!PY
+import json, sys, pathlib, os
+st = pathlib.Path(__file__).with_name("pkgs.json")
+s = json.loads(st.read_text()) if st.exists() else {"installed": ["vlc-bin"], "deps": {"libvlc5": ["vlc"]}}
+tool, a = pathlib.Path(sys.argv[0]).name, sys.argv[1:]
+with open(pathlib.Path(__file__).with_name("pkg-calls.txt"), "a") as f:
+    f.write(tool + " " + " ".join(a) + "\n")
+avail = {"vlc": "multimedia player", "vlc-bin": "binaries from VLC", "mpv": "video player", "media-player-x": "another one"}
+if tool == "apt-cache":
+    print("\n".join(f"{n} - {d}" for n, d in avail.items() if a[-1].lower() in n))
+elif tool == "dpkg-query":
+    if "${Essential} ${Priority}" in a:
+        print("yes required" if a[-1] == "systemd" else "no optional", end="")
+    else:
+        for n in a[3:]:
+            print(n, "installed" if n in s["installed"] else "not-installed")
+elif tool == "apt-get":
+    print("\n".join(f"Remv {x} [1]" for x in [a[-1], *s["deps"].get(a[-1], [])]))
+elif tool == "pkcon" and "install" in a:
+    s["installed"].append(a[-1]); print("Finished")
+elif tool == "pkcon" and "remove" in a:
+    s["installed"].remove(a[-1]); print("Finished")
+elif tool == "snap":
+    print("Name Version Publisher Notes Summary")
+st.write_text(json.dumps(s))
+'''
+
+
+def test_installing_and_removing_apps_only_with_his_yes(node):
+    orch, bin_ = node["orch"], node["record"].parent / "bin"
+    for name in ("apt-cache", "dpkg-query", "apt-get", "pkcon", "snap"):
+        (bin_ / name).write_text(FAKE_PKG.replace("#!PY", f"#!{sys.executable}"))
+        (bin_ / name).chmod(0o755)
+    state = lambda: json.loads((bin_ / "pkgs.json").read_text())["installed"]
+
+    status, res, err = run_task(orch, "constellation.install", {"target": "living room tv", "app": "VLC"}, wait=60)
+    assert status == "completed", err
+    c = res["confirm"]
+    assert c["tool"] == "constellation.install_package" and c["args"] == {"target": "Living room TV", "name": "vlc", "source": "apt"}
+    assert "Install vlc (multimedia player) on Living room TV, from Ubuntu's packages?" == c["reason"]
+    assert "vlc" not in state()                                                       # nothing installed yet
+    r = httpx.post(f"{orch}/tasks", json={"tool": "constellation.install_package", "args": c["args"]})
+    assert r.status_code == 409 and r.json()["detail"]["needs_confirmation"]            # always his call
+    tid = httpx.post(f"{orch}/tasks", json={"tool": "constellation.install_package", "args": c["args"],
+                                            "confirmed": True}).json()["task_id"]
+    for _ in range(150):
+        row = httpx.get(f"{orch}/tasks/{tid}").json()
+        if row["status"] != "running":
+            break
+        time.sleep(0.2)
+    assert row["status"] == "completed", row.get("error")
+    assert "vlc" in state()
+    assert run_task(orch, "constellation.install", {"app": "vlc"}, wait=60)[1]["headline"] == "vlc is already installed on Living room TV"
+
+    status, res, err = run_task(orch, "constellation.install", {"app": "media"}, wait=60)     # several: he picks
+    assert status == "completed" and res["headline"] == "Which media?" and "confirm" not in res
+    assert {i["name"] for i in res["packages"]["items"]} == {"media-player-x"}
+
+    status, res, err = run_task(orch, "constellation.uninstall", {"app": "vlc"}, wait=60)
+    c = res["confirm"]
+    assert c["tool"] == "constellation.remove_package" and c["args"]["removes"] == ["vlc"]
+    tid = httpx.post(f"{orch}/tasks", json={"tool": "constellation.remove_package", "args": c["args"],
+                                            "confirmed": True}).json()["task_id"]
+    for _ in range(150):
+        row = httpx.get(f"{orch}/tasks/{tid}").json()
+        if row["status"] != "running":
+            break
+        time.sleep(0.2)
+    assert row["status"] == "completed", row.get("error") and "vlc" not in state()
+    status, _, err = run_task(orch, "constellation.uninstall", {"app": "x", "package": "systemd"}, wait=60)
+    assert status == "failed" and "part of the system" in err
+    calls = (bin_ / "pkg-calls.txt").read_text()
+    assert "pkcon -y -p install vlc" in calls and calls.count("pkcon") == 2            # only what he confirmed
+
+
+def test_a_new_agent_is_announced_with_every_poll(node):
+    got = httpx.get(f"{node['orch']}/nodes/commands?wait=0", headers={"Authorization": f"Bearer {node['key']}"}).json()
+    assert got["commands"] == [] and got["agent"]["version"] and len(got["agent"]["sha256"]) == 64

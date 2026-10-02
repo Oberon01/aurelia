@@ -374,6 +374,17 @@ async def play(app, user: str, args: dict) -> dict:
     tv = asyncio.create_task(constellation.show_on_tv(app, user, node))   # the TV wakes and switches meanwhile
     try:
         data = await constellation._ask_new(app, node, "play", {"items": items, "start": start}, timeout=40)
+    except ValueError as exc:
+        await tv
+        if "isn't installed" in str(exc) and "mpv" in str(exc):     # offer to put my player there
+            return {"headline": f"{node['name']} needs my player first",
+                    "did": {"node": node["name"], "what": "My player (mpv) isn't installed there"},
+                    "confirm": {"tool": "constellation.install_package",
+                                "reason": f"{node['name']} needs my player (mpv) to play video and music. Install it "
+                                          "from Ubuntu's packages?",
+                                "reply": "Installed my player. Ask me to play it again.",
+                                "args": {"target": node["name"], "name": "mpv", "source": "apt"}}}
+        raise
     except BaseException:
         await tv
         raise

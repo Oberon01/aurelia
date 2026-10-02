@@ -52,9 +52,10 @@ Built so far:
 - Sound and media: the computer's volume, mute and which output it plays through; next, previous and what's playing for any player (Spotify, VLC, a browser tab).
 - Watching a screen live in a panel ("show me the TV PC screen"), even while I'm signing in; the frames go only to your display, never to me.
 - Video and music with my own player (Quasar, brought forward from Phase 15): I play from services with APIs, never by working a web page. Step 1: your Jellyfin library (find, play a show where you left off and keep going, movies, albums), full screen on any computer, controlled and confirmed through the player itself, with your resume points kept in Jellyfin. The live view now uses the browser's screencast, so the TV no longer jumps.
+- Installing and removing apps (Ubuntu's packages and snaps, always confirmed, never the system's core); a computer notices a new agent within about 25 seconds and never updates mid-playback.
 - Long answers open as a panel; a Raphael speaking style on trial.
 - I read my own releases and this roadmap, and harder questions (why, explain, improve, compare) use a stronger model.
-Still to do: the rest of Quasar's sources (Roku apps opened straight on a show by name; YouTube, including your home feed, read with the TV PC's own sign-in; Spotify through its API with my computers as Spotify speakers), a shared clipboard, app install and removal, the Windows installer with exam and gaming modes, the phone web app with push notifications, and the field check.
+Still to do: the rest of Quasar's sources (Roku apps opened straight on a show by name; YouTube, including your home feed, read with the TV PC's own sign-in; Spotify through its API with my computers as Spotify speakers), a shared clipboard, the Windows installer with exam and gaming modes, the phone web app with push notifications, and the field check.
 
 ## 8. Iris — Not started
 Builds: sight. Models that take images (screenshots, photos, later cameras); pixel-level control of a whole desktop, not just my browser, on Linux and Windows. What's on screen is data; I never type passwords; anything that buys, sends or deletes waits for your OK. Later, with the GPU box: home cameras you choose, processed locally.

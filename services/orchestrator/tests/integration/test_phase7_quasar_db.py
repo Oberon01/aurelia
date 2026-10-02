@@ -233,3 +233,32 @@ def test_without_jellyfin_she_says_what_to_set_up(stack, monkeypatch):
     status, _, err = run_task(stack["orch"], "quasar.find", {"query": "x"})
     assert status == "failed" and "JELLYFIN_URL" in err
     assert "JELLYFIN_URL" in httpx.get(f"{stack['orch']}/quasar/check").json()["problem"]
+
+
+@pytest.mark.node_env(AURELIA_MPV="none")
+def test_a_computer_without_my_player_gets_offered_it(node, jellyfin):
+    """No mpv there: playing asks him to install it (a confirmation card for Constellation's
+    install_package, the one handoff Quasar may make), instead of just failing."""
+    import uuid
+    from app.main import app
+    from app.llm.base import Completion, ToolCall, Usage
+
+    class Model:
+        def __init__(self):
+            self.steps = [[("quasar__play", {"what": "frieren"})], []]
+
+        async def complete(self, route, system, messages, tools):
+            calls = self.steps.pop(0) if self.steps else []
+            return Completion(text="" if calls else "It needs my player first.", usage=Usage(10, 5), model="fake",
+                              provider="fake", tool_calls=[ToolCall(id=uuid.uuid4().hex[:8], name=n, args=a) for n, a in calls])
+    orch, original = node["orch"], app.state.llm
+    res = ok(orch, "quasar.play", {"what": "frieren"})
+    assert res["headline"] == "Living room TV needs my player first"
+    assert res["confirm"]["args"] == {"target": "Living room TV", "name": "mpv", "source": "apt"}
+    app.state.llm = Model()
+    try:
+        out = httpx.post(f"{orch}/ask", json={"text": "play frieren", "session_id": uuid.uuid4().hex}, timeout=60).json()
+    finally:
+        app.state.llm = original
+    held = out["needs_confirmation"]
+    assert held and held[0]["tool"] == "constellation.install_package" and held[0]["args"]["name"] == "mpv", out

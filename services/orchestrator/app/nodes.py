@@ -248,13 +248,15 @@ async def commands(request: Request, wait: int = 25):
     wait = max(0, min(wait, offline_after(request.app) - 15))
     got = await redis.blpop([QUEUE.format(dev["id"])], timeout=wait) if wait else await redis.lpop(QUEUE.format(dev["id"]))
     raw = got[1] if isinstance(got, (list, tuple)) else got
+    rules = update_rules(request.app)
+    extra = {"agent": {**agent_release(), "max_attempts": rules["max_attempts"]}} if rules["automatic"] else {}
     if not raw:
-        return {"commands": []}
+        return {"commands": [], **extra}                      # a new agent is noticed within one wait
     cmd = json.loads(raw)
     if time.time() - cmd["at"] > COMMAND_TTL:
         log.info("dropping stale command %s for node %s", cmd["id"], dev["id"])
-        return {"commands": []}
-    return {"commands": [cmd]}
+        return {"commands": [], **extra}
+    return {"commands": [cmd], **extra}
 
 
 class CommandResult(BaseModel):
