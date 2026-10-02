@@ -91,6 +91,9 @@ services:
       - traefik.http.routers.orchestrator.rule=PathPrefix(`/`)
       - traefik.http.routers.orchestrator.entrypoints=web
       - traefik.http.services.orchestrator.loadbalancer.server.port=8000
+      # It's on two networks (the home-lab one for Jellyfin): Traefik must use this stack's own, which it
+      # shares; otherwise it may pick the other address, can't reach it, and every request times out (504).
+      - traefik.docker.network=aurelia_default
       # Every request from outside needs a paired device's key (app/auth.py). Services inside
       # the stack talk to each other directly and never pass through here.
       - traefik.http.middlewares.aurelia-strip.headers.customrequestheaders.X-Aurelia-Device=
