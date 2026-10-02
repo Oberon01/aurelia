@@ -889,12 +889,12 @@ class Pkgs:
             return 0, "".join(f"{n} {'installed' if n in self.installed else 'not-installed'}\n" for n in argv[4:]), ""
         if argv[0] == "apt-get":
             return 0, "".join(f"Remv {x} [1]\n" for x in [argv[-1], *self.deps.get(argv[-1], [])]), ""
-        if argv[0] == "pkcon" and "install" in argv:
+        if argv[0] in ("pkcon", "pkgcli") and "install" in argv:
             if not self.allowed:
                 return 1, "", "Fatal error: Not authorized"
             self.installed.add(argv[-1])
             return 0, "Finished", ""
-        if argv[0] == "pkcon" and "remove" in argv:
+        if argv[0] in ("pkcon", "pkgcli") and "remove" in argv:
             self.installed.discard(argv[-1])
             return 0, "Finished", ""
         return 127, "", ""
@@ -925,7 +925,13 @@ def test_installing_needs_his_yes_and_a_real_package_name(pkgs):
         with pytest.raises(ValueError):
             agent.do_package_install({"name": bad, "confirmed": True})
     assert agent.do_package_install({"name": "vlc", "confirmed": True}) == {"name": "vlc", "source": "apt", "installed": True}
-    assert ["pkcon", "-y", "-p", "install", "vlc"] in pkgs.calls
+    assert ["pkgcli", "-y", "install", "--no-autoremove", "vlc"] in pkgs.calls          # PackageKit 1.3 (Ubuntu 26.04)
+
+
+def test_older_releases_use_pkcon(pkgs, monkeypatch):
+    monkeypatch.setattr(agent.shutil, "which", lambda n: None if n == "pkgcli" else f"/usr/bin/{n}")
+    agent.do_package_install({"name": "vlc", "confirmed": True})
+    assert ["pkcon", "-y", "-p", "install", "vlc"] in pkgs.calls and not [c for c in pkgs.calls if c[0] == "pkgcli"]
 
 
 def test_without_permission_it_says_how_to_fix_it(pkgs):

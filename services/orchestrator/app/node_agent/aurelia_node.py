@@ -58,7 +58,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 IS_WINDOWS = platform.system() == "Windows"
 EXIT_REVOKED = 3                                   # the service manager doesn't restart after this
 EXIT_UPDATED = 75                                  # restart me: a new version is in place
@@ -1556,7 +1556,8 @@ def do_play(args: dict) -> dict:
 
 # ---- installing and removing apps (always his confirmation) -----------------------------------------
 #
-# Only from the system's own signed sources: Ubuntu's packages through PackageKit (pkcon), and snaps.
+# Only from the system's own signed sources: Ubuntu's packages through PackageKit (pkgcli, or pkcon on
+# older releases), and snaps.
 # Never a file, a script or a web download. Aurelia finds what would be installed or removed first
 # and puts it in front of him; these commands run only with confirmed=True, which the orchestrator
 # sends only after he said yes. A removal that would take other packages with it is refused, and
@@ -1653,7 +1654,7 @@ def do_packages_find(args: dict) -> dict:
     for c in snaps:
         c["installed"] = c["name"] in have_snap
     cands = sorted(apt + snaps, key=rank)
-    return {"candidates": cands, "can_install": bool(shutil.which("pkcon")) or bool(shutil.which("snap"))}
+    return {"candidates": cands, "can_install": bool(_pk("install", "x")) or bool(shutil.which("snap"))}
 
 
 def _removal(name: str) -> list[str]:
@@ -1691,6 +1692,19 @@ def _pkg_args(args: dict) -> tuple[str, str]:
     return name, source
 
 
+def _pk(action: str, name: str = "") -> list[str] | None:
+    """PackageKit's command line: pkgcli (PackageKit 1.3+, Ubuntu 26.04) or pkcon (older). Never
+    removes unused dependencies on the side, never untrusted packages."""
+    if shutil.which("pkgcli"):
+        return {"install": ["pkgcli", "-y", "install", "--no-autoremove", name],
+                "remove": ["pkgcli", "-y", "remove", "--no-autoremove", name],
+                "refresh": ["pkgcli", "refresh"]}[action]
+    if shutil.which("pkcon"):
+        return {"install": ["pkcon", "-y", "-p", "install", name], "remove": ["pkcon", "-y", "-p", "remove", name],
+                "refresh": ["pkcon", "-p", "refresh"]}[action]
+    return None
+
+
 def _need_permission(err: str) -> bool:
     low = err.lower()
     return "not authorized" in low or "authorization" in low or "permission denied" in low or "access denied" in low
@@ -1706,12 +1720,12 @@ def do_package_install(args: dict) -> dict:
         code, out, err = _run_c(["snap", "install", name], 900)
         installed = name in _snap_installed()
     else:
-        if not shutil.which("pkcon"):
+        if not _pk("install", name):
             raise ValueError("I can't install here yet: run the installer with --system once (it lets me install with your OK)")
-        code, out, err = _run_c(["pkcon", "-y", "-p", "install", name], 900)
-        if code not in (0, 4) and "not found" in (out + err).lower():
-            _run_c(["pkcon", "-p", "refresh"], 300)              # an old package list: refresh once and try again
-            code, out, err = _run_c(["pkcon", "-y", "-p", "install", name], 900)
+        code, out, err = _run_c(_pk("install", name), 900)
+        if name not in _apt_installed([name]) and "not found" in (out + err).lower():
+            _run_c(_pk("refresh"), 300)                           # an old package list: refresh once and try again
+            code, out, err = _run_c(_pk("install", name), 900)
         installed = name in _apt_installed([name])
     if not installed:
         why = err or out
@@ -1733,9 +1747,9 @@ def do_package_remove(args: dict) -> dict:
         code, out, err = _run_c(["snap", "remove", name], 600)
         gone = name not in _snap_installed()
     else:
-        if not shutil.which("pkcon"):
+        if not _pk("remove", name):
             raise ValueError("I can't remove apps here yet: run the installer with --system once")
-        code, out, err = _run_c(["pkcon", "-y", "-p", "remove", name], 600)
+        code, out, err = _run_c(_pk("remove", name), 600)
         gone = name not in _apt_installed([name])
     if not gone:
         why = err or out

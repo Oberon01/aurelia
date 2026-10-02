@@ -274,7 +274,7 @@ Zip, promo and gift codes are ordinary boxes. `sign_in` takes a site's "Log in
 with a password" option when it offers one; when it only offers a code, she
 stops and asks you for it.
 
-**Installing and removing apps (agent 0.6.0, always confirmed).** "Install VLC
+**Installing and removing apps (agent 0.6.1, always confirmed).** "Install VLC
 on the desk", "remove Steam from the TV PC" (`install`, `uninstall`). They only
 prepare: the computer looks the app up in Ubuntu's own packages and the Snap
 Store (never a file or a download) and you get a card ("Install vlc (multimedia

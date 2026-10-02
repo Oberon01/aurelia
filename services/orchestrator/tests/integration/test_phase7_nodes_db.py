@@ -454,9 +454,9 @@ elif tool == "dpkg-query":
             print(n, "installed" if n in s["installed"] else "not-installed")
 elif tool == "apt-get":
     print("\n".join(f"Remv {x} [1]" for x in [a[-1], *s["deps"].get(a[-1], [])]))
-elif tool == "pkcon" and "install" in a:
+elif tool in ("pkcon", "pkgcli") and "install" in a:
     s["installed"].append(a[-1]); print("Finished")
-elif tool == "pkcon" and "remove" in a:
+elif tool in ("pkcon", "pkgcli") and "remove" in a:
     s["installed"].remove(a[-1]); print("Finished")
 elif tool == "snap":
     print("Name Version Publisher Notes Summary")
@@ -466,7 +466,7 @@ st.write_text(json.dumps(s))
 
 def test_installing_and_removing_apps_only_with_his_yes(node):
     orch, bin_ = node["orch"], node["record"].parent / "bin"
-    for name in ("apt-cache", "dpkg-query", "apt-get", "pkcon", "snap"):
+    for name in ("apt-cache", "dpkg-query", "apt-get", "pkgcli", "snap"):
         (bin_ / name).write_text(FAKE_PKG.replace("#!PY", f"#!{sys.executable}"))
         (bin_ / name).chmod(0o755)
     state = lambda: json.loads((bin_ / "pkgs.json").read_text())["installed"]
@@ -508,7 +508,7 @@ def test_installing_and_removing_apps_only_with_his_yes(node):
     status, _, err = run_task(orch, "constellation.uninstall", {"app": "x", "package": "systemd"}, wait=60)
     assert status == "failed" and "part of the system" in err
     calls = (bin_ / "pkg-calls.txt").read_text()
-    assert "pkcon -y -p install vlc" in calls and calls.count("pkcon") == 2            # only what he confirmed
+    assert "pkgcli -y install --no-autoremove vlc" in calls and calls.count("pkgcli") == 2   # only what he confirmed
 
 
 def test_a_new_agent_is_announced_with_every_poll(node):

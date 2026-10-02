@@ -101,7 +101,13 @@ RULES
   # 1b. Install and remove apps after you said yes in Aurelia: this account only, and only from the
   #     system's signed sources (Ubuntu's packages through PackageKit, and snaps). Never a local file
   #     (package-install-untrusted stays with you).
-  sudo apt-get install -y packagekit packagekit-tools >/dev/null 2>&1 || echo "  (PackageKit isn't available; I can't install apps here)"
+  #     (PackageKit 1.3 / Ubuntu 26.04 ships pkgcli in the packagekit package; older releases have pkcon in packagekit-tools.)
+  sudo apt-get install -y packagekit >/dev/null 2>&1 || true
+  if ! command -v pkgcli >/dev/null && ! command -v pkcon >/dev/null && apt-cache show packagekit-tools >/dev/null 2>&1; then
+    sudo apt-get install -y packagekit-tools >/dev/null 2>&1 || true
+  fi
+  command -v pkgcli >/dev/null || command -v pkcon >/dev/null || \
+    echo "  (PackageKit's command line isn't available: try 'sudo apt-get install packagekit'; until then I can't install apps here)"
   sudo tee /etc/polkit-1/rules.d/49-aurelia-packages.rules >/dev/null <<RULES
 // Aurelia's node agent runs as $ME. After Kentrell confirms in Aurelia, it may install packages from
 // the system's trusted sources, remove packages, refresh the package lists, and install or remove
