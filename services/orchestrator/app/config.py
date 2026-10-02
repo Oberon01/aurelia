@@ -39,6 +39,7 @@ class QuasarConfig(BaseModel):
     resume: bool = True                       # pick up where he left off (Jellyfin's resume point)
     queue_episodes: int = 12                  # a show keeps going: this many episodes are queued after the one asked for
     ticket_hours: float = 8                   # how long a computer's link to one stream works
+    library_limit: int = 500                  # most titles shown per section (shows, movies, music) at once
 
 
 class RetentionConfig(BaseModel):

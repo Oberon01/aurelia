@@ -170,6 +170,10 @@ def test_she_plays_his_library_on_a_computer_with_her_own_player(node, jellyfin)
     lib = ok(orch, "quasar.find", {})
     groups = {g["name"]: [i["name"] for i in g["items"]] for g in lib["catalog"]["groups"]}
     assert groups["Continue"] == ["It Didn't Have to Be Magic"] and "Frieren" in str(lib)
+    assert groups["Shows"] == ["Frieren"] and groups["Movies"] == ["Big Buck"] and groups["Music"] == ["Discovery"]
+    assert lib["headline"] == "Your library · 3 titles"                     # the whole library, A to Z
+    movies = ok(orch, "quasar.find", {"kind": "movies"})
+    assert [g["name"] for g in movies["catalog"]["groups"]] == ["Movies"] and movies["headline"] == "Your movies · 1 title"
     found = ok(orch, "quasar.find", {"query": "discovery"})["catalog"]["items"]
     assert found[0]["type"] == "album" and found[0]["artist"] == "Daft Punk" and found[0]["art"] == "/quasar/art/al1"
 

@@ -1766,7 +1766,11 @@ function catalogView(c) {
     return g;
   };
   if (Array.isArray(c.items)) { if (!c.items.length) box.append(el("div", "msg", "Nothing found.")); else box.append(grid(c.items)); }
-  (c.groups || []).forEach(gr => { const sec = el("div", "cat-group"); sec.append(el("h4", null, gr.name), grid(gr.items)); box.append(sec); });
+  (c.groups || []).forEach(gr => {
+    const sec = el("div", "cat-group");
+    const count = gr.total == null ? "" : gr.total > gr.items.length ? ` · ${gr.items.length} of ${gr.total}` : ` · ${gr.total}`;
+    sec.append(el("h4", null, gr.name + count), grid(gr.items)); box.append(sec);
+  });
   return box;
 }
 // What my player is doing on a computer. The time moves on its own while it plays.

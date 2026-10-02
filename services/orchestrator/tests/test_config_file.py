@@ -85,6 +85,10 @@ def test_health_phrases_reach_the_right_tool(said, tool, args):
     ("open jellyfin", "quasar.find", {}),
     ("find frieren in my jellyfin", "quasar.find", {"query": "frieren"}),
     ("what's in my library", "kepler.recall", {}),                      # the research library stays Kepler's
+    ("show my movies", "quasar.find", {"kind": "movies"}),
+    ("what shows do I have?", "quasar.find", {"kind": "shows"}),
+    ("show me all my tv shows", "quasar.find", {"kind": "shows"}),
+    ("show my music", "quasar.find", {"kind": "music"}),
 ])
 def test_library_phrases_reach_the_right_tool(said, tool, args):
     from app import fastpath

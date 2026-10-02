@@ -28,6 +28,7 @@ quasar:
   resume: true            # pick up where you left off
   queue_episodes: 12      # a show keeps going with the next episodes
   ticket_hours: 8         # how long a computer's link to one stream works
+  library_limit: 500      # most titles shown per section (shows, movies, music) at once
 
 retention:
   # Saved result panels: full for hot_days, then a summary until warm_days,
@@ -361,6 +362,21 @@ fastpath:
       tool: quasar.find
       args: {}
       reply: "Here's your library."
+    - name: my-movies
+      match: '^(?:(?:show|open|list)(?: me)? (?:all )?(?:of )?my movies|what movies do (?:I|we) have|what movies are (?:in|on) (?:my )?(?:library|jellyfin))\??$'
+      tool: quasar.find
+      args: { kind: movies }
+      reply: "Here are your movies."
+    - name: my-shows
+      match: '^(?:(?:show|open|list)(?: me)? (?:all )?(?:of )?my (?:tv )?shows|what (?:tv )?shows do (?:I|we) have|what shows are (?:in|on) (?:my )?(?:library|jellyfin))\??$'
+      tool: quasar.find
+      args: { kind: shows }
+      reply: "Here are your shows."
+    - name: my-music
+      match: '^(?:(?:show|open|list)(?: me)? (?:all )?(?:of )?my (?:music|albums)(?: library)?|what music do (?:I|we) have)\??$'
+      tool: quasar.find
+      args: { kind: music }
+      reply: "Here's your music."
     - name: find-to-watch
       match: '^find (?P<query>.+?) (?:in|on) (?:my )?(?:video library|media library|jellyfin)$'
       tool: quasar.find

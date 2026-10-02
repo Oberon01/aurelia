@@ -50,8 +50,10 @@ TICKS = 10_000_000
 TOOLS = [
     registry.ToolSpec(
         name="find", description="His own library (Jellyfin): movies, shows, episodes, music. query: what to look "
-                                 "for; kind: movies, shows, music or any. With no query: what he can continue, "
-                                 "next up in his shows, and what was added recently. Each result has an id for play.",
+                                 "for; kind: movies, shows, music or any. With no query: his whole library as "
+                                 "posters (what he can continue, next up and recently added first, then every show, "
+                                 "movie and album A to Z); kind with no query: just those (\"show my movies\"). Each "
+                                 "result has an id for play.",
         input_schema={"type": "object", "properties": {
             "query": {"type": "string"}, "kind": {"type": "string", "enum": ["movies", "shows", "music", "any"]},
             "limit": {"type": "integer", "minimum": 1, "maximum": 40}}},
@@ -165,9 +167,14 @@ class Jellyfin:
         return None
 
     async def items(self, **params) -> list[dict]:
+        return (await self.page(**params))[0]
+
+    async def page(self, **params) -> tuple[list[dict], int]:
+        """Items and how many there are in all (for "showing 500 of 812")."""
         base = {"userId": "{user}", "recursive": "true", "fields": FIELDS, "enableUserData": "true"}
-        d = await self.request("GET", "/Items", {**base, **params})
-        return (d or {}).get("Items") or []
+        d = await self.request("GET", "/Items", {**base, **params}) or {}
+        got = d.get("Items") or []
+        return got, int(d.get("TotalRecordCount") or len(got))
 
     async def item(self, item_id: str) -> dict:
         got = await self.items(ids=item_id)
@@ -238,6 +245,13 @@ def shape(it: dict) -> dict:
     return out
 
 
+def brief(it: dict) -> dict:
+    """An item in a long list: no description (a whole library stays light)."""
+    out = shape(it)
+    out.pop("about", None)
+    return out
+
+
 def label(it: dict) -> str:
     if it.get("Type") == "Episode":
         se = f"S{it.get('ParentIndexNumber') or 0}E{it.get('IndexNumber') or 0}"
@@ -275,15 +289,27 @@ async def find(app, user: str, args: dict) -> dict:
         got = [shape(i) for i in await jf.search(q, kind, limit)]
         head = f"{len(got)} in your library for “{q}”" if got else f"Nothing in your library for “{q}”"
         return {"headline": head, "catalog": {"query": q, "items": got}}
-    resume = await jf.items(filters="IsResumable", sortBy="DatePlayed", sortOrder="Descending",
-                            includeItemTypes="Movie,Episode", limit=8)
-    up = await jf.next_up(limit=8)
-    recent = await jf.items(sortBy="DateCreated", sortOrder="Descending", includeItemTypes="Movie,Series", limit=8)
-    groups = [{"name": "Continue", "items": [shape(i) for i in resume]},
-              {"name": "Next up", "items": [shape(i) for i in up if i.get("Id") not in {r.get("Id") for r in resume}]},
-              {"name": "Recently added", "items": [shape(i) for i in recent]}]
+    cap = app.state.config.current.quasar.library_limit
+    groups = []
+    if kind == "any":                                      # the whole library: what's going on first
+        resume = await jf.items(filters="IsResumable", sortBy="DatePlayed", sortOrder="Descending",
+                                includeItemTypes="Movie,Episode", limit=8)
+        up = await jf.next_up(limit=8)
+        recent = await jf.items(sortBy="DateCreated", sortOrder="Descending", includeItemTypes="Movie,Series", limit=8)
+        groups = [{"name": "Continue", "items": [shape(i) for i in resume]},
+                  {"name": "Next up", "items": [shape(i) for i in up if i.get("Id") not in {r.get("Id") for r in resume}]},
+                  {"name": "Recently added", "items": [shape(i) for i in recent]}]
+    total = 0
+    for name, types, k in (("Shows", "Series", "shows"), ("Movies", "Movie", "movies"), ("Music", "MusicAlbum", "music")):
+        if kind not in ("any", k):
+            continue
+        got, n = await jf.page(includeItemTypes=types, sortBy="SortName", sortOrder="Ascending", limit=cap)
+        total += n
+        groups.append({"name": name, "items": [brief(i) for i in got], "total": n})
     groups = [g for g in groups if g["items"]]
-    return {"headline": "Your library" if groups else "Your library is empty", "catalog": {"groups": groups}}
+    what = {"any": "Your library", "shows": "Your shows", "movies": "Your movies", "music": "Your music"}[kind]
+    head = f"{what} · {total} title{'s' if total != 1 else ''}" if groups else f"{what}: nothing yet"
+    return {"headline": head, "catalog": {"groups": groups}}
 
 
 async def _queue(jf: Jellyfin, it: dict, args: dict, app) -> list[dict]:
