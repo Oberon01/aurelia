@@ -25,6 +25,15 @@ param(
   [ValidateSet("", "presentation", "workstation", "server")][string]$Role = ""
 )
 $ErrorActionPreference = "Stop"
+
+function Invoke-Quiet {
+  # Runs a program, ignoring what it writes to stderr. Windows PowerShell 5.1 turns a native program's
+  # redirected stderr into errors, which "Stop" would make fatal; the exit code ($LASTEXITCODE) is what counts.
+  $exe, $rest = $args
+  $old = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try { & $exe @rest 2>$null } finally { $ErrorActionPreference = $old }
+}
 $Server = $Server.TrimEnd("/")
 $Dir = Join-Path $env:LOCALAPPDATA "Aurelia\node"
 $Agent = Join-Path $Dir "aurelia_node.py"
@@ -37,7 +46,7 @@ function Get-Python {
     if (-not (Get-Command $try[0] -ErrorAction SilentlyContinue)) { continue }
     try {
       $rest = @($try | Select-Object -Skip 1)
-      $exe = & $try[0] @rest -c "import sys; print(sys.executable if sys.version_info >= (3, 9) else '')" 2>$null
+      $exe = Invoke-Quiet $try[0] @rest -c "import sys; print(sys.executable if sys.version_info >= (3, 9) else '')"
       if ($LASTEXITCODE -eq 0 -and $exe -and (Test-Path $exe.Trim())) { return $exe.Trim() }
     } catch { }
   }
@@ -71,7 +80,7 @@ foreach ($pair in @(@("agent.py", $Agent), @("guard.py", $Guard))) {
   Move-Item -Force $new $pair[1]
 }
 
-& $Py $Agent status *> $null
+Invoke-Quiet $Py $Agent status | Out-Null
 if ($LASTEXITCODE -eq 0) {
   Write-Host "Already paired; the agent is updated."
 } else {
