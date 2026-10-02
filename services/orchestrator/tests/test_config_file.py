@@ -74,3 +74,21 @@ def test_health_phrases_reach_the_right_tool(said, tool, args):
         assert m is None or not m.pattern.tool.startswith("constellation.")
         return
     assert m and m.pattern.tool == tool and m.args == args
+
+
+@pytest.mark.skipif(not CONFIG.exists(), reason="the repo's config isn't in the test image")
+@pytest.mark.parametrize("said,tool,args", [
+    ("what can I watch?", "quasar.find", {}),
+    ("Aurelia, what can we watch", "quasar.find", {}),
+    ("what's there to watch", "quasar.find", {}),
+    ("show me my video library", "quasar.find", {}),
+    ("open jellyfin", "quasar.find", {}),
+    ("find frieren in my jellyfin", "quasar.find", {"query": "frieren"}),
+    ("what's in my library", "kepler.recall", {}),                      # the research library stays Kepler's
+])
+def test_library_phrases_reach_the_right_tool(said, tool, args):
+    from app import fastpath
+    from app.config import RuntimeConfig
+    cfg = RuntimeConfig.model_validate(yaml.safe_load(CONFIG.read_text()))
+    m = fastpath.match(said, cfg.fastpath.patterns)
+    assert m and m.pattern.tool == tool and m.args == args, (said, m and m.pattern.name)

@@ -356,6 +356,16 @@ fastpath:
       tool: kepler.recall
       args: {}
       reply: "Here's your library."
+    - name: what-to-watch
+      match: '^(?:what can (?:I|we) watch|what(?:''s| is) there to watch|what should (?:I|we) watch|(?:show|open)(?: me)? (?:my|the) (?:video|media|movie|tv|jellyfin) library|(?:show|open)(?: me)? (?:my )?jellyfin|what(?:''s| is) (?:in|on) (?:my )?jellyfin|what(?:''s| is) in my (?:video|media) library)\??$'
+      tool: quasar.find
+      args: {}
+      reply: "Here's your library."
+    - name: find-to-watch
+      match: '^find (?P<query>.+?) (?:in|on) (?:my )?(?:video library|media library|jellyfin)$'
+      tool: quasar.find
+      args: { query: "{query}" }
+      reply: "Here's what I found."
     - name: show-topic
       match: '^(?:show|open)(?: me)? the topic\s+(?P<name>.+?)$'
       tool: kepler.topic
