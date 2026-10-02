@@ -2229,7 +2229,7 @@ function releaseDetail(r) {
 function releaseOutcome(r) {
   const box = el("div"); box.style.display = "flex"; box.style.flexDirection = "column"; box.style.gap = "10px";
   const tone = { live: "online", rolled_back: "offline", failed: "offline", held: "disabled" }[r.outcome] || "planned";
-  const words = { live: "live", rolled_back: "rolled back", failed: "failed", held: "waiting for approval", dry_run: "dry run" }[r.outcome] || r.outcome;
+  const words = { live: "live", rolled_back: "rolled back", failed: "failed", held: /local edits|diverged/i.test(r.detail || "") ? "held" : "waiting for approval", dry_run: "dry run" }[r.outcome] || r.outcome;
   const top = el("div", "head"); top.style.justifyContent = "flex-start"; top.append(statusPill(tone, words));
   box.append(top);
   if (r.message) box.append(el("div", "msg", r.message));

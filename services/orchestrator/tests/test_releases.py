@@ -18,3 +18,12 @@ def test_outcomes_fade_only_when_live():
     assert live[1].data["close_after"] == 20
     back = events_for(ReleaseState(release_id=8, sha="b", outcome="rolled_back", detail="smoke test failed"), False)
     assert back[0].data["title"] == "Release rolled back" and back[1].data["close_after"] is None
+
+
+def test_a_held_release_says_why():
+    from app.releases import title_for
+    assert title_for("held", "Proposed by aurelia@x: waiting for your approval.") == "Release waiting for approval"
+    assert title_for("held", "The server's copy has local edits: README.md") == "Release held: the server's copy has local edits"
+    assert title_for("held", "History diverged (force-push?). Resolve on the server manually.") == \
+        "Release held: the history was rewritten"
+    assert title_for("live", None) == "Release live"

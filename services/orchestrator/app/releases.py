@@ -37,6 +37,17 @@ class ReleaseState(BaseModel):
     detail: str | None = None
 
 
+def title_for(outcome: str | None, detail: str | None) -> str:
+    """A held release says why: only a commit from someone on hold_authors waits for his approval;
+    local edits on the server or a rewritten history need fixing by hand (approving won't help)."""
+    d = (detail or "").lower()
+    if outcome == "held" and "local edits" in d:
+        return "Release held: the server's copy has local edits"
+    if outcome == "held" and "diverged" in d:
+        return "Release held: the history was rewritten"
+    return TITLES.get(outcome or "", "Release")
+
+
 def events_for(state: ReleaseState, include_open: bool = True) -> list[PanelEvent]:
     """The panel events that show this state."""
     tid = f"release-{state.release_id}"
@@ -51,7 +62,7 @@ def events_for(state: ReleaseState, include_open: bool = True) -> list[PanelEven
             "current": state.current, "total": state.total or None, "unit": "steps", "label": state.label}))
     else:
         out.append(PanelEvent(type="panel.result", task_id=tid, tool=TOOL, data={
-            "status": "completed", "partial": False, "title": TITLES.get(state.outcome, "Release"),
+            "status": "completed", "partial": False, "title": title_for(state.outcome, state.detail),
             "release": {"sha": state.sha, "message": state.message, "author": state.author,
                         "services": state.services, "outcome": state.outcome, "detail": state.detail}}))
         out.append(PanelEvent(type="panel.close", task_id=tid, tool=TOOL, data={
