@@ -367,25 +367,40 @@ async def _where(app, asked: str) -> dict:
 async def play(app, user: str, args: dict) -> dict:
     from . import constellation
     jf = Jellyfin(app.state.redis)
+    on = " ".join(str(args.get("on") or "").split())
+    try:
+        node = await _where(app, on)
+    except ValueError:
+        if not on or args.get("id"):
+            raise
+        node = None                                         # "Murder on the Orient Express": "on" was part of the title
     if args.get("id"):
         it = await jf.item(str(args["id"]))
     else:
         what = " ".join(str(args.get("what") or "").split())
         if not what:
             raise ValueError("Play what? (a movie, a show, an album, an artist or a song)")
-        it = best(await jf.search(what, "any", 25), what)
+        if node is None:                                    # no computer by that name: was it the title?
+            whole = f"{what} on {on}"
+            it = best(await jf.search(whole, "any", 25), whole)
+            if it is None:
+                await _where(app, on)                       # say which computer wasn't found
+            node = await _where(app, "")
+        else:
+            it = best(await jf.search(what, "any", 25), what)
         if it is None:
             raise ValueError(f"I couldn't find “{what}” in your library.")
     queue = [q for q in await _queue(jf, it, args, app) if q.get("Id")]
     if not queue:
         raise ValueError(f"There's nothing to play in {it.get('Name')}.")
-    node = await _where(app, str(args.get("on") or ""))
     info = await db.pool().fetchval("SELECT info FROM devices WHERE id=$1", node["id"])
     info = json.loads(info) if isinstance(info, str) else (info or {})
     if _version(info.get("agent_version")) < PLAYS_SINCE:
         raise ValueError(f"{node['name']} is running an older agent without my player; it updates itself within ten minutes.")
     cfg = app.state.config.current.quasar
     redis = app.state.redis
+    raw = await redis.get(STATE.format(node["id"]))
+    before = json.loads(raw) if raw else {}
     items = []
     for q in queue[:200]:
         kind = "audio" if q.get("Type") == "Audio" else "video"
@@ -417,7 +432,9 @@ async def play(app, user: str, args: dict) -> dict:
     st = data.get("player") or {}
     if not st.get("active"):
         raise ValueError(f"{node['name']}'s player didn't start it.")
-    out = {"headline": f"Playing {st.get('title') or label(first)} on {node['name']}",
+    title = st.get("title") or label(first)
+    switched = before.get("active") and before.get("title") and before["title"] != title
+    out = {"headline": f"Switched to {title} on {node['name']}" if switched else f"Playing {title} on {node['name']}",
            "now": now_block(node["name"], st, {q["Id"]: q for q in queue})}
     if start > 5:
         out["now"]["resumed"] = True

@@ -58,7 +58,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.6.2"
+VERSION = "0.6.3"
 IS_WINDOWS = platform.system() == "Windows"
 EXIT_REVOKED = 3                                   # the service manager doesn't restart after this
 EXIT_UPDATED = 75                                  # restart me: a new version is in place
@@ -884,9 +884,15 @@ def do_info(args: dict) -> dict:
 
 
 def do_home(args: dict) -> dict:
+    """Back to her: her player stops (it's on top of everything) and the pages she opened close."""
+    stopped = None
+    if player_busy():
+        stopped = (player().control("stop", {}).get("last") or {}).get("title") or "the video"
     if not (SHELL and SHELL.running()):
+        if stopped:
+            return {"closed": 0, "stopped": stopped}
         raise ValueError("my shell isn't running on this computer")
-    return {"closed": SHELL.home()}
+    return {"closed": SHELL.home(), **({"stopped": stopped} if stopped else {})}
 
 
 # ---- power and presence ---------------------------------------------------------------------

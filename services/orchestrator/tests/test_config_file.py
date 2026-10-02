@@ -90,6 +90,18 @@ def test_health_phrases_reach_the_right_tool(said, tool, args):
     ("show me all my tv shows", "quasar.find", {"kind": "shows"}),
     ("show my music", "quasar.find", {"kind": "music"}),
     ("what's on my clipboard?", "constellation.clipboard", {}),
+    ("play Frieren on node-tv", "quasar.play", {"what": "Frieren", "on": "node-tv"}),
+    ("put on Big Buck", "quasar.play", {"what": "Big Buck", "on": ""}),
+    ("watch Dune on the living room TV", "quasar.play", {"what": "Dune", "on": "living room TV"}),
+    ("play the album Discovery", "quasar.play", {"what": "the album Discovery", "on": ""}),
+    ("play", "constellation.media", {"action": "play", "target": ""}),
+    ("pause the video on the tv", "constellation.media", {"action": "pause", "target": "tv"}),
+    ("next episode", "constellation.media", {"action": "next", "target": ""}),
+    ("play the next episode on the TV", "constellation.media", {"action": "next", "target": "TV"}),
+    ("stop", "constellation.media", {"action": "stop", "target": ""}),
+    ("stop the movie on node-tv", "constellation.media", {"action": "stop", "target": "node-tv"}),
+    ("go home", "constellation.home", {}),
+    ("watch the sign-in", None, None),
     ("copy what's on the desk", "constellation.copy", {"from": "desk"}),
     ("put it on the TV PC", "constellation.paste", {"to": "TV PC"}),
     ("paste that to my phone", "constellation.paste", {"to": "phone"}),
@@ -99,4 +111,7 @@ def test_library_phrases_reach_the_right_tool(said, tool, args):
     from app.config import RuntimeConfig
     cfg = RuntimeConfig.model_validate(yaml.safe_load(CONFIG.read_text()))
     m = fastpath.match(said, cfg.fastpath.patterns)
-    assert m and m.pattern.tool == tool and m.args == args, (said, m and m.pattern.name)
+    if tool is None:
+        assert m is None or m.pattern.tool != "quasar.play", m.pattern.name
+        return
+    assert m and m.pattern.tool == tool and m.args == args, (said, m and m.pattern.name, m and m.args)

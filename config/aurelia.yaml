@@ -243,6 +243,32 @@ fastpath:
       args: { action: "speed", rate: "{rate}", target: "{target}" }
       reply: "Speed {rate}×."
     # Constellation: open something on one of his computers ("on the …" names the computer).
+    - name: media-next
+      match: '^(?:play |skip to |go to )?(?:the )?next (?:episode|one|song|track|video)(?:\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?))?$'
+      tool: constellation.media
+      args: { action: next, target: "{target|}" }
+      reply: "Next."
+    - name: media-previous
+      match: '^(?:play |go (?:back )?to )?(?:the )?(?:previous|last) (?:episode|one|song|track|video)(?:\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?))?$'
+      tool: constellation.media
+      args: { action: previous, target: "{target|}" }
+      reply: "Back one."
+    - name: media-stop
+      match: '^stop(?:\s+(?:playing|the (?:video|movie|show|episode|music|song)|it|that|this))?(?:\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?))?$'
+      tool: constellation.media
+      args: { action: stop, target: "{target|}" }
+      reply: "Stopped."
+    - name: media-play-title
+      # "play Frieren on the TV", "put on Big Buck", "watch Dune on the TV": my player, from his library.
+      match: '^(?:play|put on|start playing|watch)\s+(?!(?:the |my )?(?:sign[- ]?in|screen|live)\b)(?!.*\bscreen$)(?P<what>.+?)(?:\s+(?:on|onto)\s+(?:the |my )?(?P<on>.+?))?$'
+      tool: quasar.play
+      args: { what: "{what}", "on": "{on|}" }
+      reply: "On it."
+    - name: screen-home-here
+      match: '^(?:go (?:back )?home|back to (?:aurelia|you|home)|close (?:that|it|everything|the page|the video|the movie)|show (?:aurelia|yourself))$'
+      tool: constellation.home
+      args: {}
+      reply: "Back to me."
     - name: open-url-on
       match: '^open\s+(?P<url>(?:https?://)?[\w-]+(?:\.[\w-]+)+(?:/\S*)?)\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?)\.?$'
       tool: constellation.open

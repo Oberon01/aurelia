@@ -77,3 +77,10 @@ def test_she_gives_up_with_a_useful_reason():
             await jf.call(c, "GET", f"{jf.url}/System/Info/Public")
     with pytest.raises(ValueError, match="home-lab network"):
         asyncio.run(go())
+
+
+@pytest.mark.parametrize("asked,tv", [("the tv", True), ("the living room TV", True), ("the big screen", True),
+                                      ("the desk", False), ("my phone", False), ("tv and the desk", False)])
+def test_the_tv_means_the_screen_showing_her(asked, tv):
+    from app.constellation import _tvish
+    assert _tvish(asked) is tv

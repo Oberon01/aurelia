@@ -34,6 +34,7 @@ LIBRARY = [
     {"Id": "s1", "Type": "Series", "Name": "Frieren", "ProductionYear": 2023, "Overview": "After the journey."},
     ep(1, "The Journey's End", played=True), ep(2, "It Didn't Have to Be Magic", resume=6), ep(3, "Killing Magic"),
     {"Id": "m1", "Type": "Movie", "Name": "Big Buck", "ProductionYear": 2008, "RunTimeTicks": 30 * TICKS},
+    {"Id": "m2", "Type": "Movie", "Name": "Murder on the Orient Express", "ProductionYear": 2017, "RunTimeTicks": 30 * TICKS},
     {"Id": "al1", "Type": "MusicAlbum", "Name": "Discovery", "AlbumArtist": "Daft Punk"},
     {"Id": "t1", "Type": "Audio", "Name": "One More Time", "AlbumArtist": "Daft Punk", "Album": "Discovery", "ParentId": "al1",
      "IndexNumber": 1},
@@ -170,10 +171,10 @@ def test_she_plays_his_library_on_a_computer_with_her_own_player(node, jellyfin)
     lib = ok(orch, "quasar.find", {})
     groups = {g["name"]: [i["name"] for i in g["items"]] for g in lib["catalog"]["groups"]}
     assert groups["Continue"] == ["It Didn't Have to Be Magic"] and "Frieren" in str(lib)
-    assert groups["Shows"] == ["Frieren"] and groups["Movies"] == ["Big Buck"] and groups["Music"] == ["Discovery"]
-    assert lib["headline"] == "Your library · 3 titles"                     # the whole library, A to Z
+    assert groups["Shows"] == ["Frieren"] and groups["Movies"] == ["Big Buck", "Murder on the Orient Express"]
+    assert groups["Music"] == ["Discovery"] and lib["headline"] == "Your library · 4 titles"   # the whole library
     movies = ok(orch, "quasar.find", {"kind": "movies"})
-    assert [g["name"] for g in movies["catalog"]["groups"]] == ["Movies"] and movies["headline"] == "Your movies · 1 title"
+    assert [g["name"] for g in movies["catalog"]["groups"]] == ["Movies"] and movies["headline"] == "Your movies · 2 titles"
     found = ok(orch, "quasar.find", {"query": "discovery"})["catalog"]["items"]
     assert found[0]["type"] == "album" and found[0]["artist"] == "Daft Punk" and found[0]["art"] == "/quasar/art/al1"
 
@@ -207,7 +208,17 @@ def test_she_plays_his_library_on_a_computer_with_her_own_player(node, jellyfin)
     assert res["now"]["kind"] == "audio" and res["now"]["title"] == "Daft Punk — One More Time" and res["now"]["count"] == 2
     res = ok(orch, "quasar.play", {"what": "frieren", "season": 1, "episode": 1, "from_start": True})
     assert res["now"]["title"].startswith("Frieren · S1E1") and res["now"]["position"] < 3 and "resumed" not in res["now"]
-    ok(orch, "constellation.media", {"action": "stop"})
+    # Switching is just playing something else; "on" inside a title isn't a computer; going home stops it.
+    time.sleep(1.5)                                                        # its first report is in
+    res = ok(orch, "quasar.play", {"what": "big buck", "on": "the tv"})
+    assert res["headline"] == "Switched to Big Buck (2008) on Living room TV", res["headline"]
+    res = ok(orch, "quasar.play", {"what": "Murder", "on": "the Orient Express"})
+    assert res["now"]["title"] == "Murder on the Orient Express (2017)"
+    status, _, err = run_task(orch, "quasar.play", {"what": "big buck", "on": "the attic"})
+    assert status == "failed" and "don't know a computer called" in err
+    home = ok(orch, "constellation.home", {})
+    assert home["opened"]["what"].startswith("Stopped Murder on the Orient Express")
+    assert ok(orch, "constellation.media", {"action": "now_playing"})["headline"] == "Nothing is playing on Living room TV"
 
     status, _, err = run_task(orch, "quasar.play", {"what": "nonexistent thing"})
     assert status == "failed" and "couldn't find" in err

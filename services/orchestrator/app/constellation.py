@@ -339,6 +339,15 @@ def _match(asked: str, name: str, hostname: str | None) -> bool:
     return bool(a) and (a <= norm(name) or a <= norm(hostname or ""))
 
 
+TV_WORDS = {"tv", "television", "telly", "living", "room", "lounge", "big", "screen", "the", "my", "on", "node"}
+
+
+def _tvish(asked: str) -> bool:
+    """He means the TV, whatever its computer is called ('the TV', 'the living room TV', 'the big screen')."""
+    words = set(re.findall(r"[a-z]+", asked.lower()))
+    return bool(words & {"tv", "television", "telly", "screen"}) and words <= TV_WORDS
+
+
 class NoSuchNode(ValueError):
     """No computer matches (or none is online): a Roku TV with that name may still do."""
 
@@ -372,6 +381,9 @@ async def target(app, asked: str | None, screen: bool = False) -> dict:
         raise NoSuchNode("None of your computers runs my node yet.")
     if asked and asked.strip():
         hits = [n for n in ns if _match(asked, n["name"], n["hostname"])]
+        if not hits and _tvish(asked):                     # "the TV", "the living room TV": the one screen showing her
+            hits = [n for n in ns if n["shell"] == "on" and n["online"]]
+            hits = hits if len(hits) == 1 else []
         if not hits:
             raise NoSuchNode(f"I don't know a computer called \"{asked}\". Yours: {', '.join(n['name'] for n in ns)}.")
         if len(hits) > 1:                              # e.g. re-paired without revoking the old entry
@@ -550,7 +562,7 @@ async def _roku(app, user: str, tv_name: str, app_name: str) -> dict | None:
 
 
 async def home(app, user: str, args: dict) -> dict:
-    node = await target(app, args.get("target"))
+    node = await target(app, args.get("target"), screen=True)
     tv = asyncio.create_task(show_on_tv(app, user, node))
     try:
         data = await _ask_node(app, node, "home", {})
@@ -558,8 +570,11 @@ async def home(app, user: str, args: dict) -> dict:
         await tv
         raise
     n = int(data.get("closed") or 0)
+    done = [f"Stopped {data['stopped']}"] if data.get("stopped") else []
+    if n:
+        done.append(f"closed {n} page{'s' if n != 1 else ''}")
     return {"headline": f"{node['name']} is back to me", "opened": {"node": node["name"], "kind": "home",
-            "what": f"Closed {n} page{'s' if n != 1 else ''}" if n else "Nothing was open"}, **await tv}
+            "what": ("; ".join(done)[:1].upper() + "; ".join(done)[1:]) if done else "Nothing was open"}, **await tv}
 
 
 async def apps(app, user: str, args: dict) -> dict:
