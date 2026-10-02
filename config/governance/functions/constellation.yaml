@@ -23,6 +23,9 @@ tools:
   restart:         { tier: change }      # restart or shut down a computer: always confirmed
   wake:            { tier: act }         # wake-on-LAN
   diagnose:        { tier: read }        # read-only checks: services, logs, network, storage (stage 1 of node fixes)
+  clipboard:       { tier: reference }   # his shared clipboard (a day, 20 entries, in Redis only)
+  copy:            { tier: act }         # onto the shared clipboard (text, or what's copied on a computer); never secrets
+  paste:           { tier: act }         # onto a computer's clipboard, or a Copy card on a display
   watch:           { tier: read }        # his screen live in a panel on his display (frames never reach the model)
   screens:         { tier: reference }   # what's on each display now (its own report)
   send:            { tier: act }         # a panel, link or note to another display (or a group by role)
@@ -92,7 +95,7 @@ rules:
   screens:
     - computer: TV PC
       tv: Living room TV
-      input: "HDMI 2"                        # which HDMI the TV PC is plugged into, e.g. "HDMI 2"
+      input: ""                        # which HDMI the TV PC is plugged into, e.g. "HDMI 2"
   targeting:
     default_target: requesting_node
     quiet_hours: []                    # e.g. { node: bedroom-tv, from: "22:00", to: "07:00" }

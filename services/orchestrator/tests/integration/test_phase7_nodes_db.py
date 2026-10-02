@@ -582,3 +582,65 @@ def test_a_slow_removal_still_brings_its_card(node):
             break
         time.sleep(0.2)
     assert "vlc" not in json.loads((bin_ / "pkgs.json").read_text())["installed"]
+
+
+FAKE_CLIP = r'''#!PY
+import sys, pathlib
+st, types = pathlib.Path(__file__).with_name("clip.txt"), pathlib.Path(__file__).with_name("clip-types.txt")
+if pathlib.Path(sys.argv[0]).name == "wl-copy":
+    st.write_text(sys.stdin.read())
+elif "--list-types" in sys.argv:
+    print(types.read_text() if types.exists() else "text/plain;charset=utf-8")
+else:
+    sys.stdout.write(st.read_text() if st.exists() else "")
+'''
+
+
+@pytest.mark.node_env(WAYLAND_DISPLAY="wayland-0", XDG_SESSION_TYPE="wayland")
+def test_the_shared_clipboard(node):
+    """Text moves between his devices through Aurelia's clipboard: from a computer's clipboard, onto
+    another's, and to a display as a Copy card. Never a password or a key; screens can't use it."""
+    import asyncio, uuid, asyncpg
+    orch, bin_ = node["orch"], node["record"].parent / "bin"
+    for name in ("wl-copy", "wl-paste"):
+        (bin_ / name).write_text(FAKE_CLIP.replace("#!PY", f"#!{sys.executable}"))
+        (bin_ / name).chmod(0o755)
+    httpx.delete(f"{orch}/constellation/clipboard")
+
+    async def devices():
+        c = await asyncpg.connect(DB)
+        try:
+            out = []
+            for kind, name in (("browser", "Phone"), ("screen", "TV screen")):
+                out.append(await c.fetchval("INSERT INTO devices (kind, name, status, key_hash, approved_at) VALUES "
+                                            "($1, $2, 'approved', $3, now()) RETURNING id", kind, name, uuid.uuid4().hex))
+            return out
+        finally:
+            await c.close()
+    phone, screen = asyncio.run(devices())
+
+    (bin_ / "clip.txt").write_text("https://example.com/recipe")
+    status, res, err = run_task(node["orch"], "constellation.copy", {"from": "living room tv"}, wait=30)
+    assert status == "completed", err
+    assert res["headline"] == "Copied “https://example.com/recipe” from Living room TV"
+    assert res["clipboard"]["items"][0]["source"] == "Living room TV"
+
+    r = httpx.post(f"{orch}/constellation/clipboard", json={"text": "grocery list: eggs, rice"},
+                   headers={"X-Aurelia-Device": str(phone)})
+    assert r.status_code == 200 and r.json()["items"][0]["source"] == "Phone"
+    assert httpx.post(f"{orch}/constellation/clipboard", json={"text": "sk-abcdefghijklmnop1234"},
+                      headers={"X-Aurelia-Device": str(phone)}).status_code == 400            # never a key
+    assert httpx.get(f"{orch}/constellation/clipboard", headers={"X-Aurelia-Device": str(screen)}).status_code == 403
+
+    status, res, err = run_task(orch, "constellation.paste", {"to": "living room tv"}, wait=30)
+    assert status == "completed" and res["headline"] == "On Living room TV's clipboard", err
+    assert (bin_ / "clip.txt").read_text() == "grocery list: eggs, rice"
+    status, res, err = run_task(orch, "constellation.paste", {"to": "phone", "n": 2}, wait=30)
+    assert status == "completed", err
+    assert "Phone" in res["headline"]                                          # a Copy card for the phone
+
+    (bin_ / "clip-types.txt").write_text("text/plain\nx-kde-passwordManagerHint")
+    status, _, err = run_task(orch, "constellation.copy", {"from": "living room tv"}, wait=30)
+    assert status == "failed" and "password manager" in err
+    status, res, _ = run_task(orch, "constellation.clipboard", {}, wait=30)
+    assert [i["text"] for i in res["clipboard"]["items"]] == ["grocery list: eggs, rice", "https://example.com/recipe"]

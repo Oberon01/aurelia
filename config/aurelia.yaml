@@ -362,6 +362,21 @@ fastpath:
       tool: quasar.find
       args: {}
       reply: "Here's your library."
+    - name: clipboard-show
+      match: '^(?:what(?:''s| is) on (?:my|the) clipboard|(?:show|open)(?: me)? (?:my|the) clipboard)\??$'
+      tool: constellation.clipboard
+      args: {}
+      reply: "Here's your clipboard."
+    - name: clipboard-from
+      match: '^copy (?:what(?:''s| is)(?: copied)? on|the clipboard (?:from|on)) (?:the |my )?(?P<src>.+?)$'
+      tool: constellation.copy
+      args: { from: "{src}" }
+      reply: "Copied."
+    - name: clipboard-to
+      match: '^(?:put|paste) (?:it|that|the clipboard) (?:on|onto|to) (?:the |my )?(?P<to>.+?)(?:''s clipboard)?$'
+      tool: constellation.paste
+      args: { to: "{to}" }
+      reply: "Done."
     - name: my-movies
       match: '^(?:(?:show|open|list)(?: me)? (?:all )?(?:of )?my movies|what movies do (?:I|we) have|what movies are (?:in|on) (?:my )?(?:library|jellyfin))\??$'
       tool: quasar.find

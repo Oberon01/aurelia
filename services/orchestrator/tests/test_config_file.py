@@ -89,6 +89,10 @@ def test_health_phrases_reach_the_right_tool(said, tool, args):
     ("what shows do I have?", "quasar.find", {"kind": "shows"}),
     ("show me all my tv shows", "quasar.find", {"kind": "shows"}),
     ("show my music", "quasar.find", {"kind": "music"}),
+    ("what's on my clipboard?", "constellation.clipboard", {}),
+    ("copy what's on the desk", "constellation.copy", {"from": "desk"}),
+    ("put it on the TV PC", "constellation.paste", {"to": "TV PC"}),
+    ("paste that to my phone", "constellation.paste", {"to": "phone"}),
 ])
 def test_library_phrases_reach_the_right_tool(said, tool, args):
     from app import fastpath

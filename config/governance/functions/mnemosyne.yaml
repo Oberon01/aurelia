@@ -22,6 +22,9 @@ rules:
   min_requests: 2          # a lone fast-path command ("lock the door") isn't worth a record
   exclude_tools:           # requests that ran these are left out of records entirely
     - orbit.login          #   (SmartRent sign-in codes)
+    - constellation.copy   #   (what he copies stays a day on the clipboard, never in a record)
+    - constellation.paste
+    - constellation.clipboard
   max_transcript_chars: 24000
 
   # What she knows about you

@@ -274,6 +274,20 @@ Zip, promo and gift codes are ordinary boxes. `sign_in` takes a site's "Log in
 with a password" option when it offers one; when it only offers a code, she
 stops and asks you for it.
 
+**The shared clipboard (agent 0.6.2).** Text you copy on one device and want on
+another. "Copy what's on the desk" takes a computer's clipboard; "copy this link"
+puts exact text on it; "put it on the TV PC" puts the newest entry on that
+computer's clipboard, ready to paste; "send it to my phone to paste" sends a card
+with a **Copy** button (phones only let a page copy after a tap). "What's on my
+clipboard" opens the panel: newest first, **Copy** on each, and **Add what I
+copied here** to share this device's clipboard (the browser asks first). It keeps
+a day and at most 20 entries, in Redis only, and never goes into a conversation
+record. Passwords, keys and tokens are refused everywhere: anything a password
+manager marks as secret, known key formats, and password-looking strings. Linux
+computers use wl-clipboard (Wayland) or xclip (X11), installed by `--system`;
+Windows uses its own clipboard commands. Text only, for now. Screens (the TV's
+own key) can't read or change it.
+
 **Installing and removing apps (agent 0.6.1, always confirmed).** "Install VLC
 on the desk", "remove Steam from the TV PC" (`install`, `uninstall`). They only
 prepare: the computer looks the app up in Ubuntu's own packages and the Snap

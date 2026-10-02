@@ -591,7 +591,7 @@ const TITLES = { "aurelia.reply": "Aurelia",
   "constellation.devices": "Devices", "constellation.open": "Open", "constellation.apps": "Apps",
   "constellation.home": "Home", "constellation.look": "On the screen", "constellation.click": "Click",
   "constellation.type": "Type", "constellation.press": "Key", "constellation.scroll": "Scroll",
-  "constellation.back": "Back", "constellation.media": "Playing", "constellation.sound": "Sound", "constellation.watch": "Live", "quasar.find": "Library", "quasar.play": "Playing", "constellation.install": "Install", "constellation.install_package": "Install", "constellation.uninstall": "Remove", "constellation.remove_package": "Remove", "constellation.submit": "Press",
+  "constellation.back": "Back", "constellation.media": "Playing", "constellation.sound": "Sound", "constellation.watch": "Live", "quasar.find": "Library", "quasar.play": "Playing", "constellation.install": "Install", "constellation.clipboard": "Clipboard", "constellation.copy": "Copied", "constellation.paste": "Paste", "constellation.install_package": "Install", "constellation.uninstall": "Remove", "constellation.remove_package": "Remove", "constellation.submit": "Press",
   "constellation.health": "Computer health", "constellation.list_processes": "Processes",
   "constellation.close_process": "Close a program", "constellation.kill_process": "Close a program",
 };
@@ -1188,6 +1188,7 @@ function body(tool, d) {
   if (d.onscreen && typeof d.onscreen === "object") { wrap.append(onscreenView(d.onscreen, !!d.did)); used.add("onscreen"); used.add("headline"); }
   if (d.did && typeof d.did === "object") { wrap.prepend(didView(d.did)); used.add("did"); used.add("headline"); }
   if (d.packages && Array.isArray(d.packages.items)) { wrap.append(packagesView(d.packages)); used.add("packages"); used.add("headline"); }
+  if (d.clipboard && Array.isArray(d.clipboard.items)) { wrap.append(clipboardView(d.clipboard)); used.add("clipboard"); used.add("headline"); }
   if (d.catalog && typeof d.catalog === "object") { wrap.append(catalogView(d.catalog)); used.add("catalog"); used.add("headline"); }
   if (d.now && typeof d.now === "object" && d.now.node) { wrap.append(nowView(d.now)); used.add("now"); used.add("headline"); }
   if (d.live && typeof d.live === "object" && d.live.node_id) { wrap.append(liveView(d.live)); used.add("live"); used.add("headline"); }
@@ -1735,6 +1736,47 @@ function packagesView(p) {
   });
   return box;
 }
+// The shared clipboard: newest first; Copy puts one on this device; "Add what I copied here" reads
+// this device's clipboard (the browser asks him first) and shares it.
+function clipboardView(c) {
+  const box = el("div"); box.style.cssText = "display:flex;flex-direction:column;gap:10px";
+  const top = el("div"); top.style.cssText = "display:flex;gap:8px;flex-wrap:wrap";
+  const add = el("button", "btn", "Add what I copied here"); add.type = "button";
+  const msg = el("div", "more");
+  add.addEventListener("click", async () => {
+    let text = "";
+    try { text = await navigator.clipboard.readText(); } catch (e) { msg.textContent = "This device didn't let me read its clipboard."; return; }
+    if (!text.trim()) { msg.textContent = "Nothing is copied on this device."; return; }
+    const r = await fetch("/constellation/clipboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+    const out = await r.json().catch(() => ({}));
+    if (!r.ok) { msg.textContent = out.detail || "That didn't work."; return; }
+    box.replaceWith(clipboardView(out));
+  });
+  top.append(add);
+  if (c.items.length) {
+    const clear = el("button", "btn", "Clear"); clear.type = "button";
+    clear.addEventListener("click", async () => { const r = await fetch("/constellation/clipboard", { method: "DELETE" }); if (r.ok) box.replaceWith(clipboardView({ items: [] })); });
+    top.append(clear);
+  }
+  box.append(top, msg);
+  if (!c.items.length) box.append(el("div", "msg", "Nothing copied in the last day."));
+  const ago = t => { const s = Math.max(0, Date.now() / 1000 - t); return s < 60 ? "just now" : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`; };
+  c.items.forEach((it, i) => {
+    const row = el("div"); row.style.cssText = "display:flex;flex-direction:column;gap:6px;padding:10px 0;border-top:1px solid var(--cyan-soft)";
+    const txt = el("div", null, it.text + (it.cut ? " …" : ""));
+    txt.style.cssText = "font-size:14px;line-height:1.45;color:var(--ink-strong);white-space:pre-wrap;overflow-wrap:anywhere;max-height:6em;overflow:hidden";
+    const side = el("div"); side.style.cssText = "display:flex;flex-direction:row-reverse;justify-content:space-between;align-items:center;gap:8px";
+    const b = el("button", "btn" + (i === 0 ? " primary" : ""), "Copy"); b.type = "button";
+    b.addEventListener("click", async () => {
+      let text = it.text;
+      if (it.cut) { try { text = (await (await fetch(`/constellation/clipboard/${it.id}`)).json()).text || text; } catch (e) {} }
+      copyHere(text, b);
+    });
+    side.append(b, el("div", "more", `${it.source} · ${ago(it.at)}`));
+    row.append(txt, side); box.append(row);
+  });
+  return box;
+}
 // His library (Jellyfin): posters, numbered, grouped when there's no search. A tap plays it.
 function sayPlay(x) {
   if (x.type === "episode") return `play ${x.show} season ${x.season} episode ${x.episode}`;
@@ -2017,9 +2059,16 @@ function answerView(text, headline) {             // her longer replies: paragra
   return box;
 }
 
+// Put text on this device's clipboard (needs his tap on most phones; https only).
+async function copyHere(text, btn) {
+  try { await navigator.clipboard.writeText(text); if (btn) { btn.textContent = "Copied"; setTimeout(() => btn.textContent = "Copy", 1500); } }
+  catch (e) { if (btn) btn.textContent = "Couldn't copy here"; }
+}
 function noteView(n) {                             // something sent here: a note, a link, or both
   const box = el("div"); box.style.display = "flex"; box.style.flexDirection = "column"; box.style.gap = "12px";
   if (n.text) box.append(el("div", "note-text", n.text));
+  if (n.copy && n.text) { const b = el("button", "btn primary", "Copy"); b.type = "button"; b.style.alignSelf = "flex-start";
+                          b.addEventListener("click", () => copyHere(n.text, b)); box.append(b); }
   if (n.url) box.append(linkView({ url: n.url, site: (() => { try { return new URL(n.url).hostname.replace(/^www\./, ""); } catch (e) { return "link"; } })() }));
   return box;
 }

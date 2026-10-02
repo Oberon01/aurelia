@@ -967,3 +967,63 @@ def test_updates_wait_while_something_plays(monkeypatch):
     agent.maybe_update("s", "k", {"version": agent.VERSION})
     agent.maybe_update("s", "k", {"version": "9.9.9"})
     assert seen == ["9.9.9"]
+
+
+# ---- the clipboard -------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("text,secret", [
+    ("hello world", False), ("https://www.youtube.com/watch?v=abc123XYZ", False), ("kentrell@solaces.me", False),
+    ("Frieren S1E3", False), ("sk-abcdefghijklmnop1234", True), ("Tr0ub4dor&3xyz", True),
+    ("ghp_abcdefghijklmnopqrstuvwxyz12", True), ("aur_" + "x" * 30, True),
+    ("-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----", True)])
+def test_what_counts_as_a_secret(text, secret):
+    assert agent.looks_secret(text) is secret
+
+
+@pytest.fixture
+def wayland_clip(monkeypatch):
+    state = {"text": "copied on the TV", "types": "text/plain;charset=utf-8\nTEXT\n", "calls": []}
+    monkeypatch.setattr(agent, "IS_WINDOWS", False)
+    monkeypatch.setattr(agent, "wayland", lambda: True)
+    monkeypatch.setattr(agent.shutil, "which", lambda n: f"/usr/bin/{n}")
+
+    def run_env(argv, timeout=6):
+        state["calls"].append(argv)
+        if "--list-types" in argv:
+            return 0, state["types"], ""
+        return 0, state["text"], ""
+
+    def run_in(argv, data, timeout=10):
+        state["calls"].append(argv)
+        state["text"] = data
+        return 0, "", ""
+    monkeypatch.setattr(agent, "_run_env", run_env)
+    monkeypatch.setattr(agent, "_run_in", run_in)
+    return state
+
+
+def test_clipboard_round_trip(wayland_clip):
+    assert agent.do_clipboard_get({}) == {"text": "copied on the TV", "cut": False}
+    assert agent.do_clipboard_set({"text": "from my phone"}) == {"set": True, "chars": 13}
+    assert wayland_clip["text"] == "from my phone" and ["wl-copy"] in wayland_clip["calls"]
+
+
+def test_clipboard_never_carries_secrets(wayland_clip):
+    wayland_clip["types"] += "x-kde-passwordManagerHint\n"                     # KeePassXC marks what it copies
+    with pytest.raises(ValueError, match="password manager"):
+        agent.do_clipboard_get({})
+    wayland_clip["types"], wayland_clip["text"] = "text/plain\n", "sk-abcdefghijklmnop1234"
+    with pytest.raises(ValueError, match="password or a key"):
+        agent.do_clipboard_get({})
+    with pytest.raises(ValueError, match="password or a key"):
+        agent.do_clipboard_set({"text": "ghp_abcdefghijklmnopqrstuvwxyz12"})
+    assert ["wl-copy"] not in wayland_clip["calls"]
+
+
+def test_no_clipboard_tools_says_how_to_get_them(monkeypatch):
+    monkeypatch.setattr(agent, "IS_WINDOWS", False)
+    monkeypatch.setattr(agent, "wayland", lambda: True)
+    monkeypatch.setattr(agent.shutil, "which", lambda n: None)
+    monkeypatch.setattr(agent, "session_env", lambda: {})
+    with pytest.raises(ValueError, match="--system"):
+        agent.do_clipboard_get({})

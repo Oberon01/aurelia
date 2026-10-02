@@ -25,6 +25,7 @@ import base64
 import json
 import logging
 import re
+import time
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request
@@ -268,6 +269,24 @@ TOOLS = [
         input_schema={"type": "object", "properties": {
             "target": {"type": "string"}, "name": {"type": "string"}, "source": {"type": "string", "enum": ["apt", "snap"]},
             "removes": {"type": "array", "items": {"type": "string"}}}, "required": ["name"]},
+        cancellable=False),
+    registry.ToolSpec(
+        name="clipboard", description="His shared clipboard: what he (or you) copied lately, newest first, across "
+                                      "his devices; each one can be copied onto the device he's using with a tap.",
+        input_schema={"type": "object", "properties": {}}, cancellable=False, freshness_seconds=0, display="panel"),
+    registry.ToolSpec(
+        name="copy", description="Put something on his shared clipboard: text (exact words, a link) or, with "
+                                 "from, what's copied on one of his computers right now ('copy what's on the desk'). "
+                                 "Never passwords or keys (they're refused).",
+        input_schema={"type": "object", "properties": {"text": {"type": "string"}, "from": {"type": "string"}}},
+        cancellable=False),
+    registry.ToolSpec(
+        name="paste", description="Put the newest clipboard entry (or entry n, 1 = newest) on one of his computers' "
+                                  "clipboards, ready to paste there ('put it on the TV PC'), or on a display (his "
+                                  "phone gets a card with a Copy button: phones only allow copying with a tap). to: a "
+                                  "computer or display by name.",
+        input_schema={"type": "object", "properties": {"to": {"type": "string"}, "n": {"type": "integer", "minimum": 1}},
+                      "required": ["to"]},
         cancellable=False),
     registry.ToolSpec(
         name="watch", description="Show him one of his screens live, in a panel on the display he's using: what's "
@@ -1225,7 +1244,7 @@ async def send(app, user: str, args: dict) -> dict:
     if not to:
         raise ValueError("Send it where? Name a display, or say e.g. \"all presentation devices\".")
     task = str(args.get("_panel_task") or "")
-    url, text = str(args.get("url") or "").strip(), str(args.get("text") or "").strip()[:2000]
+    url, text = str(args.get("url") or "").strip(), str(args.get("text") or "").strip()[:CLIP_MAX if args.get("_copy") else 2000]
     me = await db.pool().fetchrow("SELECT t.device, d.name FROM task_runs t LEFT JOIN devices d ON d.id = t.device "
                                   "WHERE t.id=$1", uuid.UUID(str(args["_self"]))) if args.get("_self") else None
     asker, sent_from = (me["device"], me["name"]) if me else (None, None)
@@ -1247,7 +1266,8 @@ async def send(app, user: str, args: dict) -> dict:
         if url and "://" not in url:
             url = "https://" + url
         tool, targs, what = f"{NAME}.send", {"note": text[:80], "url": url}, "link" if url else "note"
-        data = {"headline": f"From {sent_from}" if sent_from else "Sent to you", "note": {"text": text, "url": url}}
+        data = {"headline": f"From {sent_from}" if sent_from else "Sent to you",
+                "note": {"text": text, "url": url, **({"copy": True} if args.get("_copy") else {})}}
     else:
         raise ValueError("Send what? A panel (its number), a link, or a note.")
     opened, failed, behind, panel_targets = [], [], [], []
@@ -1551,6 +1571,89 @@ async def remove_package(app, user: str, args: dict) -> dict:
             "did": {"node": node["name"], "what": f"Removed {d.get('name') or name}"}}
 
 
+# ---- the shared clipboard ------------------------------------------------------------------------
+#
+# Text he copies on one device and wants on another. Kept a day, newest first, at most 20 entries,
+# per user, in Redis only. Passwords, keys and tokens are refused here and on every computer.
+
+CLIP_KEY = "aurelia:clipboard:{}"
+CLIP_KEEP, CLIP_DAY, CLIP_MAX = 20, 86400, 20000
+
+
+def looks_secret(text: str) -> bool:
+    from .node_agent import aurelia_node
+    return aurelia_node.looks_secret(text)
+
+
+async def clip_items(redis, user: str) -> list[dict]:
+    return [json.loads(x) for x in await redis.lrange(CLIP_KEY.format(user), 0, CLIP_KEEP - 1)]
+
+
+async def clip_add(redis, user: str, text: str, source: str) -> dict:
+    text = text if len(text) <= CLIP_MAX else text[:CLIP_MAX]
+    if not text.strip():
+        raise ValueError("There's nothing to copy.")
+    if looks_secret(text):
+        raise ValueError("That looks like a password or a key, so I won't keep it on the clipboard.")
+    items = await clip_items(redis, user)
+    if items and items[0]["text"] == text:                  # the same thing again: just move it up
+        await redis.lpop(CLIP_KEY.format(user))
+    entry = {"id": uuid.uuid4().hex[:12], "text": text, "source": source, "at": int(time.time())}
+    key = CLIP_KEY.format(user)
+    await redis.lpush(key, json.dumps(entry))
+    await redis.ltrim(key, 0, CLIP_KEEP - 1)
+    await redis.expire(key, CLIP_DAY)
+    return entry
+
+
+def _clip_view(items: list[dict]) -> dict:
+    return {"items": [{**i, "text": i["text"][:2000], "cut": len(i["text"]) > 2000} for i in items]}
+
+
+async def clipboard(app, user: str, args: dict) -> dict:
+    items = await clip_items(app.state.redis, user)
+    n = len(items)
+    return {"headline": f"Clipboard · {n} item{'s' if n != 1 else ''}" if n else "The clipboard is empty",
+            "clipboard": _clip_view(items)}
+
+
+async def copy(app, user: str, args: dict) -> dict:
+    src = str(args.get("from") or "").strip()
+    if src:
+        node = await target(app, src)
+        d = await _ask_new(app, node, "clipboard_get", {}, 20)
+        if d.get("empty"):
+            raise ValueError(f"Nothing is copied on {node['name']} right now.")
+        text, source = str(d.get("text") or ""), node["name"]
+    else:
+        text, source = str(args.get("text") or ""), "Aurelia"
+    entry = await clip_add(app.state.redis, user, text, source)
+    short = " ".join(entry["text"].split())
+    return {"headline": f"Copied “{short[:60]}{'…' if len(short) > 60 else ''}”" + (f" from {source}" if src else ""),
+            "clipboard": _clip_view(await clip_items(app.state.redis, user))}
+
+
+async def paste(app, user: str, args: dict) -> dict:
+    to = str(args.get("to") or "").strip()
+    items = await clip_items(app.state.redis, user)
+    n = int(args.get("n") or 1)
+    if not items:
+        raise ValueError("The clipboard is empty: copy something first.")
+    if not 1 <= n <= len(items):
+        raise ValueError(f"There are only {len(items)} things on the clipboard.")
+    entry = items[n - 1]
+    short = " ".join(entry["text"].split())[:60]
+    try:
+        node = await target(app, to)
+    except NoSuchNode:
+        node = None
+    if node is not None:                                    # a computer: straight onto its clipboard
+        await _ask_new(app, node, "clipboard_set", {"text": entry["text"]}, 20)
+        return {"headline": f"On {node['name']}'s clipboard", "did": {"node": node["name"], "what": f"Ready to paste: “{short}”"}}
+    sent = await send(app, user, {"to": to, "text": entry["text"], "_copy": True, "_self": args.get("_self")})
+    return {**sent, "headline": sent["headline"].replace("On ", "Ready to copy on ", 1)}
+
+
 LIVE_SINCE = (0, 5, 7)
 
 
@@ -1580,6 +1683,52 @@ async def _viewer(request: Request, node_id: int) -> None:
         raise HTTPException(404, "No such computer.")
 
 
+class ClipIn(BaseModel):
+    text: str
+
+
+async def _clip_user(request: Request) -> tuple[str, str]:
+    """His own displays only (a browser); never a screen, a node or a terminal."""
+    dev = await auth.asker(request.headers)
+    if dev is not None and dev["kind"] != "browser":
+        raise HTTPException(403, "This device can't use the clipboard.")
+    return (dev or {}).get("user_id") or "owner", (dev or {}).get("name") or "Aurelia"
+
+
+@router.get("/clipboard", include_in_schema=False)
+async def clipboard_list(request: Request):
+    user, _ = await _clip_user(request)
+    return _clip_view(await clip_items(request.app.state.redis, user))
+
+
+@router.get("/clipboard/{entry_id}", include_in_schema=False)
+async def clipboard_entry(entry_id: str, request: Request):
+    """One entry whole (the panel shows the first 2000 characters; Copy takes all of it)."""
+    user, _ = await _clip_user(request)
+    hit = next((i for i in await clip_items(request.app.state.redis, user) if i["id"] == entry_id), None)
+    if hit is None:
+        raise HTTPException(404, "That's no longer on the clipboard.")
+    return hit
+
+
+@router.post("/clipboard", include_in_schema=False)
+async def clipboard_add(body: ClipIn, request: Request):
+    """What he copied on this device (the panel's "Add what I copied here", after his tap)."""
+    user, name = await _clip_user(request)
+    try:
+        entry = await clip_add(request.app.state.redis, user, body.text, name)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"added": entry["id"], **_clip_view(await clip_items(request.app.state.redis, user))}
+
+
+@router.delete("/clipboard", include_in_schema=False)
+async def clipboard_clear(request: Request):
+    user, _ = await _clip_user(request)
+    await request.app.state.redis.delete(CLIP_KEY.format(user))
+    return {"items": []}
+
+
 @router.post("/live/{node_id}/keep", include_in_schema=False)
 async def live_keep(node_id: int, request: Request):
     """The live panel, every few seconds while it's on screen: keep sending."""
@@ -1602,7 +1751,8 @@ HANDLERS = {"devices": devices, "open": open_, "apps": apps, "home": home, "look
             "list_processes": list_processes, "close_process": close_process, "kill_process": kill_process,
             "sign_in": sign_in, "logins": logins, "send": send, "screens": screens, "diagnose": diagnose_node,
             "power": power, "restart": restart, "wake": wake, "sound": sound, "watch": watch,
-            "install": install, "install_package": install_package, "uninstall": uninstall, "remove_package": remove_package}
+            "install": install, "install_package": install_package, "uninstall": uninstall, "remove_package": remove_package,
+            "clipboard": clipboard, "copy": copy, "paste": paste}
 
 
 @router.get("/shots/{sid}.jpg", include_in_schema=False)
@@ -1662,7 +1812,7 @@ async def _run(app, tool: str, task_id: str, args: dict) -> None:
     from . import tasks
     try:
         row = await db.pool().fetchrow("SELECT user_id FROM task_runs WHERE id=$1", uuid.UUID(task_id))
-        if tool in ("send", "power", "restart", "wake"):
+        if tool in ("send", "power", "restart", "wake", "paste"):
             args = {**args, "_self": task_id}               # who's asking: this task's display
         data = await HANDLERS[tool](app, row["user_id"] if row else "owner", args)
         result = tasks.Result(status="completed", data=data)

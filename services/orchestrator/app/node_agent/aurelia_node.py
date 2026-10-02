@@ -58,7 +58,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.6.1"
+VERSION = "0.6.2"
 IS_WINDOWS = platform.system() == "Windows"
 EXIT_REVOKED = 3                                   # the service manager doesn't restart after this
 EXIT_UPDATED = 75                                  # restart me: a new version is in place
@@ -1552,6 +1552,101 @@ def do_play(args: dict) -> dict:
     st = p.play(items, float(args.get("start") or 0), f"Authorization: Bearer {NODE_KEY}" if NODE_KEY else None)
     p.report()
     return {"player": st}
+
+
+# ---- the clipboard (only when he asks) ----------------------------------------------------------
+#
+# Text only. Read when he asks ("copy what's on the desk"), written when he asks ("put it on the TV
+# PC"). Never anything a password manager marked as secret, and never what looks like a password,
+# key or token: Aurelia doesn't carry credentials between computers. Linux: wl-clipboard (Wayland)
+# or xclip (X11), by argument list; Windows: PowerShell's own clipboard commands (fixed text; what's
+# copied goes through stdin, never into a command line).
+
+CLIP_MAX = 20000
+SECRET_MIME = ("x-kde-passwordmanagerhint", "excludeclipboardcontentfrommonitorprocessing",
+               "canincludeinclipboardhistory")
+SECRET_TEXT = re.compile(r"^(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abpr]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|"
+                         r"aur_[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----.*|eyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{10,})$",
+                         re.S)
+
+
+def looks_secret(text: str) -> bool:
+    """A key, token or password-looking string (one word, long, mixing letters, digits and symbols)."""
+    t = text.strip()
+    if SECRET_TEXT.match(t):
+        return True
+    if " " in t or "\n" in t or not (12 <= len(t) <= 128) or re.match(r"^[a-z]+://", t, re.I):
+        return False
+    kinds = sum(bool(re.search(p, t)) for p in (r"[a-z]", r"[A-Z]", r"[0-9]", r"[^A-Za-z0-9]"))
+    return kinds >= 3 and not re.fullmatch(r"[\w.+-]+@[\w-]+(\.[\w-]+)+", t)          # an email address is fine
+
+
+def _run_in(argv: list[str], data: str, timeout: float = 10) -> tuple[int, str, str]:
+    exe = shutil.which(argv[0])
+    if not exe:
+        return 127, "", ""
+    try:
+        r = subprocess.run([exe, *argv[1:]], input=data, capture_output=True, text=True, timeout=timeout, env=session_env())
+        return r.returncode, r.stdout, r.stderr
+    except (OSError, subprocess.SubprocessError):
+        return 1, "", ""
+
+
+def _clip_tools() -> str:
+    if IS_WINDOWS:
+        return "windows"
+    if wayland() and shutil.which("wl-paste") and shutil.which("wl-copy"):
+        return "wayland"
+    if session_env().get("DISPLAY") and shutil.which("xclip"):
+        return "x11"
+    raise ValueError("I can't reach this computer's clipboard (wl-clipboard or xclip isn't installed: run the "
+                     "installer with --system)")
+
+
+def do_clipboard_get(args: dict) -> dict:
+    how = _clip_tools()
+    if how == "windows":
+        code, out, err = _run_in(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                                  "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Clipboard -Raw"], "", 15)
+        types = ""
+    elif how == "wayland":
+        _, types, _ = _run_env(["wl-paste", "--list-types"])
+        code, out, err = _run_env(["wl-paste", "--no-newline", "--type", "text/plain;charset=utf-8"])
+        if code != 0:
+            code, out, err = _run_env(["wl-paste", "--no-newline"])
+    else:
+        _, types, _ = _run_env(["xclip", "-selection", "clipboard", "-o", "-t", "TARGETS"])
+        code, out, err = _run_env(["xclip", "-selection", "clipboard", "-o"])
+    if any(m in types.lower() for m in SECRET_MIME):
+        raise ValueError("what's copied there came from a password manager, so I won't take it")
+    text = out if how != "windows" else out.rstrip("\r\n")
+    if code != 0 or not text.strip():
+        return {"text": "", "empty": True}
+    if looks_secret(text):
+        raise ValueError("what's copied there looks like a password or a key, so I won't take it")
+    return {"text": text[:CLIP_MAX], "cut": len(text) > CLIP_MAX}
+
+
+def do_clipboard_set(args: dict) -> dict:
+    text = str(args.get("text") or "")
+    if not text.strip():
+        raise ValueError("nothing to put on the clipboard")
+    if len(text) > CLIP_MAX:
+        raise ValueError("that's too long for the clipboard")
+    if looks_secret(text):
+        raise ValueError("that looks like a password or a key, so I won't put it on a clipboard")
+    how = _clip_tools()
+    if how == "windows":
+        code, _, err = _run_in(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                                "[Console]::InputEncoding=[Text.Encoding]::UTF8; Set-Clipboard -Value ([Console]::In.ReadToEnd())"],
+                               text, 15)
+    elif how == "wayland":
+        code, _, err = _run_in(["wl-copy"], text)
+    else:
+        code, _, err = _run_in(["xclip", "-selection", "clipboard", "-i"], text)
+    if code != 0:
+        raise ValueError(f"the clipboard said no ({_clean(err) or code})")
+    return {"set": True, "chars": len(text)}
 
 
 # ---- installing and removing apps (always his confirmation) -----------------------------------------
@@ -3178,7 +3273,8 @@ def do_page_clear(args: dict) -> dict:
 
 COMMANDS.update({"logins": do_logins, "sign_in": do_sign_in, "play": do_play, "packages_find": do_packages_find,
                  "package_check_remove": do_package_check_remove, "package_install": do_package_install,
-                 "package_remove": do_package_remove})
+                 "package_remove": do_package_remove, "clipboard_get": do_clipboard_get,
+                 "clipboard_set": do_clipboard_set})
 COMMANDS.update({"page_look": do_page_look, "page_click": do_page_click, "page_type": do_page_type,
                  "page_key": do_page_key, "page_scroll": do_page_scroll, "page_back": do_page_back,
                  "page_media": do_page_media, "page_clear": do_page_clear})
