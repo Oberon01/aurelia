@@ -65,6 +65,11 @@ async def listen(url, dev, seconds, out, report=True):
                     showing.append({"n": len(showing) + 1, "title": e["tool"], "tool": e["tool"], "tasks": [e["task_id"]]})
                 await c.post(f"{base}/view/screen", json={"panels": showing, "visible": True},
                              headers={"X-Aurelia-Device": str(dev)})
+            elif report and e.get("type") == "panels.clear":                 # like the real page: close, then report
+                nums = e.get("data", {}).get("panels")
+                showing[:] = [p for p in showing if nums and p["n"] not in nums]
+                await c.post(f"{base}/view/screen", json={"panels": showing, "visible": True},
+                             headers={"X-Aurelia-Device": str(dev)})
             elif report and e.get("type") == "screen.check":                 # "report now", like the real page
                 await c.post(f"{base}/view/screen", json={"panels": showing, "visible": True},
                              headers={"X-Aurelia-Device": str(dev)})
@@ -294,3 +299,49 @@ def test_a_send_is_confirmed_or_kept_and_screens_says_what_is_where(stack):
     assert by["Kitchen tablet"]["on_screen"] and [p["title"] for p in by["Kitchen tablet"]["panels"]] == ["testfn.status"]
     assert by["iPhone"]["panels"] == [] and by["Kitchen tablet"]["role"] == "presentation"
     assert res["headline"].startswith("3 displays")
+
+
+def test_closing_panels_on_a_display_is_checked_from_its_report(stack):
+    """'Close the panels on the kitchen tablet': it closes them and its report says so; a display that
+    doesn't answer is said to be unconfirmed, never 'cleared'."""
+    from app import auth
+    from app.main import app
+    orch, ws_url = stack["orch"], stack["orch"].replace("http", "ws") + "/ws"
+    sql("UPDATE devices SET status='revoked' WHERE status='approved'")
+    auth._by_id.clear()
+    tab = device("browser", "Kitchen tablet", {"os": "Windows"}, role="presentation")
+    phone = device("browser", "iPhone", {"os": "iPhone"})
+    got = {"tab": [], "phone": []}
+
+    async def run(c, args):
+        r = (await c.post(f"{orch}/tasks", json={"tool": "constellation.clear", "args": args})).json()
+        assert "task_id" in r, r
+        tid = r["task_id"]
+        for _ in range(150):
+            row = (await c.get(f"{orch}/tasks/{tid}")).json()
+            if row["status"] != "running":
+                return row
+            await asyncio.sleep(0.2)
+
+    async def scenario():
+        ls = [asyncio.create_task(listen(ws_url, tab, 30, got["tab"])),
+              asyncio.create_task(listen(ws_url, phone, 30, got["phone"], report=False))]
+        await asyncio.sleep(1.0)
+        async with httpx.AsyncClient(timeout=60) as c:
+            await c.post(f"{orch}/view/screen", headers={"X-Aurelia-Device": str(tab)}, json={"visible": True, "panels": [
+                {"n": 1, "title": "House", "tool": "orbit.status", "tasks": []},
+                {"n": 2, "title": "Note", "tool": "constellation.send", "tasks": []}]})
+            one = await run(c, {"target": "kitchen tablet", "panels": "2"})
+            rep = (await c.post(f"{orch}/tasks", json={"tool": "constellation.screens", "args": {}})).json()
+            frozen = await run(c, {"target": "iphone"})
+        await asyncio.gather(*ls)
+        return one, frozen
+
+    one, frozen = asyncio.run(scenario())
+    res = json.loads(one["result"]) if isinstance(one["result"], str) else one["result"]
+    assert one["status"] == "completed" and res["headline"] == "Cleared Kitchen tablet"
+    clears = [e for e in got["tab"] if e.get("type") == "panels.clear"]
+    assert len(clears) == 1 and clears[0]["data"]["panels"] == [2]                      # once: its report confirmed it
+    res = json.loads(frozen["result"]) if isinstance(frozen["result"], str) else frozen["result"]
+    assert res["headline"] == "Couldn't clear iPhone" and "didn't answer" in res["note"]
+    assert len([e for e in got["phone"] if e.get("type") == "panels.clear"]) == 3        # three tries

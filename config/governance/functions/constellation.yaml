@@ -29,6 +29,7 @@ tools:
   paste:           { tier: act }         # onto a computer's clipboard, or a Copy card on a display
   watch:           { tier: read }        # his screen live in a panel on his display (frames never reach the model)
   screens:         { tier: reference }   # what's on each display now (its own report)
+  clear:           { tier: act }         # close panels on a display (checked from its report); everything: also home
   send:            { tier: act }         # a panel, link or note to another display (or a group by role)
   search_files:    { tier: reference }
   list_processes:  { tier: reference }   # what's running on a computer (node reporting)

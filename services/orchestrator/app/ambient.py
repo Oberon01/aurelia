@@ -105,7 +105,7 @@ async def report_screen(request: Request):
                        "title": str(p.get("title") or "")[:80], "headline": str(p.get("headline") or "")[:160],
                        "tool": str(p.get("tool") or "")[:80], "queued": bool(p.get("queued")),
                        "tasks": [str(t)[:40] for t in (p.get("tasks") or [])[:20]]})
-    report = {"panels": panels, "visible": body.get("visible") is not False, "at": int(datetime.now().timestamp())}
+    report = {"panels": panels, "visible": body.get("visible") is not False, "at": round(datetime.now().timestamp(), 3)}
     redis = request.app.state.redis
     await redis.set(SCREEN_REPORT.format(dev["id"]), json.dumps(report), ex=REPORT_SECONDS)
     if report["visible"]:                                    # something kept for this display is on it at last

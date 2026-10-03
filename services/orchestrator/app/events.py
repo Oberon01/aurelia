@@ -15,7 +15,8 @@ EventType = Literal["panel.open", "panel.progress", "panel.result", "panel.close
                     "mailbox.changed",          # the "N for review" chip
                     "confirm.ask",              # a confirmation card that came after her reply (a slow tool)
                     "screen.check",             # "say what you're showing, now" (checking a send)
-                    "sent.shown"]               # something kept for another display was shown there at last
+                    "sent.shown",               # something kept for another display was shown there at last
+                    "panels.clear"]             # close panels on this display (all, or data.panels by number)
 
 
 class PanelEvent(BaseModel):

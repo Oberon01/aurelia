@@ -199,11 +199,19 @@ screen; then the display you sent it from gets a line: "Shown on iPhone now
 (it was kept until it opened)." Her answer says exactly where it was confirmed
 and where it's waiting.
 
+**Closing panels on another display.** "Close the panels on the TV", "close
+panel 2 on my phone", "clear the TV's screen": that display closes them, and
+I check its own report that they're gone (three tries, like a send). Anything
+kept for it goes too. "Close everything on the TV" also brings it home: the
+pages, my player, and any app I opened there close. Apps I didn't open (say,
+one you started yourself) close only with your OK: "close the text editor on
+the TV".
+
 **Every action is checked on the computer itself.** What I tell you happened is
 what the computer can see, not what was asked for. A page I open in my shell is
 looked for among its pages; an app is looked for among the running programs (a
 new one, not one that was already open); "go home" stops my player, closes the
-pages and checks nothing is left on top; something put on a clipboard is read
+pages and the apps I opened on my screen, and checks nothing is left on top; something put on a clipboard is read
 back. If the check fails it's an error ("the page didn't open on my screen").
 If a thing can't be checked (a page opened in your own browser, an app that
 starts slowly), I say "asked" instead of "opened": "Asked the desk to start VLC;

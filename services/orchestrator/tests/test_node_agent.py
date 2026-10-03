@@ -54,7 +54,7 @@ def test_installed_apps_skip_hidden_and_broken(apps_dir):
 
 
 def test_apps_are_found_by_what_he_calls_them(apps_dir, spawned, monkeypatch):
-    monkeypatch.setattr(agent, "_started", lambda app, before, wait=0: "vlc")
+    monkeypatch.setattr(agent, "_started", lambda app, before, wait=0: {"pid": 77, "name": "vlc"})
     assert agent.find_app("vlc")["id"] == "org.videolan.vlc"
     assert agent.find_app("VLC Media Player")["name"] == "VLC media player"
     assert agent.find_app("firefox")["name"] == "Firefox" and agent.find_app("steam") is None
@@ -1168,7 +1168,11 @@ def test_an_app_counts_as_started_only_when_a_new_process_shows_up(apps_dir, spa
     out = agent._started({"name": "Firefox", "id": "firefox", "exe": "firefox"}, dict(procs), wait=0)
     assert out is None                                                        # it was already running: not proof
     procs[77] = "vlc"
-    assert agent._started({"name": "VLC media player", "id": "org.videolan.vlc", "exe": "vlc"}, {1: "systemd"}, wait=0) == "vlc"
+    assert agent._started({"name": "VLC media player", "id": "org.videolan.vlc", "exe": "vlc"}, {1: "systemd"}, wait=0) == \
+        {"pid": 77, "name": "vlc"}
+    procs[78] = "gnome-text-edit"                                             # Linux keeps 15 letters of a name
+    assert agent._started({"name": "Text Editor", "id": "org.gnome.TextEditor", "exe": "gnome-text-editor"},
+                          {1: "systemd", 77: "vlc"}, wait=0) == {"pid": 78, "name": "gnome-text-edit"}
     monkeypatch.setattr(agent, "_started", lambda app, before, wait=0: None)
     out = agent.do_launch_app({"name": "vlc"})
     assert out == {"app": "VLC media player", "verified": False}
@@ -1181,6 +1185,7 @@ def test_installed_apps_know_their_program(apps_dir):
 
 def test_going_home_is_checked(monkeypatch):
     monkeypatch.setattr(agent, "player_busy", lambda: False)
+    monkeypatch.setattr(agent, "close_launched", lambda: ([], []))
     pages = [{"id": "v", "url": "https://aurelia/view", "title": "Aurelia"},
              {"id": "y", "url": "https://youtube.com/", "title": "YouTube"}]
     monkeypatch.setattr(agent, "SHELL", HomeShell(list(pages)))
@@ -1194,6 +1199,7 @@ def test_going_home_is_checked(monkeypatch):
 
 
 def test_going_home_says_so_when_the_player_wont_stop(monkeypatch):
+    monkeypatch.setattr(agent, "close_launched", lambda: ([], []))
     class P:
         def control(self, action, args):
             return {"last": {"title": "Dune"}}
@@ -1236,3 +1242,35 @@ def test_pairing_with_the_window_asks_for_it_and_keeps_its_link(monkeypatch, tmp
     assert agent.cmd_pair("https://a", "Desk", window=True) == 0
     assert sent[0][1]["info"]["window"] is True
     assert (tmp_path / "window").read_text().strip() == "w1" and (tmp_path / "key").read_text().strip() == "aur_k"
+
+
+def test_going_home_closes_the_apps_she_opened_there_and_only_those(monkeypatch, tmp_path):
+    monkeypatch.setattr(agent, "config_dir", lambda: tmp_path)
+    monkeypatch.setattr(agent, "IS_WINDOWS", False)
+    monkeypatch.setattr(agent, "player_busy", lambda: False)
+    monkeypatch.setattr(agent.time, "sleep", lambda s: None)
+    running = {501: "100", 502: "200"}                                        # pid: start time
+    monkeypatch.setattr(agent, "_linux_procs", lambda: {p: {"start": k, "name": "x"} for p, k in running.items()})
+    killed = []
+    monkeypatch.setattr(agent.os, "kill", lambda pid, sig: (killed.append(pid), running.pop(pid, None)))
+    agent.remember_launched(501, "gnome-text-edit")
+    agent.write_launched(agent.read_launched() + [{"pid": 503, "key": "9", "name": "gone"}])     # already closed
+    monkeypatch.setattr(agent, "SHELL", HomeShell([{"id": "v", "url": "https://aurelia/view", "title": "Aurelia"}]))
+    out = agent.do_home({})
+    assert killed == [501] and out["apps"] == ["gnome-text-edit"] and out["verified"] is True   # never 502: not hers
+    assert agent.read_launched() == []
+
+
+def test_going_home_says_which_app_wont_close(monkeypatch, tmp_path):
+    monkeypatch.setattr(agent, "config_dir", lambda: tmp_path)
+    monkeypatch.setattr(agent, "IS_WINDOWS", False)
+    monkeypatch.setattr(agent, "player_busy", lambda: False)
+    monkeypatch.setattr(agent.time, "sleep", lambda s: None)
+    t = iter(range(0, 100, 5))
+    monkeypatch.setattr(agent.time, "monotonic", lambda: next(t))
+    monkeypatch.setattr(agent, "_linux_procs", lambda: {601: {"start": "1", "name": "x"}})
+    monkeypatch.setattr(agent.os, "kill", lambda pid, sig: None)                          # it ignores the request
+    agent.remember_launched(601, "stubborn")
+    monkeypatch.setattr(agent, "SHELL", HomeShell([{"id": "v", "url": "https://aurelia/view", "title": "Aurelia"}]))
+    with pytest.raises(ValueError, match=r"still on top of me there \(stubborn\)"):
+        agent.do_home({})

@@ -149,6 +149,17 @@ TOOLS = [
         input_schema={"type": "object", "properties": {"target": {"type": "string"}}},
         cancellable=False, freshness_seconds=10, display="panel"),
     registry.ToolSpec(
+        name="clear", description="Close panels on one of his displays (or a group: 'all presentation devices', "
+                                  "'everywhere'): all of them, or the numbers in panels. Checked against what that "
+                                  "display then reports. everything: also bring a computer running your shell back "
+                                  "to you (what you opened there closes, like home). For 'close the panels on the "
+                                  "TV', 'clear the TV', 'close panel 2 on my phone', 'close everything on the TV'. "
+                                  "Not for programs: that's close_process.",
+        input_schema={"type": "object", "properties": {
+            "target": {"type": "string"}, "panels": {"type": "array", "items": {"type": "integer"}},
+            "everything": {"type": "boolean"}}, "required": ["target"]},
+        cancellable=False),
+    registry.ToolSpec(
         name="send", description="Send something to another of his displays: a panel on this screen (panel: its "
                                  "number; leave out for the one he clicked or the newest, i.e. 'this'), a link (url) "
                                  "or a short note (text). to: a display by name ('the TV', 'my phone', 'the desk'), "
@@ -598,6 +609,8 @@ async def home(app, user: str, args: dict) -> dict:
     done = [f"Stopped {data['stopped']}"] if data.get("stopped") else []
     if n:
         done.append(f"closed {n} page{'s' if n != 1 else ''}")
+    if data.get("apps"):
+        done.append(f"closed {', '.join(str(x) for x in data['apps'][:4])}")
     return {"headline": f"{node['name']} is back to me", "opened": {"node": node["name"], "kind": "home",
             "what": ("; ".join(done)[:1].upper() + "; ".join(done)[1:]) if done else "Nothing was open"}, **await tv}
 
@@ -1356,6 +1369,98 @@ async def send(app, user: str, args: dict) -> dict:
     return out
 
 
+CLEAR_TRIES = (3.0, 3.0, 4.0)
+
+
+async def clear_targets(app, to: str) -> tuple[list[dict], str]:
+    """Like send_targets, but the display he's on is allowed ('clear this screen' is fine)."""
+    from . import roles
+    every = await displays(app)
+    grp = roles.group(to)
+    if grp:
+        hits = [d for d in every if grp == "*" or d["role"] == grp]
+        if not hits:
+            raise ValueError(f"You don't have any {grp} displays.")
+        return hits, ("everywhere" if grp == "*" else f"every {grp} display")
+    hits = [d for d in every if _match(to, d["name"], d.get("hostname"))]
+    if not hits:
+        names = ", ".join(sorted({d["name"] for d in every})) or "none yet"
+        raise ValueError(f"I don't know a display called \"{to}\". Yours: {names}.")
+    if len(hits) > 1:
+        live = [d for d in hits if d["open"]]
+        if len(live) == 1:
+            hits = live
+        elif len({d["name"] for d in hits}) > 1:
+            raise ValueError(f"Which one: {', '.join(d['name'] for d in (live or hits))}?")
+    return hits, hits[0]["name"]
+
+
+async def _left(app, dev_id: int, nums: list[int] | None, since: float) -> list[dict] | None:
+    """What's still there by the display's own report made after `since` (None: no report yet)."""
+    rep = await screen_report(app, dev_id)
+    if not rep or float(rep.get("at") or 0) < since:
+        return None
+    return [p for p in rep.get("panels") or [] if nums is None or p.get("n") in nums]
+
+
+async def clear(app, user: str, args: dict) -> dict:
+    """Panels off a display, checked from that display's own report (never 'asked, so done')."""
+    import time as _time
+    from .events import PanelEvent, publish
+    targets, label = await clear_targets(app, str(args.get("target") or "").strip() or "everywhere")
+    raw = args.get("panels") or []
+    nums = sorted({int(n) for n in (re.findall(r"\d+", raw) if isinstance(raw, str) else raw)
+                   if str(n).isdigit()}) or None
+    redis = app.state.redis
+    done, kept_gone, failed, homes = [], [], [], []
+    loop = asyncio.get_running_loop()
+    for d in targets:
+        if nums is None and await redis.delete(DISPLAY_QUEUE.format(d["id"])):
+            kept_gone.append(d["name"])                  # kept for it: it won't pop up later either
+        if str(args.get("everything")).lower() in ("true", "1", "yes") and d["node"]:
+            try:
+                h = await home(app, user, {"target": d["node"]["name"]})
+                homes.append(h["opened"]["what"])
+            except ValueError as exc:
+                failed.append(f"{d['name']} ({exc})")
+        if not d["open"]:
+            done.append(d["name"])                       # not open: nothing on it (its panels go when it closes)
+            continue
+        since = _time.time()
+        left = None
+        for window in CLEAR_TRIES:
+            await publish(redis, PanelEvent(type="panels.clear", task_id="clear", tool=f"{NAME}.clear", device=d["id"],
+                                            data={"panels": nums}))
+            await publish(redis, PanelEvent(type="screen.check", task_id="clear", tool=f"{NAME}.clear", device=d["id"]))
+            end = loop.time() + window
+            while loop.time() < end:
+                left = await _left(app, d["id"], nums, since)
+                if left == []:
+                    break
+                await asyncio.sleep(0.25)
+            if left == []:
+                break
+        if left == []:
+            done.append(d["name"])
+        elif left is None:
+            failed.append(f"{d['name']} (it didn't answer, so I can't tell)")
+        else:
+            failed.append(f"{d['name']} (still showing {', '.join(p.get('title') or 'a panel' for p in left[:3])})")
+    what = "those panels" if nums else "its panels" if len(targets) == 1 else "their panels"
+    head = (f"Cleared {label}" if not failed else f"Cleared {', '.join(done)}" if done else f"Couldn't clear {label}")
+    out = {"headline": head, "cleared": {"done": done, "failed": failed, "what": what}}
+    notes = []
+    if failed:
+        notes.append("Not confirmed: " + "; ".join(failed))
+    if homes:
+        notes.append("; ".join(h for h in homes if h))
+    if kept_gone:
+        notes.append(f"Also dropped what was kept for {', '.join(kept_gone)}")
+    if notes:
+        out["note"] = ". ".join(notes) + "."
+    return out
+
+
 async def screens(app, user: str, args: dict) -> dict:
     """What's on each of his displays: its panels (from the display's own report), and on a computer
     running her shell, what she opened there. One display by name, or all of them."""
@@ -1837,7 +1942,7 @@ async def live_frame(node_id: int, request: Request):
 HANDLERS = {"devices": devices, "open": open_, "apps": apps, "home": home, "look": look, "click": click, "type": type_,
             "press": press, "scroll": scroll, "back": back, "media": media, "submit": submit, "health": health,
             "list_processes": list_processes, "close_process": close_process, "kill_process": kill_process,
-            "sign_in": sign_in, "logins": logins, "send": send, "screens": screens, "diagnose": diagnose_node,
+            "sign_in": sign_in, "logins": logins, "send": send, "clear": clear, "screens": screens, "diagnose": diagnose_node,
             "power": power, "restart": restart, "wake": wake, "sound": sound, "watch": watch,
             "install": install, "install_package": install_package, "uninstall": uninstall, "remove_package": remove_package,
             "clipboard": clipboard, "copy": copy, "paste": paste, "mode": mode}

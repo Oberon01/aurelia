@@ -2483,6 +2483,12 @@ function onEvent(ev) {
   // A presentation display shows only what's addressed to it (the server already sends only that).
   if (document.body.classList.contains("ambient") && ev.type.startsWith("panel.") && ev.device == null) return;
   if (ev.type === "screen.check") { reportScreen(); return; }      // checking a send: report now
+  if (ev.type === "panels.clear") {                   // "close the panels on the TV": all, or those numbers
+    const nums = Array.isArray(d.panels) && d.panels.length ? new Set(d.panels) : null;
+    recs().filter(p => !nums || nums.has(p.num)).forEach(p => remove(p));
+    setTimeout(reportScreen, 60);                     // after they're marked leaving: the check reads this
+    return;
+  }
   if (ev.type === "sent.shown") { say(`Shown on ${d.to} now (it was kept until it opened).`); return; }
   if (ev.type === "confirm.ask") {                     // a slow tool finished after her reply and needs his OK
     if (d.action && !panels.has("confirm-" + d.action.action_id)) showConfirm(d.action);

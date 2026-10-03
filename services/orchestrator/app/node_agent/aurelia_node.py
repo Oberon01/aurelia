@@ -58,7 +58,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.6.6"
+VERSION = "0.6.7"
 IS_WINDOWS = platform.system() == "Windows"
 EXIT_REVOKED = 3                                   # the service manager doesn't restart after this
 EXIT_UPDATED = 75                                  # restart me: a new version is in place
@@ -881,8 +881,9 @@ def proc_names() -> dict[int, str]:
     return out
 
 
-def _started(app: dict, before: dict[int, str], wait: float = VERIFY_SECONDS) -> str | None:
-    """A program that wasn't running before and looks like this app (by its name or its executable)."""
+def _started(app: dict, before: dict[int, str], wait: float = VERIFY_SECONDS) -> dict | None:
+    """A program that wasn't running before and looks like this app (by its name or its executable):
+    {"pid", "name"}. Linux keeps only 15 letters of a program's name, so the executable's are compared."""
     words = {w for w in re.findall(r"[a-z0-9]+", f"{app.get('name', '')} {app.get('id', '')}".lower()) if len(w) > 2}
     exe = str(app.get("exe") or "").lower().removesuffix(".exe")
     end = time.monotonic() + wait
@@ -890,8 +891,8 @@ def _started(app: dict, before: dict[int, str], wait: float = VERIFY_SECONDS) ->
         for pid, name in proc_names().items():
             if pid in before and before[pid] == name:
                 continue
-            if name == exe or name in words or any(name.startswith(w) for w in words if len(w) > 3):
-                return name
+            if exe and name in (exe, exe[:15]) or name in words or any(name.startswith(w) for w in words if len(w) > 3):
+                return {"pid": pid, "name": name}
         if time.monotonic() > end:
             return None
         time.sleep(0.4)
@@ -951,7 +952,62 @@ def do_launch_app(args: dict) -> dict:
     else:
         raise ValueError("there's no way to launch apps here")
     running = _started(app, before)
-    return {"app": app["name"], "verified": bool(running), **({"process": running} if running else {})}
+    if running and SHELL and SHELL.running():
+        remember_launched(running["pid"], running["name"])    # on her screen: "go home" closes it again
+    return {"app": app["name"], "verified": bool(running), **({"process": running["name"]} if running else {})}
+
+
+# Apps she opened on her shell's screen (a TV): pid and start time, so "go home" closes exactly those and
+# nothing else (any other program there is closed only with his confirmation, like anywhere).
+
+def launched_file() -> Path:
+    return config_dir() / "launched.json"
+
+
+def _start_key(pid: int) -> str | None:
+    p = (_windows_procs() if IS_WINDOWS else _linux_procs()).get(pid)
+    return str(p["start"]) if p else None
+
+
+def read_launched() -> list[dict]:
+    try:
+        v = json.loads(launched_file().read_text())
+    except (OSError, ValueError):
+        return []
+    return [x for x in v if isinstance(x, dict)] if isinstance(v, list) else []
+
+
+def write_launched(items: list[dict]) -> None:
+    try:
+        f = launched_file()
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(items[-20:]))
+    except OSError:
+        pass
+
+
+def remember_launched(pid: int, name: str) -> None:
+    key = _start_key(pid)
+    if key:
+        write_launched([x for x in read_launched() if _alive(int(x["pid"]), str(x["key"]))] +
+                       [{"pid": pid, "key": key, "name": name}])
+
+
+def close_launched(wait: float = 4.0) -> tuple[list[str], list[str]]:
+    """Closes the apps she opened here that are still running: (closed, still running)."""
+    import signal
+    mine = [x for x in read_launched() if _alive(int(x["pid"]), str(x["key"]))]
+    for x in mine:
+        try:
+            os.kill(int(x["pid"]), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
+    end = time.monotonic() + wait
+    while time.monotonic() < end and any(_alive(int(x["pid"]), str(x["key"])) for x in mine):
+        time.sleep(0.2)
+    still = [x for x in mine if _alive(int(x["pid"]), str(x["key"]))]
+    write_launched(still)
+    return [x["name"] for x in mine if x not in still], [x["name"] for x in still]
 
 
 def do_list_apps(args: dict) -> dict:
@@ -972,15 +1028,18 @@ def do_home(args: dict) -> dict:
             return {"closed": 0, "stopped": stopped, "verified": not player_busy()}
         raise ValueError("my shell isn't running on this computer")
     closed = SHELL.home()
+    apps_closed, apps_left = close_launched() if not IS_WINDOWS else ([], [])
     end = time.monotonic() + 3
     while True:                                               # the browser takes a moment to close them
         left = [t for t in SHELL.pages() if not SHELL.is_hers(t)]
         if not left or time.monotonic() > end:
             break
         time.sleep(0.25)
-    if left or player_busy():
-        raise ValueError("something is still on top of me there (" + (str(left[0].get("title") or "a page") if left else "my player") + ")")
-    return {"closed": closed, "verified": True, **({"stopped": stopped} if stopped else {})}
+    if left or player_busy() or apps_left:
+        raise ValueError("something is still on top of me there (" + (str(left[0].get("title") or "a page") if left else
+                         apps_left[0] if apps_left else "my player") + ")")
+    return {"closed": closed, "verified": True, **({"stopped": stopped} if stopped else {}),
+            **({"apps": apps_closed} if apps_closed else {})}
 
 
 # ---- power and presence ---------------------------------------------------------------------

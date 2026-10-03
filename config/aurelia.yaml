@@ -264,6 +264,22 @@ fastpath:
       tool: quasar.play
       args: { what: "{what}", "on": "{on|}" }
       reply: "On it."
+    # Panels on a display: closed there and checked from its own report ("close the panels on the TV").
+    - name: clear-panels
+      match: '^(?:close|clear|dismiss|remove|get rid of)\s+(?:all\s+)?(?:of\s+)?(?:the\s+|my\s+)?panels?(?:\s+(?P<nums>\d+(?:(?:\s*,\s*|\s+and\s+|\s+)\d+)*))?\s+(?:on|from|off)\s+(?:the\s+|my\s+)?(?P<target>.+?)\.?$'
+      tool: constellation.clear
+      args: { target: "{target}", panels: "{nums|}" }
+      reply: "Clearing the {target}."
+    - name: clear-everything
+      match: '^(?:close|clear)\s+everything\s+(?:on|from|off)\s+(?:the\s+|my\s+)?(?P<target>.+?)\.?$'
+      tool: constellation.clear
+      args: { target: "{target}", everything: "true" }
+      reply: "Clearing the {target}."
+    - name: clear-screen
+      match: '^clear\s+(?:the\s+|my\s+)?(?P<target>.+?)(?:''s)?\s+(?:screen|display)\.?$'
+      tool: constellation.clear
+      args: { target: "{target}" }
+      reply: "Clearing the {target}."
     - name: screen-home-here
       match: '^(?:go (?:back )?home|back to (?:aurelia|you|home)|close (?:that|it|everything|the page|the video|the movie)|show (?:aurelia|yourself))$'
       tool: constellation.home
@@ -286,7 +302,7 @@ fastpath:
       args: { what: "{what}", target: "{target}" }
       reply: "Opening {what} on the {target}."
     - name: screen-home
-      match: '^(?:go (?:back )?home|back to (?:aurelia|you|home)|close (?:that|it|everything|the page|the video)|show (?:aurelia|yourself))\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?)\.?$'
+      match: '^(?:go (?:back )?home|back to (?:aurelia|you|home)|close (?:that|it|the page|the video)|show (?:aurelia|yourself))\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?)\.?$'
       tool: constellation.home
       args: { target: "{target}" }
       reply: "The {target} is back to me."
