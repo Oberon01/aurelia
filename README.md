@@ -375,7 +375,7 @@ not installer reruns. Installing apps on Windows isn't built yet.
 work web pages or TV menus to play things any more. She asks a service with an
 API what to play and hands it to her own player on the computer (mpv, full
 screen on top of her shell), which tells her exactly what it's doing. Step 1 is
-your Jellyfin library; Roku apps, YouTube and Spotify come next.
+your Jellyfin library; step 2 is your Roku TVs; YouTube and Spotify come next.
 
 | Say | What happens |
 |---|---|
@@ -386,6 +386,23 @@ your Jellyfin library; Roku apps, YouTube and Spotify come next.
 | `play the album Discovery` / `shuffle Daft Punk` | music, in order or mixed |
 | `pause` / `skip ahead 2 minutes` / `next episode` / `subtitles on` / `stop` | `constellation.media`, through the player |
 | `what's playing on the TV` | from the player itself: title, time, paused, subtitles, what's next |
+| `play Dune on the bedroom TV` (a Roku, no computer) | in the Roku's Jellyfin app, on that exact title; Jellyfin confirms it's playing |
+| `play The Bear on the TV` (not in your library) | Roku's own search opens it in whichever of your apps has it |
+| `play Stranger Things on Netflix on the TV` | the same, in that app only |
+
+**On a Roku TV (step 2).** A computer always wins: if the TV PC is plugged into
+the living room TV, "play Dune on the living room TV" plays it there with my
+player. With no computer, a title from your library opens in the Roku's Jellyfin
+app (install it from the Roku channel store and sign in once) on exactly that
+movie or episode, and it counts as playing only when Jellyfin's own list of
+what its apps are playing shows it. Anything else goes through Roku's own
+search, which knows every app's catalog: it opens the title in the first of
+your apps that has it (`prefer: [Netflix, Hulu]` under `tv:` in `orbit.yaml`
+sets the order), or only that app if you name one. Then I check what the TV
+really shows and say exactly that: *playing*, *open in Netflix* (its page,
+waiting for you to press play), or *found* (the TV shows Roku's search results
+and you pick with the remote). Roku doesn't make every model and app launch
+straight from search, which is why it's checked and never assumed.
 
 Set up: Jellyfin publishes no port, so the orchestrator joins the home-lab
 network (like Kepler does for Trilium) and talks to the Lazytainer in front of

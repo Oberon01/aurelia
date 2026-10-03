@@ -24,6 +24,9 @@ class FakeTv:
         self.launched: list[str] = []
         # As a Roku TV reports them; HDMI 2 renamed "PC" on the TV.
         self.inputs = {"tvinput.hdmi1": "HDMI 1", "tvinput.hdmi2": "PC", "tvinput.dtv": "Live TV"}
+        self.searches: list[dict] = []
+        self.catalog = {"stranger things": "12", "the bear": "2285"}      # title -> the app id that has it
+        self.launch_ignored, self.starts_as = False, "play"
 
     def info(self):
         return (f"<device-info><serial-number>{self.serial}</serial-number><is-tv>true</is-tv>"
@@ -73,6 +76,17 @@ class FakeNet:
                 tv.active = ("tvinput.hdmi2", "HDMI 2")
             elif key == "Play":
                 tv.media = "pause" if tv.media == "play" else "play"
+            return httpx.Response(200)
+        if path == "/search/browse":
+            from urllib.parse import parse_qs
+            q = {k: v[0] for k, v in parse_qs(url.query).items()}
+            tv.searches.append(q)
+            has = tv.catalog.get(q["keyword"].lower())                 # which app has it, if any
+            providers = q.get("provider-id", "").split(",")
+            if has and q.get("launch") == "true" and has in providers and not tv.launch_ignored:
+                tv.active, tv.media = (has, APPS[has]), tv.starts_as
+            else:
+                tv.active = ("", "Roku")                               # the search results, on the home screen
             return httpx.Response(200)
         if path.startswith("/launch/"):
             app_id = path.removeprefix("/launch/")
@@ -259,3 +273,34 @@ def test_mute_and_unmute_end_in_the_state_asked_for(tv):
     tv.power = "DisplayOff"
     with pytest.raises(ToolError, match="is off"):
         run(main.tv_mute, {})
+
+
+# ---- a title by name, in a streaming app (Quasar step 2) ---------------------------------------------
+
+def test_a_title_plays_in_the_app_that_has_it_and_is_checked(tv):
+    out = run(main.tv_play, {"title": "Stranger Things", "kind": "show", "season": 2})
+    q = tv.searches[0]
+    assert tv.pressed == ["PowerOn"]                                           # woke it first
+    assert q["keyword"] == "Stranger Things" and q["type"] == "tv-show" and q["season"] == "2" and q["launch"] == "true"
+    assert q["provider-id"].split(",") == ["837", "12", "2285", "13"]           # every app he has
+    assert out["play"] == "playing" and out["in"] == "Netflix" and out["confirmed"] is True
+
+
+def test_his_preferred_apps_come_first_and_one_app_can_be_named(tv, monkeypatch):
+    monkeypatch.setitem(main.POLICY["policy"]["rules"]["tv"], "prefer", ["Hulu", "Netflix", "Disney+"])
+    run(main.tv_play, {"title": "The Bear"})
+    assert tv.searches[0]["provider-id"].split(",") == ["2285", "12", "837", "13"]  # not installed: skipped
+    run(main.tv_play, {"title": "The Bear", "app": "hulu"})
+    assert tv.searches[1]["provider-id"] == "2285"
+
+
+def test_what_the_tv_really_shows_is_what_is_said(tv, monkeypatch):
+    monkeypatch.setattr(main, "PLAY_WAIT", 0)
+    tv.starts_as = "pause"                                                      # its page, not playing
+    out = run(main.tv_play, {"title": "Stranger Things"})
+    assert out["play"] == "opened" and out["confirmed"] is False and "can't see it playing" in out["message"]
+    tv.launch_ignored = True                                                    # this Roku won't launch from search
+    out = run(main.tv_play, {"title": "Stranger Things"})
+    assert out["play"] == "found" and out["confirmed"] is False and "search for Stranger Things" in out["message"]
+    out = run(main.tv_play, {"title": "Not A Real Show"})
+    assert out["play"] == "found"

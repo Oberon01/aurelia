@@ -3,7 +3,13 @@
 Aurelia doesn't operate players built for eyes (web pages, TV menus). She asks services with
 APIs for what to play and hands it to a player she controls: her own player on each computer
 (mpv, in the node agent), which tells her exactly what it's doing. Step 1 is his Jellyfin
-library; Roku apps, YouTube and Spotify come next.
+library; step 2 is his Roku TVs (below); YouTube and Spotify come next.
+
+On a Roku TV (no computer of his by that name): a title from his library opens in the Roku's
+Jellyfin app on that exact item, and Jellyfin's own list of what each of its apps is playing
+confirms it. Anything else ("play The Bear on the TV", "Stranger Things on Netflix") goes through
+Roku's own search, which opens it in whichever of his apps has it (Orbit's tv_play); the TV then
+says what it really shows: playing, open in an app, or only found.
 
   find   his library: search, or (no query) what he can continue, next up and recently added
   play   a movie, a show (next up, or a season and episode), an album, an artist or a song,
@@ -46,6 +52,11 @@ TYPES = {"movies": ["Movie"], "shows": ["Series", "Episode"], "music": ["MusicAl
          "any": ["Movie", "Series", "Episode", "MusicAlbum", "MusicArtist", "Audio", "Playlist"]}
 FIELDS = "Overview,ProductionYear,RunTimeTicks,UserData,SeriesName,ParentIndexNumber,IndexNumber,AlbumArtist,Album,Artists"
 TICKS = 10_000_000
+ROKU_JELLYFIN = "Jellyfin"                              # the Jellyfin app on a Roku
+ROKU_CONFIRM = 25.0                                     # how long Jellyfin gets to report the Roku playing it
+SERVICES = (r"netflix|hulu|(?:amazon )?prime(?: video)?|amazon|disney(?:\+| plus)?|hbo max|max|peacock|"
+            r"paramount(?:\+| plus)?|apple tv(?:\+| plus)?|youtube(?: tv)?|tubi|pluto(?: tv)?|crunchyroll|plex|"
+            r"jellyfin|starz|showtime|fubo|sling|espn(?:\+| plus)?|the roku channel|roku channel")
 
 TOOLS = [
     registry.ToolSpec(
@@ -65,9 +76,14 @@ TOOLS = [
                                  "running your shell). A show plays its next-up episode (or season / episode he "
                                  "names) and keeps going; music plays the album or artist in order (shuffle: true "
                                  "to mix). It picks up where he left off unless from_start. The result is checked "
-                                 "with the player itself. Control while it plays is Constellation's media.",
+                                 "with the player itself. Control while it plays is Constellation's media. On a "
+                                 "Roku TV (no computer by that name), or with app (a streaming service: 'Netflix'), "
+                                 "it opens the title on the TV: from his library in the Roku's Jellyfin app, anything "
+                                 "else through Roku's search in whichever of his apps has it. Say what the result "
+                                 "says the TV really shows (playing, open in an app, or only found).",
         input_schema={"type": "object", "properties": {
             "what": {"type": "string"}, "id": {"type": "string"}, "on": {"type": "string"},
+            "app": {"type": "string", "description": "a streaming service, only if he named one"},
             "season": {"type": "integer"}, "episode": {"type": "integer"},
             "shuffle": {"type": "boolean"}, "from_start": {"type": "boolean"}}},
         cancellable=False),
@@ -195,6 +211,10 @@ class Jellyfin:
                                                                        "fields": FIELDS, "enableUserData": "true"})
         eps = (d or {}).get("Items") or []
         return sorted(eps, key=lambda e: (e.get("ParentIndexNumber") or 0, e.get("IndexNumber") or 0))
+
+    async def sessions(self) -> list[dict]:
+        """Every Jellyfin app in use right now, with what it's playing (how a Roku is checked)."""
+        return await self.request("GET", "/Sessions", {"activeWithinSeconds": 120}) or []
 
     async def report(self, what: str, body: dict) -> None:
         path = {"start": "/Sessions/Playing", "progress": "/Sessions/Playing/Progress",
@@ -364,15 +384,135 @@ async def _where(app, asked: str) -> dict:
         raise ValueError(str(exc))
 
 
+def split_service(on: str) -> tuple[str | None, str]:
+    """'netflix' or 'netflix on the living room tv' → ('netflix', 'living room tv'); else (None, on)."""
+    m = re.fullmatch(rf"(?:the )?({SERVICES})(?:\s+on\s+(?:the |my )?(.+))?", on.strip().lower())
+    if not m:
+        return None, on
+    return m.group(1), (on.strip()[m.start(2):] if m.group(2) else "")
+
+
+class NoRoku(ValueError):
+    pass
+
+
+async def _orbit(app, user: str, tool: str, args: dict, wait: float = 45) -> dict:
+    """An Orbit TV tool, as a task like any other (same governance and log). NoRoku when there's no
+    Roku TV by that name (or no Orbit at all)."""
+    from fastapi import HTTPException
+    from . import tasks
+    try:
+        tid = await tasks.launch(app, tasks.StartTask(tool=f"orbit.{tool}", args=args, user=user, trigger="quasar",
+                                                       display="brief"))
+    except HTTPException as exc:
+        raise NoRoku(str(exc.detail))
+    res = await tasks.wait_for_result(tid, wait)
+    if res is None:
+        raise ValueError("The TV hasn't answered yet, so I can't say it's playing.")
+    if res["status"] != "completed":
+        err = str(res.get("error") or "")
+        low = err.lower()
+        if "no tv matches" in low or "there's no tv" in low or "couldn't find a roku" in low or "no device" in low:
+            raise NoRoku(err)
+        raise ValueError(err or "The TV didn't do it.")
+    data = res.get("result") or {}
+    return json.loads(data) if isinstance(data, str) else data
+
+
+async def _jellyfin_on_roku(app, user: str, jf: "Jellyfin", tv: str, queue: list[dict]) -> dict | None:
+    """The Roku's Jellyfin app, opened on exactly this item; confirmed only when Jellyfin itself lists
+    that app playing it. None when the Roku has no Jellyfin app (then Roku's search is tried)."""
+    first = queue[0]
+    kind = {"Movie": "movie", "Episode": "episode", "Audio": "audio"}.get(first.get("Type"), "movie")
+    try:
+        opened = await _orbit(app, user, "tv_app", {"name": tv, "app": ROKU_JELLYFIN, "content_id": first["Id"],
+                                                    "media_type": kind})
+    except NoRoku:
+        raise
+    except ValueError as exc:
+        if "no app called" in str(exc).lower():
+            return None
+        raise
+    tv_name = opened.get("name") or tv
+    ids = {q.get("Id") for q in queue}
+    loop = asyncio.get_running_loop()
+    end = loop.time() + ROKU_CONFIRM
+    while loop.time() < end:
+        for se in await jf.sessions():
+            now = se.get("NowPlayingItem") or {}
+            if now.get("Id") in ids:
+                return {"headline": f"Playing {label(now)} on {tv_name}",
+                        "did": {"node": tv_name, "what": f"Playing {label(now)} in Jellyfin (Jellyfin confirms it)"}}
+        await asyncio.sleep(1.0)
+    return {"headline": f"Asked {tv_name} to play {label(first)}",
+            "did": {"node": tv_name, "what": f"Jellyfin is open on {tv_name}, but it hasn't started {label(first)} "
+                                             "(Jellyfin doesn't list it playing). Press play there, or ask me again.",
+                    "unconfirmed": True}}
+
+
+async def _search_on_roku(app, user: str, tv: str, title: str, service: str | None, kind: str | None,
+                          season: int | None) -> dict:
+    """Roku's own search opens it in whichever of his apps has it; the TV says what it shows."""
+    args = {"name": tv, "title": title, **({"app": service} if service else {}), **({"kind": kind} if kind else {}),
+            **({"season": season} if season else {})}
+    d = await _orbit(app, user, "tv_play", args)
+    tv_name = d.get("name") or tv
+    if d.get("confirmed"):
+        return {"headline": f"Playing {title} on {tv_name}", "did": {"node": tv_name, "what": d.get("message")}}
+    head = f"{title} is open in {d['in']} on {tv_name}" if d.get("play") == "opened" else f"Found {title} on {tv_name}"
+    return {"headline": head, "did": {"node": tv_name, "what": d.get("message"), "unconfirmed": True}}
+
+
+async def on_roku(app, user: str, tv: str, what: str, args: dict, service: str | None = None) -> dict:
+    """A title on a Roku TV: from his library through its Jellyfin app, else Roku's search."""
+    jf = Jellyfin(app.state.redis)
+    kind = {"Movie": "movie", "Series": "show", "Episode": "show"}
+    season = int(args["season"]) if str(args.get("season") or "").isdigit() else None
+    it = None
+    if service in (None, "jellyfin"):
+        try:
+            it = await jf.item(str(args["id"])) if args.get("id") else best(await jf.search(what, "any", 25), what)
+        except NotSetUp:
+            pass
+        if it is not None and it.get("Type") not in ("MusicAlbum", "MusicArtist", "Audio", "Playlist"):
+            queue = [q for q in await _queue(jf, it, args, app) if q.get("Id")]
+            if queue:
+                done = await _jellyfin_on_roku(app, user, jf, tv, queue)
+                if done is not None:
+                    return done
+            what = it.get("Name") or what
+        if service == "jellyfin":
+            raise ValueError(f"I couldn't find “{what}” in your library.")
+    t = "show" if season else kind.get((it or {}).get("Type") or "")      # a library title says which it is
+    return await _search_on_roku(app, user, tv, what, service, t, season)
+
+
 async def play(app, user: str, args: dict) -> dict:
     from . import constellation
     jf = Jellyfin(app.state.redis)
     on = " ".join(str(args.get("on") or "").split())
+    what_said = " ".join(str(args.get("what") or "").split())
+    service, tv_said = split_service(on)
+    if service is None and args.get("app"):
+        service, tv_said = split_service(str(args["app"]))[0], on
+    if service:                                             # "on Netflix (on the TV)": a streaming app, on a Roku
+        if not what_said and not args.get("id"):
+            raise ValueError("Play what?")
+        try:
+            return await on_roku(app, user, tv_said, what_said, args, service)
+        except NoRoku as exc:
+            raise ValueError(f"{service.title()} plays on a Roku TV, and I can't find one called "
+                             f"“{tv_said}” ({exc}).".replace(" called “”", ""))
     try:
         node = await _where(app, on)
-    except ValueError:
-        if not on or args.get("id"):
+    except ValueError as exc:
+        if not on:
             raise
+        if args.get("id"):                                  # from his library, on a Roku TV of that name?
+            try:
+                return await on_roku(app, user, on, what_said, args)
+            except NoRoku:
+                raise exc
         node = None                                         # "Murder on the Orient Express": "on" was part of the title
     if args.get("id"):
         it = await jf.item(str(args["id"]))
@@ -383,11 +523,19 @@ async def play(app, user: str, args: dict) -> dict:
         if node is None:                                    # no computer by that name: was it the title?
             whole = f"{what} on {on}"
             it = best(await jf.search(whole, "any", 25), whole)
-            if it is None:
-                await _where(app, on)                       # say which computer wasn't found
+            if it is None:                                  # no: a Roku TV of that name, then
+                try:
+                    return await on_roku(app, user, on, what, args)
+                except NoRoku:
+                    await _where(app, on)                   # say which computer wasn't found
             node = await _where(app, "")
         else:
             it = best(await jf.search(what, "any", 25), what)
+        if it is None and on:                               # not in his library: the TV's apps may have it
+            try:
+                return await on_roku(app, user, on, what, args)
+            except NoRoku:
+                pass
         if it is None:
             raise ValueError(f"I couldn't find “{what}” in your library.")
     queue = [q for q in await _queue(jf, it, args, app) if q.get("Id")]

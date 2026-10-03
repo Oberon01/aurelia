@@ -95,6 +95,17 @@ TOOLS_SPEC = [
          "content_id": {"type": "string", "description": "The app's id for a video, show or channel"},
          "media_type": {"type": "string", "description": "Only if the app needs it: movie, episode, series, live"}},
          "required": ["app"]}, "progress_unit": "steps"},
+    {"name": "tv_play", "description": "Open a movie or show by name straight in a streaming app on a Roku TV "
+                                       "(Roku's own search, which knows every app's catalog). title: what to play; "
+                                       "kind: movie or show; season: a season number; app: one app to use ('Netflix'), "
+                                       "otherwise his apps in his preferred order. Checked with the TV afterwards: it "
+                                       "says whether the title is playing, open in an app, or only found (the TV is "
+                                       "showing the search results). Not for his own library on a computer: that's "
+                                       "Quasar's play.",
+     "input_schema": {"type": "object", "properties": {
+         "name": TV, "title": {"type": "string"}, "kind": {"type": "string", "enum": ["movie", "show"]},
+         "season": {"type": "integer", "minimum": 1}, "app": {"type": "string"}},
+         "required": ["title"]}, "progress_unit": "steps"},
     {"name": "tv_remote", "description": "Press TV remote buttons, in order: home, back, select, up, down, left, right, "
                                          "play, pause, resume, rewind, fast_forward, replay, info, search, backspace, "
                                          "volume_up, volume_down, mute (a toggle; use tv_mute to mute or unmute), "
@@ -131,6 +142,7 @@ REFRESHES = {
     "tv_power": ["orbit.status", "orbit.tv_status"],
     "tv_input": ["orbit.status", "orbit.tv_status", "orbit.tv_inputs"],
     "tv_app": ["orbit.status", "orbit.tv_status", "orbit.tv_inputs"],
+    "tv_play": ["orbit.status", "orbit.tv_status"],
     "tv_remote": ["orbit.tv_status"],
     "tv_discover": ["orbit.tv_status"],
 }
@@ -614,6 +626,69 @@ async def tv_app(ctx: TaskContext) -> dict:
         raise ToolError(f"I asked {tv.name} to open {chosen['name']}, but it's showing "
                         f"{showing or 'the home screen'}.")
     return {**describe(tv), "app": chosen["name"]}
+
+
+PLAY_WAIT = 15.0            # how long the TV gets to show the title before I say what it does show
+PLAYING = ("play",)        # buffering or a title page isn't playing yet
+
+
+def preferred(apps: list[dict[str, str]], prefer: list[str] | None) -> list[dict[str, str]]:
+    """His apps, the ones he prefers first (orbit.yaml tv: prefer), the TV's order after that."""
+    out = []
+    for name in prefer or []:
+        try:
+            a = match_app(apps, str(name))
+        except ToolError:
+            continue
+        if a not in out:
+            out.append(a)
+    return out + [a for a in apps if a not in out]
+
+
+async def tv_play(ctx: TaskContext) -> dict:
+    """Play a title by name in a streaming app. What's reported is what the TV shows afterwards:
+    playing (an app from the list is in front and its player is going), opened (the app is in
+    front: its page for the title, say), or found (Roku's search results are showing). Never just
+    'sent'."""
+    tv = await find_tv(ctx.args.get("name"))
+    title = " ".join(str(ctx.args.get("title") or "").split())
+    if not title:
+        raise ToolError("Play what?")
+    kind = {"movie": "movie", "show": "tv-show", "series": "tv-show", "tv-show": "tv-show"}.get(
+        str(ctx.args.get("kind") or "").lower())
+    season = int(ctx.args["season"]) if str(ctx.args.get("season") or "").isdigit() else None
+    roku: Roku = app.state.roku
+    try:
+        apps = await roku.apps(tv)
+        chosen = [match_app(apps, str(ctx.args["app"]))] if ctx.args.get("app") else \
+            preferred(apps, tv_rules().get("prefer"))
+        await wake(ctx, tv, 0, 3)
+        await ctx.progress(1, 3, "steps", f"Looking for {title}")
+        await roku.search(tv, title, kind, season, [a["id"] for a in chosen])
+        ids = {a["id"]: a["name"] for a in chosen}
+        loop, state = asyncio.get_running_loop(), None
+        end = loop.time() + PLAY_WAIT
+        while True:                                  # until it plays, or time's up: then say what it shows
+            await asyncio.sleep(min(1.0, max(0.0, app.state.roku.settle_seconds)))
+            await roku.active_app(tv)
+            state = await roku.media_state(tv) if tv.app_id in ids else None
+            if (tv.app_id in ids and state in PLAYING) or loop.time() > end or ctx.cancelled:
+                break
+    except RokuError as exc:
+        raise ToolError(str(exc))
+    await ctx.progress(3, 3, "steps", "Checked")
+    base = {**describe(tv), "title": title}
+    if tv.app_id in ids and state in PLAYING:
+        return {**base, "play": "playing", "in": ids[tv.app_id], "confirmed": True,
+                "message": f"Playing {title} in {ids[tv.app_id]} on {tv.name}."}
+    if tv.app_id in ids:
+        return {**base, "play": "opened", "in": ids[tv.app_id], "confirmed": False,
+                "message": f"{tv.name} opened {title} in {ids[tv.app_id]}, but I can't see it playing yet "
+                           f"(it may be on its page: press play, or say \"press select on {tv.name}\")."}
+    where = f" ({', '.join(ids.values())})" if ctx.args.get("app") else ""
+    return {**base, "play": "found", "confirmed": False,
+            "message": f"{tv.name} is showing Roku's search for {title}{where}, but no app opened it by itself. "
+                       f"Pick it there with the remote, or tell me which app has it."}
 
 
 PLAYBACK = {"pause": "pause", "play": "play", "resume": "play"}     # words with a wanted end state

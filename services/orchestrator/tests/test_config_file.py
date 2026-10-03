@@ -100,6 +100,8 @@ def test_health_phrases_reach_the_right_tool(said, tool, args):
     ("play Frieren on node-tv", "quasar.play", {"what": "Frieren", "on": "node-tv"}),
     ("put on Big Buck", "quasar.play", {"what": "Big Buck", "on": ""}),
     ("watch Dune on the living room TV", "quasar.play", {"what": "Dune", "on": "living room TV"}),
+    ("play stranger things on netflix on the tv", "quasar.play", {"what": "stranger things", "on": "netflix on the tv"}),
+    ("play the bear on hulu", "quasar.play", {"what": "the bear", "on": "hulu"}),
     ("play the album Discovery", "quasar.play", {"what": "the album Discovery", "on": ""}),
     ("play", "constellation.media", {"action": "play", "target": ""}),
     ("pause the video on the tv", "constellation.media", {"action": "pause", "target": "tv"}),

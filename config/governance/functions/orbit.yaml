@@ -51,3 +51,4 @@ rules:
     # extra names on top of that, if you'd rather not rename on the TV.
     inputs: {}          # e.g. { xbox: hdmi1 }
     rediscover_minutes: 30
+    prefer: [Netflix, Hulu, Disney+, Prime Video, YouTube]

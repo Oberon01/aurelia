@@ -84,3 +84,89 @@ def test_she_gives_up_with_a_useful_reason():
 def test_the_tv_means_the_screen_showing_her(asked, tv):
     from app.constellation import _tvish
     assert _tvish(asked) is tv
+
+
+# ---- step 2: Roku TVs ---------------------------------------------------------------------------------
+
+class FakeJellyfin:
+    playing: list = []
+
+    def __init__(self, redis):
+        pass
+
+    async def search(self, q, kind="any", limit=20):
+        lib = {"dune": {"Id": "m1", "Type": "Movie", "Name": "Dune", "ProductionYear": 2021}}
+        return [lib[q.lower()]] if q.lower() in lib else []
+
+    async def item(self, i):
+        return {"Id": i, "Type": "Movie", "Name": "Dune"}
+
+    async def sessions(self):
+        return [{"Client": "Roku", "NowPlayingItem": n} for n in self.playing]
+
+
+@pytest.fixture
+def roku(monkeypatch):
+    import types
+    calls = []
+    answers = {}
+
+    async def orbit(app, user, tool, args, wait=45):
+        calls.append((tool, args))
+        a = answers.get(tool)
+        if isinstance(a, Exception):
+            raise a
+        return a or {"name": "Living Room TV"}
+    monkeypatch.setattr(quasar, "Jellyfin", FakeJellyfin)
+    monkeypatch.setattr(quasar, "_orbit", orbit)
+    monkeypatch.setattr(quasar, "ROKU_CONFIRM", 0.05)
+    FakeJellyfin.playing = []
+    cfg = types.SimpleNamespace(quasar=types.SimpleNamespace(queue_episodes=2))
+    app = types.SimpleNamespace(state=types.SimpleNamespace(redis=None, config=types.SimpleNamespace(current=cfg)))
+    return app, calls, answers
+
+
+def run(coro):
+    import asyncio
+    return asyncio.run(coro)
+
+
+def test_a_library_movie_opens_in_the_rokus_jellyfin_and_jellyfin_confirms_it(roku):
+    app, calls, _ = roku
+    FakeJellyfin.playing = [{"Id": "m1", "Type": "Movie", "Name": "Dune", "ProductionYear": 2021}]
+    out = run(quasar.on_roku(app, "owner", "living room tv", "dune", {}))
+    assert calls == [("tv_app", {"name": "living room tv", "app": "Jellyfin", "content_id": "m1", "media_type": "movie"})]
+    assert out["headline"] == "Playing Dune (2021) on Living Room TV" and "unconfirmed" not in out["did"]
+
+
+def test_jellyfin_not_listing_it_playing_is_not_called_playing(roku):
+    app, calls, _ = roku
+    out = run(quasar.on_roku(app, "owner", "tv", "dune", {}))
+    assert out["headline"].startswith("Asked Living Room TV to play") and out["did"]["unconfirmed"] is True
+
+
+def test_no_jellyfin_on_the_roku_falls_back_to_rokus_search(roku):
+    app, calls, answers = roku
+    answers["tv_app"] = ValueError("There's no app called 'Jellyfin' on the TV. Installed: Netflix.")
+    answers["tv_play"] = {"name": "Living Room TV", "confirmed": True, "play": "playing", "in": "Netflix",
+                          "message": "Playing Dune in Netflix on Living Room TV."}
+    out = run(quasar.on_roku(app, "owner", "tv", "dune", {}))
+    assert calls[-1] == ("tv_play", {"name": "tv", "title": "Dune", "kind": "movie"})
+    assert out["headline"] == "Playing Dune on Living Room TV"
+
+
+def test_a_named_service_skips_the_library_and_says_what_the_tv_shows(roku):
+    app, calls, answers = roku
+    answers["tv_play"] = {"name": "Living Room TV", "confirmed": False, "play": "found",
+                          "message": "Living Room TV is showing Roku's search for The Bear (Hulu)..."}
+    out = run(quasar.play(app, "owner", {"what": "The Bear", "on": "hulu on the living room tv", "season": 2}))
+    assert calls == [("tv_play", {"name": "living room tv", "title": "The Bear", "app": "hulu", "kind": "show",
+                                  "season": 2})]
+    assert out["headline"] == "Found The Bear on Living Room TV" and out["did"]["unconfirmed"] is True
+
+
+@pytest.mark.parametrize("on,want", [("netflix", ("netflix", "")), ("Netflix on the TV", ("netflix", "TV")),
+                                     ("prime video on my bedroom tv", ("prime video", "bedroom tv")),
+                                     ("the desk", (None, "the desk")), ("orient express", (None, "orient express"))])
+def test_a_streaming_service_is_told_apart_from_a_tv(on, want):
+    assert quasar.split_service(on) == want

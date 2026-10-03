@@ -340,6 +340,22 @@ class Roku:
             params.append(f"mediaType={quote(media_type, safe='')}")
         await self._post(tv, f"/launch/{app_id}" + (f"?{'&'.join(params)}" if params else ""))
 
+    async def search(self, tv: RokuTv, keyword: str, kind: str | None = None, season: int | None = None,
+                     providers: list[str] | None = None, launch: bool = True) -> None:
+        """Roku's own search, driven by name (ECP search/browse): with launch, the TV opens the title
+        straight in the first of these apps that has it. Roku doesn't promise the launch on every
+        model or app, so callers check what the TV shows afterwards."""
+        params = [f"keyword={quote(keyword, safe='')}", f"title={quote(keyword, safe='')}", "match-any=true"]
+        if kind in ("movie", "tv-show"):
+            params.append(f"type={kind}")
+        if season:
+            params.append(f"season={int(season)}")
+        if providers:
+            params.append("provider-id=" + ",".join(quote(p, safe="") for p in providers))
+        if launch:
+            params.append("launch=true")
+        await self._post(tv, "/search/browse?" + "&".join(params))
+
     async def refresh(self, tv: RokuTv) -> RokuTv:
         async with self._client(3) as client:
             info = await self._device_info(client, tv.ip)
