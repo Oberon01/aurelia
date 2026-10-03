@@ -21,6 +21,7 @@ tools:
   tv_power:     { tier: act }
   tv_input:     { tier: act }
   tv_app:       { tier: act }
+  tv_play:      { tier: act }      # a title by name in a streaming app (Roku's search); checked with the TV
   tv_remote:    { tier: act }
   tv_mute:      { tier: act }
 
@@ -50,5 +51,7 @@ rules:
     # ("PC" for HDMI 2) work automatically and follow any rename. These are
     # extra names on top of that, if you'd rather not rename on the TV.
     inputs: {}          # e.g. { xbox: hdmi1 }
+    # Streaming apps to try first when you ask for a title by name ("play The Bear on the TV"),
+    # by their names on the TV. Any other app you have comes after these.
+    prefer: []          # e.g. [Netflix, Hulu, Max]
     rediscover_minutes: 30
-    prefer: [Netflix, Hulu, Disney+, Prime Video, YouTube]

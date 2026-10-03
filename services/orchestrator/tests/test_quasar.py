@@ -170,3 +170,16 @@ def test_a_named_service_skips_the_library_and_says_what_the_tv_shows(roku):
                                      ("the desk", (None, "the desk")), ("orient express", (None, "orient express"))])
 def test_a_streaming_service_is_told_apart_from_a_tv(on, want):
     assert quasar.split_service(on) == want
+
+
+def test_a_missing_governance_entry_is_said_plainly_not_as_a_missing_tv(monkeypatch):
+    import types
+    from fastapi import HTTPException
+    from app import tasks
+
+    async def launch(app, start):
+        raise HTTPException(403, {"needs_confirmation": True, "tier": "change", "reason": "x"})
+    monkeypatch.setattr(tasks, "launch", launch)
+    with pytest.raises(ValueError, match="governance has it as 'change'") as e:
+        run(quasar._orbit(types.SimpleNamespace(), "owner", "tv_play", {}))
+    assert not isinstance(e.value, quasar.NoRoku)

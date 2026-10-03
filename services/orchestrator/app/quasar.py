@@ -405,6 +405,13 @@ async def _orbit(app, user: str, tool: str, args: dict, wait: float = 45) -> dic
         tid = await tasks.launch(app, tasks.StartTask(tool=f"orbit.{tool}", args=args, user=user, trigger="quasar",
                                                        display="brief"))
     except HTTPException as exc:
+        d = exc.detail if isinstance(exc.detail, dict) else {}
+        if d.get("needs_confirmation"):                     # its governance entry is missing (or says ask him)
+            raise ValueError(f"orbit.{tool} isn't set to run on request (governance has it as '{d.get('tier')}', "
+                             "so it would need your confirmation, and I can't ask from inside Quasar). Its entry "
+                             "is in config/governance/functions/orbit.yaml.")
+        if exc.status_code in (403, 429):
+            raise ValueError(str(d.get("reason") or exc.detail))
         raise NoRoku(str(exc.detail))
     res = await tasks.wait_for_result(tid, wait)
     if res is None:
@@ -501,8 +508,8 @@ async def play(app, user: str, args: dict) -> dict:
         try:
             return await on_roku(app, user, tv_said, what_said, args, service)
         except NoRoku as exc:
-            raise ValueError(f"{service.title()} plays on a Roku TV, and I can't find one called "
-                             f"“{tv_said}” ({exc}).".replace(" called “”", ""))
+            raise ValueError(f"{service.title()} plays on a Roku TV, and I can't find "
+                             + (f"one called “{tv_said}”." if tv_said else "one.") + f" ({exc})")
     try:
         node = await _where(app, on)
     except ValueError as exc:
