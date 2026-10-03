@@ -1408,7 +1408,11 @@ function researchView(r) {
 function devicesView(list) {
   const box = el("div", "devlist");
   if (!list.length) { box.append(el("div", "lib-note", "Nothing paired yet.")); return box; }
-  const KIND = { browser: "browser", node: "computer", terminal: "terminal" };
+  const KIND = { browser: "browser", node: "computer", terminal: "terminal", screen: "screen" };
+  const PHONES = /iPhone|iPad|iOS|Android/;
+  const kindOf = d => d.kind !== "browser" ? (KIND[d.kind] || d.kind)        // what it is, as he'd say it
+    : d.window ? "Aurelia window" : PHONES.test(d.os || "") || d.role === "companion" ? (d.app ? "phone app" : "phone")
+    : d.app ? "app" : "browser";
   const rename = (d, name) => {                          // what you call it out loud: "the TV PC", "the desk"
     const input = el("input"); input.type = "text"; input.value = d.name; input.maxLength = 60;
     input.setAttribute("aria-label", "New name"); input.className = "rn";
@@ -1431,7 +1435,7 @@ function devicesView(list) {
   list.forEach(d => {
     const row = el("div", "pdev " + d.status + (d.kind === "node" ? (d.online ? " online" : " offline") : ""));
     const name = el("span", "dn"); name.append(document.createTextNode(d.name));
-    const bits = [KIND[d.kind] || d.kind, d.os, d.browser && d.kind === "browser" ? null : d.hostname,
+    const bits = [kindOf(d), d.os, d.browser && d.kind === "browser" ? null : d.hostname,
                   d.status === "pending" ? `waiting · code ${d.code}` : d.status === "revoked" ? "revoked" :
                   d.kind === "node" && d.agent_version ? `agent ${d.agent_version}${d.outdated ? ` (updating to ${d.outdated})` : ""}` : null,
                   d.kind === "node" && d.shell === "on" ? "shell on" : null,

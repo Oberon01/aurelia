@@ -40,7 +40,6 @@ router = APIRouter(prefix="/push", tags=["push"])
 
 PUSH_HOSTS = ("web.push.apple.com", ".push.apple.com", "fcm.googleapis.com", "updates.push.services.mozilla.com",
               ".notify.windows.com", "android.googleapis.com")
-SUBJECT = "mailto:aurelia@localhost"
 TASK_PUSH_SECONDS = 20          # a request that took at least this long gets a "done" notification
 MAILBOX_CURSOR = "aurelia:push:mailbox"
 _key_cache: dict[str, Any] = {}
@@ -82,11 +81,37 @@ def public_raw(key: ec.EllipticCurvePrivateKey) -> bytes:
     return key.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
 
 
-def vapid_header(key: ec.EllipticCurvePrivateKey, endpoint: str, now: float | None = None) -> str:
+def usable_contact(c: str) -> bool:
+    """A contact Apple accepts: https on a real name, or a mailto address on one (never localhost/.local)."""
+    c = (c or "").strip()
+    if c.startswith("mailto:"):
+        host = c.rsplit("@", 1)[-1].lower() if "@" in c else ""
+    elif c.startswith("https://"):
+        host = (urlsplit(c).hostname or "").lower()
+    else:
+        return False
+    return "." in host and not host.endswith((".local", ".localhost", ".internal", ".lan")) and host != "localhost" \
+        and not host.replace(".", "").isdigit()
+
+
+async def contact(app) -> str:
+    """Who to reach about these pushes: notifications.contact, else the address he opens Aurelia at."""
+    cfg = getattr(getattr(app.state.config.current, "notifications", None), "contact", "") if app else ""
+    if usable_contact(cfg):
+        return cfg.strip()
+    seen = await db.pool().fetchval("SELECT value FROM server_secrets WHERE name='public_origin'")
+    if usable_contact(seen or ""):
+        return seen
+    raise ValueError("I don't know Aurelia's public address to sign notifications with (Apple refuses localhost). "
+                     "Set notifications.contact in config/aurelia.yaml, or turn notifications on again from your phone.")
+
+
+def vapid_header(key: ec.EllipticCurvePrivateKey, endpoint: str, now: float | None = None,
+                 subject: str = "") -> str:
     u = urlsplit(endpoint)
     head = b64u(json.dumps({"typ": "JWT", "alg": "ES256"}, separators=(",", ":")).encode())
     claims = b64u(json.dumps({"aud": f"{u.scheme}://{u.netloc}", "exp": int((now or time.time()) + 12 * 3600),
-                              "sub": SUBJECT}, separators=(",", ":")).encode())
+                              "sub": subject}, separators=(",", ":")).encode())
     der = key.sign(f"{head}.{claims}".encode(), ec.ECDSA(hashes.SHA256()))
     r, s = decode_dss_signature(der)
     sig = b64u(r.to_bytes(32, "big") + s.to_bytes(32, "big"))
@@ -116,14 +141,26 @@ def encrypt(payload: bytes, p256dh: str, auth_secret: str, salt: bytes | None = 
 
 # ---- sending ---------------------------------------------------------------------------------------
 
+SERVICE_NAMES = {"apple.com": "Apple's push service", "googleapis.com": "Google's push service",
+                 "mozilla.com": "Mozilla's push service", "windows.com": "Microsoft's push service"}
+
+
+def service_name(endpoint: str) -> str:
+    host = urlsplit(endpoint).hostname or ""
+    return next((v for k, v in SERVICE_NAMES.items() if host.endswith(k)), "the push service")
+
+
 async def send_one(sub: dict, message: dict, urgency: str = "normal",
-                   transport: httpx.AsyncBaseTransport | None = None) -> bool:
+                   transport: httpx.AsyncBaseTransport | None = None, subject: str = "") -> tuple[bool, str]:
+    """(sent, why not): the push service's own answer when it refuses."""
     if not allowed_endpoint(sub["endpoint"]):
-        return False
+        return False, "not a push service I send to"
+    if not usable_contact(subject):
+        return False, "no contact address Apple accepts (set notifications.contact)"
     key = await vapid_key()
     data = encrypt(json.dumps(message).encode()[:3000], sub["p256dh"], sub["auth"])
     headers = {"TTL": "86400", "Content-Encoding": "aes128gcm", "Content-Type": "application/octet-stream",
-               "Urgency": urgency, "Authorization": vapid_header(key, sub["endpoint"])}
+               "Urgency": urgency, "Authorization": vapid_header(key, sub["endpoint"], subject=subject)}
     if message.get("tag"):
         headers["Topic"] = "".join(c for c in str(message["tag"]) if c.isalnum() or c in "-_")[:32]
     try:
@@ -132,16 +169,22 @@ async def send_one(sub: dict, message: dict, urgency: str = "normal",
     except httpx.HTTPError as exc:
         log.info("push to device %s failed: %s", sub.get("device_id"), exc.__class__.__name__)
         await db.pool().execute("UPDATE push_subscriptions SET failures=failures+1 WHERE id=$1", sub["id"])
-        return False
+        return False, f"I couldn't reach {service_name(sub['endpoint'])} ({exc.__class__.__name__})"
     if r.status_code in (404, 410):                 # that browser unsubscribed or was reset: forget it
         await db.pool().execute("DELETE FROM push_subscriptions WHERE id=$1", sub["id"])
-        return False
+        return False, f"{service_name(sub['endpoint'])} says this device's notifications ended; tap Notify me again"
     if r.status_code >= 400:
-        log.info("push to device %s refused: %s %s", sub.get("device_id"), r.status_code, r.text[:200])
+        reason = ""
+        try:
+            reason = str((r.json() or {}).get("reason") or "")
+        except ValueError:
+            reason = r.text[:80].strip()
+        log.info("push to device %s refused by %s: %s %s (contact %s)", sub.get("device_id"),
+                 urlsplit(sub["endpoint"]).hostname, r.status_code, reason, subject)
         await db.pool().execute("UPDATE push_subscriptions SET failures=failures+1 WHERE id=$1", sub["id"])
-        return False
+        return False, f"{service_name(sub['endpoint'])} refused it ({r.status_code}{' ' + reason if reason else ''})"
     await db.pool().execute("UPDATE push_subscriptions SET last_ok=now(), failures=0 WHERE id=$1", sub["id"])
-    return True
+    return True, ""
 
 
 async def on_screen(redis, device_id: int) -> bool:
@@ -158,19 +201,31 @@ async def on_screen(redis, device_id: int) -> bool:
 
 
 async def notify(app, title: str, body: str = "", url: str = "/view", tag: str | None = None,
-                 devices: list[int] | None = None, urgency: str = "normal", even_on_screen: bool = False) -> int:
-    """To every subscribed display (or just these), unless it's open and on screen. Returns how many got it."""
+                 devices: list[int] | None = None, urgency: str = "normal", even_on_screen: bool = False,
+                 why: list | None = None) -> int:
+    """To every subscribed display (or just these), unless it's open and on screen. Returns how many got it;
+    why (if given) collects each refusal's reason."""
     q = ("SELECT s.* FROM push_subscriptions s JOIN devices d ON d.id = s.device_id WHERE d.status='approved'"
          + (" AND s.device_id = ANY($1::int[])" if devices is not None else ""))
     rows = await db.pool().fetch(q, devices) if devices is not None else await db.pool().fetch(q)
     sent = 0
     msg = {"title": title[:120], "body": body[:300], "url": url if url.startswith("/") else "/view",
            **({"tag": tag} if tag else {})}
+    try:
+        subject = await contact(app) if rows else ""
+    except ValueError as exc:
+        if why is not None:
+            why.append(str(exc))
+        log.warning("notifications: %s", exc)
+        return 0
     for r in rows:
         if not even_on_screen and await on_screen(app.state.redis, r["device_id"]):
             continue
-        if await send_one(dict(r), msg, urgency):
+        ok, reason = await send_one(dict(r), msg, urgency, subject=subject)
+        if ok:
             sent += 1
+        elif why is not None:
+            why.append(reason)
     return sent
 
 
@@ -242,6 +297,11 @@ async def subscribe(body: Subscription, request: Request):
             raise ValueError
     except ValueError:
         raise HTTPException(400, "Those notification keys aren't right.")
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+    origin = f"https://{host.split(',')[0].strip()}"
+    if usable_contact(origin):                     # the address he opens Aurelia at: the contact Apple wants
+        await db.pool().execute("INSERT INTO server_secrets (name, value) VALUES ('public_origin', $1) "
+                                "ON CONFLICT (name) DO UPDATE SET value=$1", origin)
     await db.pool().execute(
         "INSERT INTO push_subscriptions (device_id, endpoint, p256dh, auth) VALUES ($1, $2, $3, $4) "
         "ON CONFLICT (endpoint) DO UPDATE SET device_id=$1, p256dh=$3, auth=$4, failures=0",
@@ -264,8 +324,9 @@ async def test(request: Request):
     dev = await auth.asker(request.headers)
     if dev is None:
         raise HTTPException(403)
+    why: list = []
     n = await notify(request.app, "Aurelia", "Notifications work on this device.", "/view", "test",
-                     devices=[dev["id"]], even_on_screen=True)
+                     devices=[dev["id"]], even_on_screen=True, why=why)
     if not n:
-        raise HTTPException(409, "This device hasn't turned notifications on (or its push service refused).")
+        raise HTTPException(409, "; ".join(why) or "This device hasn't turned notifications on.")
     return {"ok": True, "sent": n}

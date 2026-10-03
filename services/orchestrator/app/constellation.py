@@ -1424,10 +1424,11 @@ async def notify_tool(app, user: str, args: dict) -> dict:
     if not await db.pool().fetchval("SELECT 1 FROM push_subscriptions WHERE device_id=$1", me):
         raise ValueError("This device hasn't turned notifications on yet: tap \"Notify me\" at the top (on iPhone, in "
                          "the app added to your home screen).")
+    why: list = []
     n = await push.notify(app, "Aurelia", "Notifications work on this device.", "/view", "test", devices=[me],
-                          even_on_screen=True)
+                          even_on_screen=True, why=why)
     if not n:
-        raise ValueError("Its push service didn't take it, so no notification was sent. Tap \"Notify me\" again.")
+        raise ValueError("No notification was sent: " + ("; ".join(why) or "its push service didn't take it") + ".")
     return {"headline": "Sent a test notification", "did": {"node": "this device", "what": "Its push service accepted it"}}
 
 

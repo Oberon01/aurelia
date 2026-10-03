@@ -110,6 +110,12 @@ class RegistryConfig(BaseModel):
     function_ttl_seconds: int = 30
 
 
+class NotificationsConfig(BaseModel):
+    """Notifications on his phone (Web Push). Apple refuses pushes whose contact is unreachable
+    (localhost, .local), so it's Aurelia's own public address."""
+    contact: str = ""                         # e.g. "https://<your server>.ts.net:8443" (or a mailto: address)
+
+
 class RuntimeConfig(BaseModel):
     display: DisplayConfig = DisplayConfig()
     ambient: AmbientConfig = AmbientConfig()
@@ -121,6 +127,7 @@ class RuntimeConfig(BaseModel):
     session: SessionConfig = SessionConfig()
     fastpath: FastPathConfig = FastPathConfig()
     registry: RegistryConfig = RegistryConfig()
+    notifications: NotificationsConfig = NotificationsConfig()
 
 
 class ConfigStore:

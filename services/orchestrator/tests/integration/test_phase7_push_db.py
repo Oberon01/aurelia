@@ -57,9 +57,10 @@ def test_his_phone_hears_what_finished_a_test_and_urgent_mailbox_items(stack, mo
     h = {"X-Aurelia-Device": str(phone)}
     sent = []
 
-    async def capture(sub, message, urgency="normal", transport=None):
+    async def capture(sub, message, urgency="normal", transport=None, subject=""):
         sent.append((sub["device_id"], message, urgency))
-        return True
+        assert subject == "https://aurelia.example.ts.net"                    # a contact Apple accepts
+        return True, ""
     monkeypatch.setattr(push, "send_one", capture)
     monkeypatch.setattr(push, "TASK_PUSH_SECONDS", 0)
 

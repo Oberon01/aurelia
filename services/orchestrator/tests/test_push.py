@@ -51,7 +51,7 @@ def test_only_that_browser_can_read_it():
 
 def test_it_is_signed_with_her_key_for_that_push_service():
     key = ec.generate_private_key(ec.SECP256R1())
-    h = push.vapid_header(key, "https://web.push.apple.com/QX/abc", now=1_000_000)
+    h = push.vapid_header(key, "https://web.push.apple.com/QX/abc", now=1_000_000, subject="https://aura.example.ts.net")
     t = h.split("t=")[1].split(",")[0]
     head, claims, sig = t.split(".")
     c = json.loads(push.unb64u(claims))
@@ -92,9 +92,40 @@ def test_a_push_service_that_says_gone_forgets_the_subscription(monkeypatch):
         return httpx.Response(201 if len(seen) == 1 else 410)
     sub = {"id": 1, "device_id": 2, "endpoint": "https://web.push.apple.com/QX", "p256dh": p256dh, "auth": auth}
     t = httpx.MockTransport(handler)
-    assert asyncio.run(push.send_one(sub, {"title": "Done", "body": "Research finished"}, transport=t)) is True
+    assert asyncio.run(push.send_one(sub, {"title": "Done", "body": "Research finished"}, transport=t,
+                                    subject="https://aura.example.ts.net")) == (True, "")
     r = seen[0]
     assert r.headers["content-encoding"] == "aes128gcm" and r.headers["authorization"].startswith("vapid t=")
     assert json.loads(decrypt(r.content, k, secret)) == {"title": "Done", "body": "Research finished"}
-    assert asyncio.run(push.send_one(sub, {"title": "x"}, transport=t)) is False
+    ok, why = asyncio.run(push.send_one(sub, {"title": "x"}, transport=t, subject="https://aura.example.ts.net"))
+    assert not ok and "notifications ended" in why
     assert done == ["UPDATE", "DELETE"]
+
+
+
+@pytest.mark.parametrize("c,ok", [("https://docker-home.tail0150f0.ts.net:8443", True), ("mailto:me@example.com", True),
+                                  ("mailto:aurelia@localhost", False), ("https://localhost:8443", False),
+                                  ("https://atlas.local", False), ("https://127.0.0.1", False), ("me@example.com", False),
+                                  ("http://example.com", False)])
+def test_the_contact_is_one_apple_accepts(c, ok):
+    assert push.usable_contact(c) is ok
+
+
+def test_a_refusal_says_the_push_services_own_reason(monkeypatch):
+    import httpx
+    k, p256dh, auth, secret = browser()
+
+    class Pool:
+        async def execute(self, q, *a): pass
+    monkeypatch.setattr(push.db, "pool", lambda: Pool())
+    key = ec.generate_private_key(ec.SECP256R1())
+
+    async def vk(): return key
+    monkeypatch.setattr(push, "vapid_key", vk)
+    seen = []
+    t = httpx.MockTransport(lambda req: (seen.append(req), httpx.Response(403, json={"reason": "BadJwtToken"}))[1])
+    sub = {"id": 1, "device_id": 2, "endpoint": "https://web.push.apple.com/QX", "p256dh": p256dh, "auth": auth}
+    ok, why = asyncio.run(push.send_one(sub, {"title": "x"}, transport=t, subject="https://aura.example.ts.net"))
+    assert not ok and why == "Apple's push service refused it (403 BadJwtToken)"
+    claims = json.loads(push.unb64u(seen[0].headers["authorization"].split("t=")[1].split(".")[1]))
+    assert claims["sub"] == "https://aura.example.ts.net"

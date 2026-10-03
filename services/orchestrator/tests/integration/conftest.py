@@ -79,7 +79,8 @@ def stack(tmp_path_factory):
     (tmp / "aurelia.yaml").write_text(
         f"llm:\n  providers:\n    ollama: {{base_url: 'http://127.0.0.1:{fn_port}'}}\n"
         "memory:\n  maintenance_minutes: 60\n"
-        "digest:\n  hour: 0\n  timezone: America/Chicago\n")
+        "digest:\n  hour: 0\n  timezone: America/Chicago\n"
+        "notifications:\n  contact: https://aurelia.example.ts.net\n")
 
     # fresh database
     async def reset():

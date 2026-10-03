@@ -35,6 +35,10 @@ quasar:
   spotify_redirect_uri: "https://docker-home.tail0150f0.ts.net:8443/quasar/spotify/callback"
   librespot_version: "0.8.0"   # a computer builds this with cargo where Ubuntu doesn't package librespot
 
+notifications:
+  # Apple refuses pushes signed with an unreachable contact (localhost), so this is Aurelia's own address.
+  contact: "https://docker-home.tail0150f0.ts.net:8443"
+
 retention:
   # Saved result panels: full for hot_days, then a summary until warm_days,
   # then only the task's metadata (timing, outcome) is kept. Pinned panels stay full.

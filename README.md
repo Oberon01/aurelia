@@ -113,8 +113,10 @@ when Aurelia isn't already open and on its screen:
 - something you asked from the phone that took a while and is done, or failed
 - something sent to the phone that's waiting for it
 
-"Send me a test notification" checks it; "which devices have notifications on"
-lists them. What's sent is encrypted for that one phone (Web Push, RFC 8291), so
+"Send me a test notification" checks it, and if the push service refuses, it
+says the service's own reason; "which devices have notifications on" lists
+them. Notifications are signed with `notifications.contact` in
+`config/aurelia.yaml` (Aurelia's own address): Apple refuses a localhost contact. What's sent is encrypted for that one phone (Web Push, RFC 8291), so
 Apple's or Google's push service carries it without being able to read it, and
 signed with Aurelia's own key (made once, kept on the server). The server only
 ever posts to the real push services. The app's service worker shows

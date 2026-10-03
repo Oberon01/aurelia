@@ -468,6 +468,7 @@ async def listing(current: int | None = None) -> list[dict[str, Any]]:
                        if r["kind"] in roles.FOR_KIND else {}),
                     "os": " ".join(str(info[k]) for k in ("os", "os_version") if info.get(k)) or None,
                     "browser": info.get("browser"), "hostname": info.get("hostname"),
+                    "window": bool(info.get("window")), "app": bool(info.get("app")),
                     "agent_version": info.get("agent_version"), "shell": info.get("shell"),
                     **({"vitals": info["vitals"], "issues": info.get("issues") or []} if r["kind"] == "node" and info.get("vitals") else {}),
                     "code": r["pair_code"] if r["status"] == "pending" else None,
