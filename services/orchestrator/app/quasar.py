@@ -127,6 +127,13 @@ TOOLS = [
             "on": {"type": "string"}, "level": {"type": "integer", "minimum": 0, "maximum": 100}},
             "required": ["action"]},
         cancellable=False),
+    registry.ToolSpec(
+        name="speaker", description="Make one of his computers a Spotify speaker where its system has no librespot "
+                                    "package: it builds librespot from its official source with Rust's cargo (10-20 "
+                                    "minutes, in the background) and says when it's ready. Always his confirmation; "
+                                    "offered by spotify when needed, not called on your own.",
+        input_schema={"type": "object", "properties": {"target": {"type": "string"}}, "required": ["target"]},
+        cancellable=False),
 ]
 
 
@@ -897,14 +904,16 @@ async def spotify_tool(app, user: str, args: dict) -> dict:
         try:
             dev = await _sp_device(app, user, sp, on)
         except NeedsSpeaker as exc:                         # offer to make that computer a Spotify speaker
+            ver = app.state.config.current.quasar.librespot_version
             return {"headline": f"{exc.node} isn't a Spotify speaker yet",
                     "did": {"node": exc.node, "what": "It needs librespot (a Spotify Connect speaker) first"},
-                    "confirm": {"tool": "constellation.install_package",
-                                "reason": f"{exc.node} needs librespot to play Spotify (it becomes a Spotify speaker "
-                                          "named after it). Install it from Ubuntu's packages?",
-                                "reply": "Installed. Ask me to play it again; the first time, pick it once in the "
-                                         "Spotify app on your phone.",
-                                "args": {"target": exc.node, "name": "librespot", "source": "apt"}}}
+                    "confirm": {"tool": "quasar.speaker",
+                                "reason": f"{exc.node} needs librespot to play Spotify, and its system doesn't package "
+                                          f"it. Build librespot {ver} there from its official source with Rust's cargo "
+                                          "(Ubuntu's cargo, rustc and the audio headers first)? It takes 10-20 minutes in "
+                                          "the background; I'll tell you when it's ready.",
+                                "reply": "Building it; I'll tell you when it's ready.",
+                                "args": {"target": exc.node}}}
         body = {"uris": [it["uri"]]} if it["type"] == "track" else {"context_uri": it["uri"]}
         await sp.call("PUT", "/me/player/play", {"device_id": dev["id"]}, body)
 
@@ -953,6 +962,53 @@ async def spotify_tool(app, user: str, args: dict) -> dict:
     return {"headline": f"{say} on {(st.get('device') or {}).get('name') or dev.get('name')}", "now": spotify.playing_now(st)}
 
 
+BUILD_WATCH_MINUTES = 100
+
+
+async def speaker(app, user: str, args: dict) -> dict:
+    """He confirmed (a change): build librespot on that computer, and watch it to the end."""
+    from . import constellation
+    node = await constellation.target(app, args.get("target"))
+    ver = app.state.config.current.quasar.librespot_version
+    d = await constellation._ask_new(app, node, "speaker_build", {"confirmed": True, "version": ver,
+                                                                  "name": node["name"]}, timeout=30)
+    if d.get("state") == "failed":
+        raise ValueError(f"Building librespot on {node['name']} didn't start: {d.get('error') or 'no reason given'}")
+    if d.get("state") not in ("installing", "building", "done"):
+        raise ValueError(f"{node['name']} didn't say it started building.")
+    display = await constellation._asker(args.get("_self"))
+    asyncio.create_task(_watch_build(app, user, node, display))
+    return {"headline": f"Building librespot on {node['name']}",
+            "did": {"node": node["name"], "what": (d.get("step") or "Started") + ". I'll tell you when it's ready "
+                                                  "(10-20 minutes)."}}
+
+
+async def _watch_build(app, user: str, node: dict, display: int | None) -> None:
+    from . import constellation
+    loop = asyncio.get_running_loop()
+    end = loop.time() + BUILD_WATCH_MINUTES * 60
+    while loop.time() < end:
+        await asyncio.sleep(30)
+        try:
+            st = await constellation._ask_new(app, node, "speaker_build_status", {}, timeout=20)
+        except ValueError:
+            continue                                        # asleep or busy: ask again later
+        if st.get("state") == "done":
+            ok = st.get("running")
+            await constellation._tell(app, user, display, f"{node['name']} is a Spotify speaker",
+                                      f"librespot {st.get('version')} is built on {node['name']}" +
+                                      (" and running. Once, pick it in the Spotify app on your phone (the speaker icon); "
+                                       "after that I can start music there myself." if ok else
+                                       ", but it didn't stay running; ask me to play something there and I'll say why."))
+            return
+        if st.get("state") == "failed":
+            await constellation._tell(app, user, display, f"librespot didn't build on {node['name']}",
+                                      f"It stopped: {st.get('error') or 'no reason given'}.")
+            return
+    await constellation._tell(app, user, display, f"Still no Spotify speaker on {node['name']}",
+                              "The build hasn't finished after 100 minutes, so I stopped watching. Ask me again later.")
+
+
 @router.get("/spotify/login", include_in_schema=False)
 async def spotify_login(request: Request):
     """From a paired display: off to Spotify's own page to approve me (once)."""
@@ -979,7 +1035,7 @@ async def spotify_callback(request: Request, code: str = "", state: str = "", er
     return HTMLResponse(page.format("Spotify is connected. I can play your music now."))
 
 
-HANDLERS = {"find": find, "play": play, "youtube": youtube, "spotify": spotify_tool}
+HANDLERS = {"find": find, "play": play, "youtube": youtube, "spotify": spotify_tool, "speaker": speaker}
 
 
 # ---- the computers' side: streams and what their players say ------------------------------------------
@@ -1158,7 +1214,7 @@ async def _run(app, tool: str, task_id: str, args: dict) -> None:
     from . import tasks
     try:
         row = await db.pool().fetchrow("SELECT user_id FROM task_runs WHERE id=$1", uuid.UUID(task_id))
-        data = await HANDLERS[tool](app, row["user_id"] if row else "owner", args)
+        data = await HANDLERS[tool](app, row["user_id"] if row else "owner", {**args, "_self": task_id})
         result = tasks.Result(status="completed", data=data)
     except ValueError as exc:
         result = tasks.Result(status="failed", error=str(exc))

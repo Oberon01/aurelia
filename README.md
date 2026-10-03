@@ -428,10 +428,17 @@ under `quasar:` in `config/aurelia.yaml` (the id is public; no secret is used:
 sign-in is PKCE). Then open `/quasar/spotify/login` on one of your screens and
 approve it on Spotify's page; `/quasar/check` says whether it's connected. The
 tokens stay on the server and refresh themselves. A computer becomes a speaker
-with librespot from its own packages (the installer's `--system` step, or the
-install card I show the first time); pick it once in the Spotify app on your
-phone, and after that it signs itself back in and I can start music there. On
-Windows, the Spotify app itself is the speaker. Spotify's API needs Premium to
+with librespot. Ubuntu 26.04 doesn't package it, so the first time you ask for
+Spotify there I offer to build it (always your OK, `quasar.speaker`): Ubuntu's
+cargo, rustc, a C compiler and the PulseAudio headers come from Ubuntu's
+packages, then Rust's own package manager compiles the exact librespot version
+pinned in `config/aurelia.yaml` (`quasar.librespot_version`) from its official
+source on crates.io, `--locked`, into the agent's own folder. It's never a
+downloaded program. It takes 10-20 minutes in the background; the agent doesn't
+update itself meanwhile, and I tell you when it's ready (or why it stopped).
+Then pick it once in the Spotify app on your phone; after that it signs itself
+back in and I can start music there. On Windows, the Spotify app itself is the
+speaker. Spotify's API needs Premium to
 control playback (you have it).
 
 **On a Roku TV (step 2).** A computer always wins: if the TV PC is plugged into

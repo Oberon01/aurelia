@@ -1464,3 +1464,79 @@ def test_the_speaker_starts_and_runs(monkeypatch, tmp_path):
     monkeypatch.setattr(agent.subprocess, "Popen", P)
     sp = agent.Speaker()
     assert sp.start("TV PC") and sp.start("TV PC") and len(started) == 1           # already on: not started twice
+
+
+def test_librespot_is_built_from_source_with_cargo_into_the_agents_own_folder(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    monkeypatch.setattr(agent.Path, "home", lambda: home)
+    monkeypatch.setattr(agent, "config_dir", lambda: tmp_path / "cfg")
+    monkeypatch.setattr(agent, "IS_WINDOWS", False)
+    monkeypatch.setattr(agent.shutil, "which", lambda n: None if n == "cargo" else f"/usr/bin/{n}")
+    monkeypatch.setattr(agent, "_pk", lambda action, name="": ["pkgcli", "-y", "install", "--no-autoremove", name])
+    installed = set()
+    monkeypatch.setattr(agent, "_run_c", lambda argv, t=30: (installed.add(argv[-1]), (0, "", ""))[1])
+    monkeypatch.setattr(agent, "_apt_installed", lambda names: installed & set(names))
+    monkeypatch.setattr(agent, "_run", lambda argv, timeout=4: "rustc 1.88.0 (abc 2025-06-01)\n")
+    ran = []
+
+    def run(argv, **kw):
+        ran.append((argv, kw.get("env", {}).get("CARGO_HOME")))
+        if argv[0] == "pkg-config":
+            return agent.subprocess.CompletedProcess(argv, 0)
+        if argv[:2] == ["cargo", "install"]:
+            b = home / ".local/share/aurelia-node/cargo/bin"
+            b.mkdir(parents=True)
+            (b / "librespot").write_text("#!/bin/sh\n")
+            (b / "librespot").chmod(0o755)
+            return agent.subprocess.CompletedProcess(argv, 0)
+        return agent.subprocess.CompletedProcess(argv, 0, "librespot 0.8.0 abc", "")
+    monkeypatch.setattr(agent.subprocess, "run", run)
+    monkeypatch.setattr(agent.SPEAKER, "start", lambda name: True)
+    monkeypatch.setattr(agent.SPEAKER, "running", lambda: True)
+    agent._build("0.8.0", "TV PC")
+    st = agent.read_build()
+    assert st["state"] == "done" and installed == {"cargo"}                      # only what was missing, from Ubuntu
+    cargo, cargo_home = next((a, h) for a, h in ran if a[:2] == ["cargo", "install"])
+    assert cargo[:6] == ["cargo", "install", "librespot", "--locked", "--version", "0.8.0"]
+    assert "--no-default-features" in cargo and cargo[cargo.index("--root") + 1] == str(agent.cargo_root())
+    assert cargo_home == str(agent.cargo_root() / "home")                       # nothing goes outside its folder
+    assert agent.find_librespot() == str(agent.cargo_root() / "bin" / "librespot")
+    assert agent.Speaker().argv(agent.find_librespot(), "TV PC")[-2:] == ["--backend", "pulseaudio"]
+
+
+def test_a_build_needs_his_ok_a_real_version_and_a_new_enough_rust(monkeypatch, tmp_path):
+    monkeypatch.setattr(agent, "config_dir", lambda: tmp_path)
+    monkeypatch.setattr(agent, "IS_WINDOWS", False)
+    with pytest.raises(ValueError, match="confirmation"):
+        agent.do_speaker_build({"version": "0.8.0"})
+    with pytest.raises(ValueError, match="which librespot version"):
+        agent.do_speaker_build({"confirmed": True, "version": "latest; rm -rf ~"})
+    monkeypatch.setattr(agent.shutil, "which", lambda n: f"/usr/bin/{n}")
+    monkeypatch.setattr(agent.subprocess, "run", lambda argv, **kw: agent.subprocess.CompletedProcess(argv, 0))
+    monkeypatch.setattr(agent, "_run", lambda argv, timeout=4: "rustc 1.75.0\n")
+    agent._build("0.8.0", "TV PC")
+    st = agent.read_build()
+    assert st["state"] == "failed" and "1.85 or newer" in st["error"]
+
+
+def test_the_agent_doesnt_update_itself_in_the_middle_of_a_build(monkeypatch, tmp_path):
+    monkeypatch.setattr(agent, "config_dir", lambda: tmp_path)
+    monkeypatch.setattr(agent, "player_busy", lambda: False)
+    took = []
+    monkeypatch.setattr(agent, "update", lambda s, k, w: took.append(w))
+    agent.write_build({"state": "building", "started": agent.time.time()})
+    agent.maybe_update("https://a", "k", {"version": "9.9.9"})
+    assert took == []
+    agent.write_build({"state": "done", "started": agent.time.time()})
+    agent.maybe_update("https://a", "k", {"version": "9.9.9"})
+    assert took == [{"version": "9.9.9"}]
+
+
+def test_a_speaker_that_wont_start_says_why(tmp_path):
+    log = tmp_path / "speaker.log"
+    log.write_text("[2026 INFO  librespot] librespot 0.8.0\n[2026 WARN  librespot_discovery::server] Discovery server failed "
+                   "to start: Address family not supported by protocol (os error 97)\n[2026 ERROR librespot] Discovery is "
+                   "unavailable and no credentials provided. Authentication is not possible.\n")
+    assert "IPv6" in agent.Speaker.why(log)
+    log.write_text("[2026 ERROR librespot] Something else broke\n")
+    assert agent.Speaker.why(log) == " (Something else broke)"

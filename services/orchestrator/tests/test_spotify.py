@@ -128,7 +128,7 @@ class FakeSp:
 @pytest.fixture
 def app_with(monkeypatch):
     def make_app(sp):
-        cfg = types.SimpleNamespace(quasar=types.SimpleNamespace(spotify_confirm_seconds=0.05))
+        cfg = types.SimpleNamespace(quasar=types.SimpleNamespace(spotify_confirm_seconds=0.05, librespot_version="0.8.0"))
         app = types.SimpleNamespace(state=types.SimpleNamespace(redis=None, config=types.SimpleNamespace(current=cfg)))
         monkeypatch.setattr(quasar, "_sp", lambda a: sp)
         return app
@@ -171,7 +171,8 @@ def test_a_computer_without_its_speaker_is_asked_to_start_it_or_offered_librespo
     monkeypatch.setattr(constellation, "_ask_new", ask)
     out = run(quasar.spotify_tool(app_with(sp), "owner", {"action": "play", "what": "Discovery", "on": "desk"}))
     assert asked == [("spotify_speaker", {"name": "Desk"})]
-    assert out["confirm"]["tool"] == "constellation.install_package" and out["confirm"]["args"]["name"] == "librespot"
+    assert out["confirm"]["tool"] == "quasar.speaker" and out["confirm"]["args"] == {"target": "Desk"}
+    assert "cargo" in out["confirm"]["reason"] and "0.8.0" in out["confirm"]["reason"]
 
 
 def test_play_x_on_spotify_reaches_spotify(app_with, monkeypatch):
@@ -194,3 +195,35 @@ def test_pause_on_a_computer_playing_spotify_pauses_spotify_there(app_with, monk
     sp.st["device"] = {"id": "d2", "name": "Kentrell's iPhone"}
     out = run(constellation._player(app, {"id": 1, "name": "TV PC"}, "pause", {}))
     assert out["headline"] == "Nothing is playing on TV PC"            # Spotify is on his phone, not here
+
+
+
+def test_building_the_speaker_is_watched_to_the_end_and_he_hears_how_it_went(app_with, monkeypatch):
+    from app import constellation
+    told, states = [], iter([{"state": "building"}, {"state": "done", "version": "0.8.0", "running": True}])
+
+    async def target(app, name, screen=False): return {"id": 3, "name": "TV PC"}
+
+    async def ask(app, node, kind, args, timeout=25):
+        if kind == "speaker_build":
+            assert args == {"confirmed": True, "version": "0.8.0", "name": "TV PC"}
+            return {"state": "installing", "step": "installing cargo from Ubuntu's packages"}
+        return next(states)
+
+    async def tell(app, user, display, head, text): told.append((display, head, text))
+
+    async def asker(task): return 42
+    monkeypatch.setattr(constellation, "target", target)
+    monkeypatch.setattr(constellation, "_ask_new", ask)
+    monkeypatch.setattr(constellation, "_tell", tell)
+    monkeypatch.setattr(constellation, "_asker", asker)
+    monkeypatch.setattr(quasar.asyncio, "sleep", (lambda real: (lambda s: real(0)))(asyncio.sleep))
+
+    async def go():
+        out = await quasar.speaker(app_with(FakeSp()), "owner", {"target": "tv pc", "_self": "t"})
+        for _ in range(20):
+            await asyncio.sleep(0)
+        return out
+    out = run(go())
+    assert out["headline"] == "Building librespot on TV PC" and "I'll tell you" in out["did"]["what"]
+    assert told and told[0][0] == 42 and told[0][1] == "TV PC is a Spotify speaker" and "pick it in the Spotify app" in told[0][2]

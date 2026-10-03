@@ -43,6 +43,7 @@ class QuasarConfig(BaseModel):
     spotify_client_id: str = ""               # his Spotify developer app (public by design; no secret is used)
     spotify_redirect_uri: str = ""            # exactly as registered on that app
     spotify_confirm_seconds: float = 12       # how long Spotify gets to report the change before I say it didn't
+    librespot_version: str = "0.8.0"          # what a computer builds with cargo where Ubuntu doesn't package it
 
 
 class RetentionConfig(BaseModel):

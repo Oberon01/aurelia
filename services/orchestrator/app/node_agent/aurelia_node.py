@@ -58,7 +58,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.7.1"
+VERSION = "0.7.2"
 IS_WINDOWS = platform.system() == "Windows"
 EXIT_REVOKED = 3                                   # the service manager doesn't restart after this
 EXIT_UPDATED = 75                                  # restart me: a new version is in place
@@ -1874,6 +1874,128 @@ def youtube_item(vid: str, title: str = "") -> dict:
 # sign-in in its own cache here (only this account can read it) and comes back signed in after a
 # restart, so Aurelia can start music on it from then on. Nothing about it leaves this computer.
 
+# Where Ubuntu doesn't package librespot (26.04 doesn't), it's built here from its official source with
+# Rust's own package manager, with his OK: cargo fetches the exact version Aurelia names from crates.io
+# (--locked: the dependency versions librespot itself pinned) and compiles it into this agent's own
+# folder. It's compiled here from source, never a downloaded program, and nothing goes outside that folder.
+# Ubuntu's cargo, rustc, pkg-config, a C compiler and the PulseAudio headers come first (from Ubuntu's
+# packages). The build runs in the background (10-20 minutes) and reports how it's going.
+
+LIBRESPOT_FEATURES = "rustls-tls-native-roots,pulseaudio-backend,with-libmdns"
+BUILD_NEEDS = {"cargo": "cargo", "rustc": "rustc", "pkg-config": "pkg-config", "cc": "build-essential"}
+BUILD_HEADERS = {"libpulse": "libpulse-dev"}
+RUST_MIN = (1, 85)
+
+
+def cargo_root() -> Path:
+    return Path.home() / ".local" / "share" / "aurelia-node" / "cargo"
+
+
+def find_librespot() -> str | None:
+    built = cargo_root() / "bin" / "librespot"
+    if built.exists() and os.access(built, os.X_OK):
+        return str(built)
+    return shutil.which("librespot")
+
+
+def build_state_file() -> Path:
+    return config_dir() / "speaker-build.json"
+
+
+def read_build() -> dict:
+    try:
+        return json.loads(build_state_file().read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def write_build(st: dict) -> None:
+    f = build_state_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(st))
+
+
+def _build_missing() -> list[str]:
+    need = [pkg for tool, pkg in BUILD_NEEDS.items() if not shutil.which(tool)]
+    if shutil.which("pkg-config"):
+        need += [pkg for lib, pkg in BUILD_HEADERS.items() if subprocess.run(["pkg-config", "--exists", lib]).returncode != 0]
+    else:
+        need += list(BUILD_HEADERS.values())
+    return sorted(set(need))
+
+
+def _rust_version() -> tuple:
+    m = re.search(r"rustc (\d+)\.(\d+)", _run(["rustc", "--version"]))
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+
+def _build(version: str, name: str) -> None:
+    st = {"state": "installing", "version": version, "started": time.time()}
+    write_build(st)
+    try:
+        missing = _build_missing()
+        if missing:
+            if not _pk("install", "x"):
+                raise ValueError("I can't install here yet: run the installer with --system once")
+            for pkg in missing:
+                st["step"] = f"installing {pkg} from Ubuntu's packages"
+                write_build(st)
+                code, out, err = _run_c(_pk("install", pkg), 900)
+                if pkg not in _apt_installed([pkg]):
+                    raise ValueError(f"{pkg} didn't install ({_clean((err or out).strip().splitlines()[-1] if (err or out).strip() else str(code))})")
+        if _rust_version() < RUST_MIN:
+            raise ValueError(f"Ubuntu's Rust here is {'.'.join(map(str, _rust_version()))}; librespot {version} needs "
+                             f"{'.'.join(map(str, RUST_MIN))} or newer")
+        root = cargo_root()
+        root.mkdir(parents=True, exist_ok=True)
+        st.update(state="building", step=f"compiling librespot {version} (10-20 minutes)")
+        write_build(st)
+        logf = config_dir() / "speaker-build.log"
+        env = {**os.environ, "CARGO_HOME": str(root / "home")}
+        with open(logf, "w") as out:
+            r = subprocess.run(["cargo", "install", "librespot", "--locked", "--version", version, "--no-default-features",
+                                "--features", LIBRESPOT_FEATURES, "--root", str(root)],
+                               stdout=out, stderr=subprocess.STDOUT, env=env, timeout=5400)
+        exe = root / "bin" / "librespot"
+        if r.returncode != 0 or not exe.exists():
+            tail = logf.read_text(errors="replace").strip().splitlines()[-3:] if logf.exists() else []
+            raise ValueError("the build failed: " + _clean(" ".join(tail))[:300])
+        said = subprocess.run([str(exe), "--version"], capture_output=True, text=True, timeout=20).stdout
+        if version not in said:
+            raise ValueError(f"the built librespot says it's {said.strip() or 'something else'}, not {version}")
+        SPEAKER.start(name)
+        st.update(state="done", step="ready", finished=time.time(), running=SPEAKER.running())
+    except Exception as exc:
+        st.update(state="failed", error=str(exc)[:400], finished=time.time())
+        log("speaker build:", exc)
+    write_build(st)
+
+
+def do_speaker_build(args: dict) -> dict:
+    if args.get("confirmed") is not True:
+        raise ValueError("building librespot needs his confirmation")
+    if IS_WINDOWS:
+        raise ValueError("on Windows, the Spotify app itself is the speaker: open it once on this computer")
+    version = str(args.get("version") or "")
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        raise ValueError("which librespot version? (Aurelia names it)")
+    if building():
+        return {**read_build(), "already": True}
+    name = " ".join(str(args.get("name") or "").split())[:60] or socket.gethostname()
+    threading.Thread(target=_build, args=(version, name), daemon=True).start()
+    time.sleep(0.5)
+    return read_build()
+
+
+def building() -> bool:
+    st = read_build()
+    return st.get("state") in ("installing", "building") and time.time() - float(st.get("started") or 0) < 5400
+
+
+def do_speaker_build_status(args: dict) -> dict:
+    return {**read_build(), "librespot": find_librespot(), "running": SPEAKER.running()}
+
+
 class Speaker:
     def __init__(self):
         self.proc: subprocess.Popen | None = None
@@ -1889,9 +2011,12 @@ class Speaker:
         return d
 
     def argv(self, exe: str, name: str) -> list[str]:
-        return [exe, "--name", name, "--cache", str(self.cache()), "--disable-audio-cache", "--bitrate", "320",
-                "--initial-volume", "70", "--enable-volume-normalisation",
-                "--device-type", "tv" if (SHELL and SHELL.running()) else "computer"]
+        out = [exe, "--name", name, "--cache", str(self.cache()), "--disable-audio-cache", "--bitrate", "320",
+               "--initial-volume", "70", "--enable-volume-normalisation",
+               "--device-type", "tv" if (SHELL and SHELL.running()) else "computer"]
+        if exe.startswith(str(cargo_root())):
+            out += ["--backend", "pulseaudio"]                 # how it was built here (PipeWire speaks it)
+        return out
 
     def running(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
@@ -1902,7 +2027,7 @@ class Speaker:
                 return True
             if IS_WINDOWS:
                 raise ValueError("on Windows, the Spotify app itself is the speaker: open it once on this computer")
-            exe = shutil.which("librespot")
+            exe = find_librespot()
             if not exe:
                 raise ValueError("librespot isn't installed here (it makes this computer a Spotify speaker)")
             now = time.time()
@@ -1913,19 +2038,34 @@ class Speaker:
                 self.proc.terminate()
             self.starts.append(now)
             kw = {} if IS_WINDOWS else {"start_new_session": True}
-            self.proc = subprocess.Popen(self.argv(exe, name), env=session_env(), stdin=subprocess.DEVNULL,
-                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True, **kw)
+            logf = config_dir() / "speaker.log"                # its own words, for when it won't start
+            with open(logf, "w") as out:
+                self.proc = subprocess.Popen(self.argv(exe, name), env=session_env(), stdin=subprocess.DEVNULL,
+                                             stdout=out, stderr=subprocess.STDOUT, close_fds=True, **kw)
             self.name = name
-            time.sleep(1.0)
+            time.sleep(1.5)
             if not self.running():
-                raise ValueError("my Spotify speaker didn't start here")
+                raise ValueError("my Spotify speaker didn't start here" + self.why(logf))
             log(f"Spotify speaker on as {name}")
             return True
+
+    @staticmethod
+    def why(logf: Path) -> str:
+        try:
+            lines = [x for x in logf.read_text(errors="replace").splitlines() if " ERROR " in x or " WARN " in x]
+        except OSError:
+            return ""
+        if not lines:
+            return ""
+        last = lines[-1].split("] ", 1)[-1]
+        if "Address family not supported" in " ".join(lines):
+            return " (its speaker discovery needs IPv6 turned on in this computer's network settings)"
+        return f" ({_clean(last)[:160]})"
 
     def supervise(self, name: str, stop: threading.Event) -> None:
         """Keeps it running (it's how Spotify finds this computer), quietly backing off if it can't."""
         while not stop.wait(15):
-            if not self.running() and shutil.which("librespot") and current_mode() != "exam":
+            if not self.running() and find_librespot() and current_mode() != "exam":
                 try:
                     self.start(name)
                 except ValueError as exc:
@@ -3921,7 +4061,8 @@ COMMANDS.update({"logins": do_logins, "sign_in": do_sign_in, "play": do_play, "p
                  "package_check_remove": do_package_check_remove, "package_install": do_package_install,
                  "package_remove": do_package_remove, "clipboard_get": do_clipboard_get,
                  "clipboard_set": do_clipboard_set, "mode": do_mode, "youtube_feed": do_youtube_feed,
-                 "spotify_speaker": do_spotify_speaker})
+                 "spotify_speaker": do_spotify_speaker, "speaker_build": do_speaker_build,
+                 "speaker_build_status": do_speaker_build_status})
 COMMANDS.update({"page_look": do_page_look, "page_click": do_page_click, "page_type": do_page_type,
                  "page_key": do_page_key, "page_scroll": do_page_scroll, "page_back": do_page_back,
                  "page_media": do_page_media, "page_clear": do_page_clear})
@@ -3967,8 +4108,8 @@ def after_hello(server: str, key: str, hello: dict) -> None:
 
 
 def maybe_update(server: str, key: str, want: dict) -> None:
-    """A newer agent is out: take it now, unless something is playing (then at the next chance)."""
-    if want.get("version") and want["version"] != VERSION and not player_busy():
+    """A newer agent is out: take it now, unless something is playing or building (then at the next chance)."""
+    if want.get("version") and want["version"] != VERSION and not player_busy() and not building():
         update(server, key, want)
 
 
@@ -4095,7 +4236,7 @@ def cmd_run() -> int:
         threading.Thread(target=live_loop, args=(server, key, SHELL.stop_event), daemon=True).start()
     if not cfg.get("shell"):                                  # a desktop someone games on (her shell isn't a desktop)
         threading.Thread(target=auto_gaming_loop, args=(threading.Event(),), daemon=True).start()
-    if not IS_WINDOWS and shutil.which("librespot"):          # this computer as a Spotify speaker, named after it
+    if not IS_WINDOWS and find_librespot():                   # this computer as a Spotify speaker, named after it
         try:
             SPEAKER.start(cfg.get("name") or socket.gethostname())
         except ValueError as exc:

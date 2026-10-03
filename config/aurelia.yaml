@@ -33,6 +33,7 @@ quasar:
   # exactly what's registered on that app. Sign in once at /quasar/spotify/login from one of your screens.
   spotify_client_id: "66b36ae7746e41308ecc47154b46c2b4"
   spotify_redirect_uri: "https://docker-home.tail0150f0.ts.net:8443/quasar/spotify/callback"
+  librespot_version: "0.8.0"   # a computer builds this with cargo where Ubuntu doesn't package librespot
 
 retention:
   # Saved result panels: full for hot_days, then a summary until warm_days,

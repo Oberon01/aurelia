@@ -9,6 +9,7 @@ tools:
   play:            { tier: act }         # play it full screen on one of your computers; checked with the player
   youtube:         { tier: read }        # your YouTube feeds and search, read on your computer with its own sign-in
   spotify:         { tier: act }         # your Spotify on your speakers; every change checked with Spotify itself
+  speaker:         { tier: act }      # build librespot from source on a computer (cargo): always asks you first
 
 rate_limit_per_minute: 60
 
