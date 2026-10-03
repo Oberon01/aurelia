@@ -173,3 +173,9 @@ def test_alias_must_point_at_a_real_device(home):
 def test_mismatch_suggests_the_likely_device(home):
     with pytest.raises(ToolError, match="Did you mean Front Door"):
         call(main.lock, {"name": "entry"})                 # only one lock: suggest it
+
+
+def test_every_tool_orbit_offers_is_one_it_accepts():
+    """What Orbit registers with the orchestrator and what /tools/<tool>/invoke runs are the same list."""
+    offered = {t["name"] for t in main.TOOLS_SPEC}
+    assert offered == set(main.TOOLS), f"offered but not run: {offered - set(main.TOOLS)}; run but not offered: {set(main.TOOLS) - offered}"

@@ -778,7 +778,7 @@ async def tv_discover(ctx: TaskContext) -> dict:
 TOOLS: dict[str, Callable[[TaskContext], Awaitable[dict]]] = {
     "status": status, "lock": lock, "unlock": unlock, "light": light, "thermostat": thermostat, "login": login,
     "alias": alias, "aliases": aliases, "forget_alias": forget_alias,
-    "tv_status": tv_status, "tv_power": tv_power, "tv_input": tv_input, "tv_app": tv_app,
+    "tv_status": tv_status, "tv_power": tv_power, "tv_input": tv_input, "tv_app": tv_app, "tv_play": tv_play,
     "tv_remote": tv_remote, "tv_mute": tv_mute, "tv_apps": tv_apps, "tv_inputs": tv_inputs, "tv_discover": tv_discover,
 }
 
