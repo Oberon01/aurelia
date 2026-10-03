@@ -113,6 +113,40 @@ def test_a_node_key_reaches_only_the_node_api_and_revoking_is_immediate(stack):
     assert check(orch, "/nodes/hello", key=key, method="POST").status_code == 401
 
 
+def test_a_workstation_and_its_window_are_approved_together(stack):
+    orch = stack["orch"]
+    r = httpx.post(f"{orch}/pair/request", json={"kind": "node", "name": "Desk", "info": {"os": "Windows 11", "window": True}})
+    p = r.json()
+    [item] = sql("SELECT id, title, effect FROM mailbox_items WHERE fingerprint=$1", f"device:{p['device_id']}")
+    assert item["title"] == "Desk wants to pair (with its Aurelia window)" and "window" in item["effect"]
+    httpx.post(f"{orch}/mailbox/{item['id']}/decide", json={"action": "approve"}).raise_for_status()
+    got = status(orch, p).json()
+    token = got["window_token"]
+    assert check(orch, "/view", key=got["key"]).status_code == 403                # the node key still can't be a display
+
+    w = httpx.get(f"{orch}/pair/window", params={"t": token, "app": "Desk"}, follow_redirects=False)
+    key = w.cookies.get("aurelia_key")
+    assert key and "url=/view?app=Desk" in w.text
+    ok = check(orch, "/mailbox/1/decide", cookie=key, method="POST")
+    [win] = sql("SELECT id, kind, name FROM devices WHERE kind='browser'")
+    assert ok.status_code == 200 and ok.headers["x-aurelia-device"] == str(win["id"]) and win["name"] == "Desk"
+
+    again = httpx.get(f"{orch}/pair/window", params={"t": token, "app": "Desk"}, follow_redirects=False)
+    assert "aurelia_key" not in again.cookies and "url=/view?app=Desk" in again.text   # once only; then the usual pairing
+    assert "aurelia_key" not in httpx.get(f"{orch}/pair/window", params={"t": "made-up"}).cookies
+
+    httpx.post(f"{orch}/devices/{p['device_id']}/revoke").raise_for_status()            # the computer goes, its window too
+    assert check(orch, "/view", cookie=key).status_code == 401
+
+
+def test_a_computer_without_a_window_gets_no_window(stack):
+    orch = stack["orch"]
+    p = pair(orch, kind="node", name="Server")
+    httpx.post(f"{orch}/mailbox/{card(p['device_id'])['id']}/decide", json={"action": "approve"}).raise_for_status()
+    assert "window_token" not in status(orch, p).json()
+    assert sql("SELECT id FROM devices WHERE kind='browser'") == []
+
+
 def test_devices_are_approved_one_at_a_time_and_can_be_declined(stack):
     orch = stack["orch"]
     a, b = pair(orch, name="One"), pair(orch, name="Two")

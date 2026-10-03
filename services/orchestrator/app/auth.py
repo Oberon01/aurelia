@@ -11,6 +11,9 @@ Getting a key (pairing):
      it — or running `./scripts/pair.sh K7P-4QX` on the server, which is how the
      very first device gets in — lets the device collect its key once.
   3. Browsers get the key as a cookie they can't read; nodes and terminals keep it.
+A computer that will have her window (a workstation) asks for it in the same request, so one
+approval covers both: the node collects, with its key, a one-time link that signs the window in
+(/pair/window). The node key itself can never make a browser key; only that approval does.
 Only a hash of each key is stored. Revoking a device (display or server) takes
 effect within KEY_CACHE_SECONDS everywhere, at once here.
 
@@ -50,8 +53,9 @@ CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"      # no 0/O, 1/I/L: read alo
 PENDING_MINUTES = 15                                    # a request not approved by then expires
 MAX_PENDING = 5                                         # at most this many waiting at once
 KEY_CACHE_SECONDS = 30
+WINDOW_DAYS = 30                                        # a window's one-time sign-in link, unused, expires
 SEEN_EVERY_SECONDS = 60
-PUBLIC = {"/pair", "/pair/request", "/pair/status", "/pair/screen", "/health", "/favicon.ico",
+PUBLIC = {"/pair", "/pair/request", "/pair/status", "/pair/screen", "/pair/window", "/health", "/favicon.ico",
           "/node/agent.py", "/node/guard.py", "/node/install-linux.sh", "/node/install-windows.ps1"}   # the node agent: code, no secrets
 SCOPES = {"node": ("/nodes/",), "terminal": ("/ask",)}  # prefixes; browser keys aren't limited
 
@@ -263,18 +267,25 @@ def _describe(kind: str, info: dict[str, Any]) -> str:
     return what + (f": {', '.join(str(b) for b in bits)}" if bits else "")
 
 
+def _effect(kind: str, info: dict[str, Any]) -> str:
+    if kind != "node":
+        return "It gets its own key to reach Aurelia, like this display. You can revoke it any time."
+    if info.get("window"):
+        return ("It gets its own key for the node connection, and my window on that computer is paired with it "
+                "(a display like this one). Revoking the computer revokes its window too.")
+    return "It gets its own key to reach Aurelia (only the node connection, nothing else)."
+
+
 async def _mailbox_card(request: Request, dev_id: int, kind: str, name: str, code: str, info: dict[str, Any]) -> None:
     from . import mailbox
     ev = [_describe(kind, info), f"Asked from {info['from']}" if info.get("from") else "", f"Code on its screen: {code}"]
     item = await db.pool().fetchval(
         "INSERT INTO mailbox_items (kind, fingerprint, source, title, summary, proposal, evidence, strength, confidence, "
         "effect, urgent) VALUES ('device', $1, 'aurelia', $2, $3, $4::jsonb, $5::jsonb, 1, 1, $6, true) RETURNING id",
-        f"device:{dev_id}", f"{name} wants to pair",
+        f"device:{dev_id}", f"{name} wants to pair" + (" (with its Aurelia window)" if kind == "node" and info.get("window") else ""),
         f"Approve only if {code} is the code showing on that device right now.",
         json.dumps({"device_id": dev_id, "name": name, "kind": kind, "code": code}),
-        json.dumps([e for e in ev if e]),
-        "It gets its own key to reach Aurelia" + (" (only the node connection, nothing else)." if kind == "node" else
-                                                   ", like this display. You can revoke it any time."))
+        json.dumps([e for e in ev if e]), _effect(kind, info))
     await db.pool().execute("UPDATE devices SET mailbox_item=$2 WHERE id=$1", dev_id, item)
     await mailbox.notify(request.app.state.redis)
 
@@ -298,7 +309,34 @@ async def pair_status(body: PairStatus, response: Response):
     if row["kind"] == "browser":
         set_cookie(response, key)
         return {"status": "approved", "name": row["name"]}
-    return {"status": "approved", "name": row["name"], "key": key, "device_id": row["id"]}
+    out = {"status": "approved", "name": row["name"], "key": key, "device_id": row["id"]}
+    if row["kind"] == "node" and _info(row).get("window"):
+        out["window_token"] = await _window_for(row)
+    return out
+
+
+def _info(row) -> dict[str, Any]:
+    v = row["info"]
+    if isinstance(v, str):
+        try:
+            v = json.loads(v or "{}")
+        except ValueError:
+            v = {}
+    return v if isinstance(v, dict) else {}
+
+
+async def _window_for(node) -> str:
+    """Her window on this computer: a display approved with the computer itself. It gets its key the
+    first time it opens, through a one-time link only the computer holds."""
+    info = _info(node)
+    token = secrets.token_urlsafe(24)
+    await db.pool().execute(
+        "INSERT INTO devices (kind, name, status, approved_at, claim_hash, info) "
+        "VALUES ('browser', $1, 'approved', now(), $2, $3::jsonb)",
+        node["name"], digest(token),
+        json.dumps({"node_id": str(node["id"]), "window": True, "os": info.get("os"), "hostname": info.get("hostname")}))
+    log.info("window for device %s (%s) approved with it", node["id"], node["name"])
+    return token
 
 
 def set_cookie(response: Response, key: str) -> None:
@@ -336,6 +374,23 @@ async def pair_screen(t: str, request: Request):
     to = f"/view?screen={got['node']}"
     out = HTMLResponse(f'<!doctype html><meta http-equiv="refresh" content="0;url={to}"><title>Aurelia</title>')
     set_cookie(out, key)
+    return out
+
+
+@router.get("/pair/window", include_in_schema=False)
+async def pair_window(t: str = "", app: str = ""):
+    """The computer's own window, opening for the first time: its one-time link becomes its key."""
+    to = "/view" + (f"?app={quote(app[:60], safe='')}" if app else "")
+    key = new_key()
+    ok = await db.pool().fetchval(
+        "UPDATE devices SET key_hash=$2, key_issued_at=now(), last_seen=now(), claim_hash=NULL "
+        "WHERE claim_hash=$1 AND kind='browser' AND status='approved' AND key_hash IS NULL AND info->>'window'='true' "
+        "AND approved_at > now() - make_interval(days => $3) RETURNING id", digest(t or "x"), digest(key), WINDOW_DAYS)
+    out = HTMLResponse(f'<!doctype html><meta http-equiv="refresh" content="0;url={to}"><title>Aurelia</title>',
+                       headers={"Cache-Control": "no-store"})
+    if ok:                                      # used or unknown: on to the view, which pairs it the usual way if needed
+        set_cookie(out, key)
+        log.info("window %s signed in", ok)
     return out
 
 
@@ -377,9 +432,9 @@ async def revoke(dev_id: int) -> dict[str, Any]:
         _cache.pop(row["key_hash"], None)
     _by_id.clear()                                                     # open connections notice within seconds
     screens = await db.pool().fetch(                                   # its screen goes with it
-        "UPDATE devices SET status='revoked', revoked_at=now() WHERE kind='screen' AND status='approved' "
-        "AND info->>'node_id' = $1 RETURNING key_hash", str(dev_id))
-    for s_ in screens:
+        "UPDATE devices SET status='revoked', revoked_at=now() WHERE (kind='screen' OR (kind='browser' AND "
+        "info->>'window'='true')) AND status='approved' AND info->>'node_id' = $1 RETURNING key_hash", str(dev_id))
+    for s_ in screens:                                                 # and so does its window
         if s_["key_hash"]:
             _cache.pop(s_["key_hash"], None)
     log.info("device %s (%s) revoked", row["id"], row["name"])

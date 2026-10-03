@@ -84,7 +84,9 @@ Invoke-Quiet $Py $Agent status | Out-Null
 if ($LASTEXITCODE -eq 0) {
   Write-Host "Already paired; the agent is updated."
 } else {
-  & $Py $Agent pair $Server --name $Name
+  $pairArgs = @("pair", $Server, "--name", $Name)
+  if ($Role -ne "presentation" -and $Role -ne "server") { $pairArgs += "--window" }   # her window, approved with it
+  & $Py $Agent @pairArgs
   if ($LASTEXITCODE -ne 0) { throw "Not paired, so nothing else was set up." }
 }
 if ($Role) { & $Py $Agent role $Role | Out-Null }
@@ -123,7 +125,13 @@ if ($Role -ne "presentation" -and $Role -ne "server") {
     if ($where -eq $menu) { $lnk.Hotkey = "CTRL+ALT+A" }
     $lnk.Save()
   }
-  Write-Host "Her window: Start menu or desktop 'Aurelia', or Ctrl+Alt+A. The first time, approve it in the mailbox."
+  Write-Host "Her window: Start menu or desktop 'Aurelia', or Ctrl+Alt+A."
+  if (Test-Path (Join-Path $env:APPDATA "aurelia-node\window")) {
+    Write-Host "Opening it now (it was approved with this computer)..."
+    Start-Process -FilePath $Pyw -ArgumentList "`"$Agent`" app" -WorkingDirectory $Dir
+  } else {
+    Write-Host "If it shows a code the first time, approve it in the mailbox."
+  }
 }
 
 Start-ScheduledTask -TaskName $TaskName

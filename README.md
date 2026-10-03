@@ -132,15 +132,20 @@ crash, and puts the old version back if an update doesn't reconnect. The log is
 `%APPDATA%\aurelia-node\agent.log`. A Start-menu folder "Aurelia" has the mode
 shortcuts. My player (mpv) isn't installed on Windows yet.
 
-**My window on your workstations (agent 0.6.5).** A Workstation or a laptop
+**My window on your workstations (agent 0.6.6).** A Workstation or a laptop
 gets an "Aurelia" app: on Windows in the Start menu and on the desktop
 (**Ctrl+Alt+A** opens it, or brings it to the front if it's already open), on
 Linux in the app list. It's me in my own window (Edge, Chrome or Chromium in app
 mode, with its own profile, not your browser's), so you don't need a browser tab.
-The first time it opens it shows a pairing code: approve it in the mailbox, once.
-After that it's a display named after the computer ("Desk"), so "send this to
-the desk" lands in it. From a terminal: `aurelia_node.py app`. Presentation and
-Server computers don't get it. Existing computers get it with the installer rerun.
+It's approved together with the computer: the pairing card says "Desk wants to
+pair (with its Aurelia window)", and that one approval covers both. The computer
+collects, with its own key, a one-time link that signs the window in the first
+time it opens (the Windows installer opens it for you); the node's key can't
+make a display key by itself. Revoking the computer revokes its window too. It's
+a display named after the computer ("Desk"), so "send this to the desk" lands
+in it. From a terminal: `aurelia_node.py app`. Presentation and Server computers
+don't get it. A computer paired before agent 0.6.6 gets the window with the
+installer rerun, and pairs it once with its own code.
 
 **Modes (agent 0.6.4).** *Gaming mode* ("gaming mode on the desk"): I keep out
 of the way while you play: only quick things (lock, sound, the clipboard) are

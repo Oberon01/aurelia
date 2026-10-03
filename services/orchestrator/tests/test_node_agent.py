@@ -1210,3 +1210,29 @@ def test_her_window_is_a_separate_app_window_named_after_this_computer(monkeypat
     assert argv[0] == "/usr/bin/chromium"
     assert argv[1] == "--app=https://aura.example:8443/view?app=Kentrell%27s%20laptop"
     assert f"--user-data-dir={tmp_path / 'app-profile'}" in argv                 # its own profile, not his browser's
+
+
+def test_her_window_signs_in_once_with_the_link_approved_with_this_computer(monkeypatch, tmp_path):
+    monkeypatch.setattr(agent, "config_dir", lambda: tmp_path)
+    agent.save_window_token("tok-123")
+    t = agent.take_window_token()
+    assert t == "tok-123" and agent.take_window_token() is None                     # used once, then gone
+    argv = agent.app_argv("/usr/bin/chromium", "https://aura.example:8443", "Desk", t)
+    assert argv[1] == "--app=https://aura.example:8443/pair/window?t=tok-123&app=Desk"
+
+
+def test_pairing_with_the_window_asks_for_it_and_keeps_its_link(monkeypatch, tmp_path):
+    monkeypatch.setattr(agent, "config_dir", lambda: tmp_path)
+    monkeypatch.setattr(agent, "machine_info", lambda: {"hostname": "desk", "os": "Windows"})
+    monkeypatch.setattr(agent.time, "sleep", lambda s: None)
+    sent = []
+
+    def call(server, path, body=None, key=None, timeout=10):
+        sent.append((path, body))
+        if path == "/pair/request":
+            return {"code": "ABC-DEF", "device_id": 7, "claim": "c", "expires_in": 60}
+        return {"status": "approved", "device_id": 7, "name": "Desk", "key": "aur_k", "window_token": "w1"}
+    monkeypatch.setattr(agent, "call", call)
+    assert agent.cmd_pair("https://a", "Desk", window=True) == 0
+    assert sent[0][1]["info"]["window"] is True
+    assert (tmp_path / "window").read_text().strip() == "w1" and (tmp_path / "key").read_text().strip() == "aur_k"

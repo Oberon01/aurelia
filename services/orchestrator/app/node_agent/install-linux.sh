@@ -55,7 +55,9 @@ done
 if python3 "$AGENT" status >/dev/null 2>&1; then
   echo "Already paired; the agent is updated."
 else
-  python3 "$AGENT" pair "$SERVER" --name "$NAME" </dev/null
+  WINDOW=()                                                       # her window, approved with it (not on a TV or a server)
+  [[ "$SHELL_MODE" != "on" && "$ROLE" != "presentation" && "$ROLE" != "server" ]] && WINDOW=(--window)
+  python3 "$AGENT" pair "$SERVER" --name "$NAME" "${WINDOW[@]}" </dev/null
 fi
 
 set_session() {    # the account service keeps its own copy, so ask it (editing its file gets overwritten)
@@ -227,7 +229,8 @@ Exec=python3 $AGENT app
 Icon=user-available
 Categories=Utility;
 DESK
-  echo "Her window: 'Aurelia' in your apps (pin it, or give it a shortcut in Settings > Keyboard). Approve it in the mailbox the first time."
+  echo "Her window: 'Aurelia' in your apps (pin it, or give it a shortcut in Settings > Keyboard)."
+  echo "It was approved with this computer if this install paired it; otherwise approve its code in the mailbox the first time."
 fi
 
 mkdir -p "$UNIT_DIR"

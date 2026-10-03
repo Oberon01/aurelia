@@ -58,7 +58,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.6.5"
+VERSION = "0.6.6"
 IS_WINDOWS = platform.system() == "Windows"
 EXIT_REVOKED = 3                                   # the service manager doesn't restart after this
 EXIT_UPDATED = 75                                  # restart me: a new version is in place
@@ -1675,8 +1675,34 @@ def _win_find_window(title: str) -> int | None:
     return found[0] if found else None
 
 
-def app_argv(browser: str, server: str, name: str) -> list[str]:
-    return [browser, f"--app={server.rstrip('/')}/view?app={urllib.parse.quote(name)}",
+def window_token_file() -> Path:
+    return config_dir() / "window"
+
+
+def save_window_token(token: str) -> None:
+    f = window_token_file()
+    fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as out:
+        out.write(token + "\n")
+    if not IS_WINDOWS:
+        os.chmod(f, 0o600)
+
+
+def take_window_token() -> str | None:
+    """The one-time link that signs her window in, approved with this computer; used once, then gone."""
+    f = window_token_file()
+    try:
+        token = f.read_text().strip()
+        f.unlink()
+    except OSError:
+        return None
+    return token or None
+
+
+def app_argv(browser: str, server: str, name: str, token: str | None = None) -> list[str]:
+    q = urllib.parse.quote(name)
+    first = f"/pair/window?t={urllib.parse.quote(token)}&app={q}" if token else f"/view?app={q}"
+    return [browser, f"--app={server.rstrip('/')}{first}",
             f"--user-data-dir={config_dir() / 'app-profile'}", "--window-size=520,900", "--no-first-run",
             "--no-default-browser-check"]
 
@@ -1694,7 +1720,7 @@ def cmd_app() -> int:
     if not browser:
         print("Her window needs Edge, Chrome or Chromium.")
         return 1
-    argv = app_argv(browser, cfg["server"], cfg.get("name") or socket.gethostname())
+    argv = app_argv(browser, cfg["server"], cfg.get("name") or socket.gethostname(), take_window_token())
     if IS_WINDOWS:
         subprocess.Popen(argv, close_fds=True, creationflags=0x00000008)   # DETACHED_PROCESS
     else:
@@ -3725,9 +3751,11 @@ def save(cfg: dict, key: str) -> None:
 
 # ---- commands ----------------------------------------------------------------------------------
 
-def cmd_pair(server: str, name: str) -> int:
+def cmd_pair(server: str, name: str, window: bool = False) -> int:
     server = server.rstrip("/")
     info = machine_info()
+    if window:
+        info["window"] = True                                # her window here is approved with it: one approval
     p = call(server, "/pair/request", {"kind": "node", "name": name or info["hostname"], "info": info})
     code = p["code"]
     print(f"\n  Approve this code in Aurelia's mailbox:\n\n      {code}\n\n"
@@ -3744,7 +3772,9 @@ def cmd_pair(server: str, name: str) -> int:
             continue                                     # a network blip; keep waiting
         if s["status"] == "approved":
             save({"server": server, "device_id": s["device_id"], "name": s["name"]}, s["key"])
-            print(f"  Paired as {s['name']}.")
+            if s.get("window_token"):
+                save_window_token(s["window_token"])
+            print(f"  Paired as {s['name']}." + (" My window here is paired too." if s.get("window_token") else ""))
             return 0
         if s["status"] in ("declined", "expired", "revoked"):
             print(f"  Not paired: the request was {s['status']}.")
@@ -3908,6 +3938,7 @@ def main(argv=None) -> int:
     p = sub.add_parser("pair", help="pair this computer with Aurelia")
     p.add_argument("server")
     p.add_argument("--name", default="")
+    p.add_argument("--window", action="store_true", help="also pair my window on this computer (one approval)")
     sub.add_parser("run", help="connect and wait for work (what the service runs)")
     sh = sub.add_parser("shell", help="make this computer's screen Aurelia (on) or not (off)")
     sh.add_argument("state", choices=["on", "off"])
@@ -3936,7 +3967,7 @@ def main(argv=None) -> int:
     if a.cmd == "login":
         return cmd_login(a.action, a.site, a.origin, a.start)
     if a.cmd == "pair":
-        return cmd_pair(a.server, a.name)
+        return cmd_pair(a.server, a.name, a.window)
     if a.cmd == "shell":
         return cmd_shell(a.state)
     if a.cmd == "role":
