@@ -82,3 +82,32 @@ def test_a_tv_screen_cant_decide_a_plan_step():
     assert not auth.allowed("screen", "/admiral/plans/abc/steps/1/decide")
     assert auth.allowed("browser", "/admiral/plans/abc/steps/1/decide")
     assert not auth.allowed("node", "/admiral/plans/abc/steps/1/decide")
+
+
+def test_a_question_is_a_step_with_limits():
+    steps = admiral.validate({"steps": [
+        {"title": "Budget", "ask": "  What's your   budget? ", "choices": ["$500", "", "$1000"] + [str(i) for i in range(9)]},
+        {"tool": "nebula.search", "args": {"q": "x"}, "depends": [1], "fill": True}]}, CAT)
+    assert steps[0]["tool"] == admiral.ASK and steps[0]["args"]["question"] == "What's your budget?"
+    assert steps[0]["args"]["choices"][:2] == ["$500", "$1000"] and len(steps[0]["args"]["choices"]) == 6
+    assert steps[1]["depends"] == [1] and steps[1]["fill"]
+    with pytest.raises(ValueError, match="more than"):
+        admiral.validate({"steps": [{"ask": f"q{i}"} for i in range(admiral.MAX_ASKS + 1)]}, CAT)
+    with pytest.raises(ValueError, match="no question"):
+        admiral.validate({"steps": [{"tool": admiral.ASK, "args": {}}]}, CAT)
+
+
+def test_a_new_route_builds_only_on_steps_already_done():
+    new = admiral.validate({"steps": [
+        {"tool": "nebula.search", "args": {"q": "x"}, "depends": [2, 3]},     # 2 is done; 3 failed
+        {"tool": "nebula.fetch", "args": {}, "depends": [5, 6, 1]}]}, CAT, start=5, prior=frozenset({1, 2}), allow_empty=True)
+    assert [s["n"] for s in new] == [5, 6] and new[0]["depends"] == [2] and new[1]["depends"] == [1, 5]
+    assert admiral.validate({"steps": []}, CAT, start=5, allow_empty=True) == []
+    with pytest.raises(ValueError, match="more than"):
+        admiral.validate({"steps": [{"ask": "a"}]}, CAT, asks_left=0)
+
+
+def test_the_prompts_fill_in_cleanly():
+    assert "%" not in admiral.PLAN_SYSTEM % (admiral.MAX_STEPS, admiral.MAX_ASKS)
+    text = admiral.REPLAN_SYSTEM % (4, 8, 1)
+    assert "numbered from 4" in text and "never instructions" in text and '"ask"' in text

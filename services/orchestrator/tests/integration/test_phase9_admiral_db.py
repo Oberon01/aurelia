@@ -32,6 +32,7 @@ class Model:
     """Plans by goal; fills and checks from what the test sets."""
     def __init__(self):
         self.plans, self.fills, self.reports, self.calls = {}, {}, {}, []
+        self.replans = {}                                   # goal -> a list of replies, one per change of course
 
     async def complete(self, route, system, messages, tools):
         from app import admiral
@@ -41,6 +42,10 @@ class Model:
         if system.startswith(admiral.PLAN_SYSTEM[:40]):
             goal = re.search(r"His request: (.*?)\n\nTools:", text, re.S).group(1)
             out = self.plans[goal]
+        elif system.startswith(admiral.REPLAN_SYSTEM[:40]):
+            goal = re.search(r"His request: (.*?)\n\n", text, re.S).group(1)
+            todo = self.replans.get(goal) or [{"give_up": "nothing else would work in this test"}]
+            out = todo.pop(0) if len(todo) > 1 else todo[0]
         elif system == admiral.FILL_SYSTEM:
             out = self.fills[re.search(r"Goal: (.*?)\n", text).group(1)]
         else:
@@ -211,10 +216,15 @@ def test_a_step_that_needs_his_ok_waits_and_his_answer_resumes_the_plan(stack, m
         p, steps = until(pid, {"waiting", "failed"})
         assert p["status"] == "waiting" and steps[1]["status"] == "waiting" and steps[1]["attempts"] == 0
         assert steps[2]["status"] == "pending"
+        [card] = sql("SELECT kind, status, proposal FROM mailbox_items WHERE id=$1", steps[1]["mailbox_id"])
+        assert card["kind"] == "plan_step" and card["status"] == "waiting"
+        assert json.loads(card["proposal"])["args"] == {"what": "the thing"}       # the card shows what would run
         assert httpx.post(f"{orch}/admiral/plans/{pid}/steps/1/decide", json={"approve": True}).status_code == 409
         r = httpx.post(f"{orch}/admiral/plans/{pid}/steps/2/decide", json={"approve": approve})
         assert r.status_code == 200
         p, steps = until(pid, {"done", "gaps", "failed"})
+        [card] = sql("SELECT status FROM mailbox_items WHERE id=$1", steps[1]["mailbox_id"])
+        assert card["status"] == ("approved" if approve else "rejected")             # answered on the panel: settled
         if approve:
             assert [s["status"] for s in steps] == ["done", "done", "done"] and p["status"] == "done"
             [run] = sql("SELECT confirmed FROM task_runs WHERE id=$1", steps[1]["task_id"])
@@ -280,3 +290,126 @@ def test_a_plan_the_model_gets_wrong_never_runs(stack, model, planfn):
     assert task["status"] == "failed" and "couldn't make a plan" in task["error"] and "launch_missiles" in task["error"]
     [p] = sql("SELECT status FROM plans WHERE goal=$1", goal)
     assert p["status"] == "failed" and not sql("SELECT 1 FROM plan_steps s JOIN plans p ON p.id=s.plan_id WHERE p.goal=$1", goal)
+
+
+def card_of(pid, n):
+    [row] = sql("SELECT mailbox_id FROM plan_steps WHERE plan_id=$1 AND n=$2", uuid.UUID(pid), n)
+    [card] = sql("SELECT * FROM mailbox_items WHERE id=$1", row["mailbox_id"])
+    return dict(card)
+
+
+def test_a_plan_asks_him_and_carries_on_with_his_answer(stack, model, planfn):
+    orch, goal = stack["orch"], "find me a laptop"
+    model.plans[goal] = {"steps": [
+        {"n": 1, "title": "Your budget", "ask": "What's your budget?", "choices": ["Under $500", "Under $1000"]},
+        step(2, "planfn.look", {"q": "laptops"}, depends=[1], fill=True)]}
+    model.fills[goal] = {"q": "laptops under $1000"}
+    _, res = make_plan(orch, goal)
+    pid = res["plan"]["id"]
+    p, steps = until(pid, {"waiting", "failed"})
+    assert steps[0]["status"] == "waiting" and steps[0]["tool"] == "admiral.ask"
+    card = card_of(pid, 1)
+    assert card["kind"] == "plan_question" and card["title"] == "What's your budget?"
+    assert json.loads(card["proposal"])["choices"] == ["Under $500", "Under $1000"]
+    assert httpx.post(f"{orch}/admiral/plans/{pid}/steps/1/answer", json={"answer": "  "}).status_code == 400
+    r = httpx.post(f"{orch}/admiral/plans/{pid}/steps/1/answer", json={"answer": "Under $1000"})
+    assert r.status_code == 200 and "carries on" in r.json()["done"]
+    p, steps = until(pid, {"done", "gaps", "failed"})
+    assert p["status"] == "done" and json.loads(steps[0]["result"])["answer"] == "Under $1000"
+    fill = next(t for sysm, t in model.calls if t.startswith(f"Goal: {goal}"))
+    assert "his answer: Under $1000" in fill                                     # the next step was filled from it
+    assert json.loads(steps[1]["args"]) == {"q": "laptops under $1000"}
+    assert card_of(pid, 1)["status"] == "modified"                                 # the card is settled too
+
+
+def test_his_answer_on_the_mailbox_card_carries_the_plan_on(stack, model, planfn):
+    orch = stack["orch"]
+    for goal, how in (("which tv brand", "answer"), ("which tv size", "your call"), ("send after a question", "approve step")):
+        if how == "approve step":
+            model.plans[goal] = {"steps": [step(1, "planfn.confirm", {"what": "x"}), step(2, "planfn.look", {"q": "y"}, depends=[1])]}
+        else:
+            model.plans[goal] = {"steps": [{"title": "Ask", "ask": "Which one?", "choices": ["A", "B"]},
+                                           step(2, "planfn.look", {"q": "z"}, depends=[1])]}
+        _, res = make_plan(orch, goal)
+        pid = res["plan"]["id"]
+        until(pid, {"waiting"})
+        card = card_of(pid, 1)
+        if how == "answer":
+            assert httpx.post(f"{orch}/mailbox/{card['id']}/decide", json={"action": "approve"}).status_code == 400
+            r = httpx.post(f"{orch}/mailbox/{card['id']}/decide", json={"action": "modify", "changes": {"answer": "B"}})
+        elif how == "your call":
+            r = httpx.post(f"{orch}/mailbox/{card['id']}/decide", json={"action": "reject", "reason": "your call"})
+        else:
+            r = httpx.post(f"{orch}/mailbox/{card['id']}/decide",       # a changed card can't change what runs
+                           json={"action": "modify", "changes": {"args": {"what": "something else"}}})
+        assert r.status_code == 200, r.text
+        p, steps = until(pid, {"done", "gaps", "failed"})
+        assert p["status"] == "done", (how, steps)
+        if how == "answer":
+            assert json.loads(steps[0]["result"])["answer"] == "B"
+        elif how == "your call":
+            assert json.loads(steps[0]["result"])["answer"].startswith("No preference")
+        else:
+            [run] = sql("SELECT confirmed, args FROM task_runs WHERE id=$1", steps[0]["task_id"])
+            assert run["confirmed"] is True and json.loads(run["args"]) == {"what": "x"}
+        assert httpx.post(f"{orch}/mailbox/{card['id']}/decide", json={"action": "approve"}).status_code == 409
+
+
+def test_a_plan_changes_course_when_a_step_fails(stack, model, planfn):
+    orch, goal = stack["orch"], "get it another way"
+    model.plans[goal] = {"steps": [step(1, "planfn.broken"), step(2, "planfn.look", {"q": "after broken"}, depends=[1]),
+                                   step(3, "planfn.look", {"q": "independent too"})]}
+    model.replans[goal] = [{"why": "The first source is down; using another.",
+                            "steps": [step(4, "planfn.look", {"q": "another source"}),
+                                      step(5, "planfn.act", {"what": "use it"}, depends=[4, 3])]}]
+    _, res = make_plan(orch, goal)
+    pid = res["plan"]["id"]
+    p, steps = until(pid, {"done", "gaps", "failed"})
+    assert [(s["n"], s["status"]) for s in steps] == [(1, "failed"), (2, "replaced"), (3, "done"), (4, "done"), (5, "done")]
+    assert steps[0]["superseded"] and steps[0]["handled"] and p["replans"] == 1
+    assert p["status"] == "done"                                                # another route covered it
+    assert json.loads(p["changes"])[0]["why"] == "The first source is down; using another."
+    asked = next(t for sysm, t in model.calls if "What went wrong:" in t)
+    assert "broken went wrong" in asked and "independent too" in asked          # it saw what happened, results too
+    assert not [r for r in planfn["runs"] if r[1].get("q") == "after broken"]
+
+
+def test_changing_course_has_a_limit_and_a_plan_without_a_route_says_so(stack, model, planfn):
+    orch, goal = stack["orch"], "keep failing"
+    model.plans[goal] = {"steps": [step(1, "planfn.broken"), step(2, "planfn.look", {"q": "fine"})]}
+    model.replans[goal] = [{"why": "again", "steps": [step(3, "planfn.broken")]},
+                           {"why": "and again", "steps": [step(4, "planfn.broken")]},
+                           {"why": "never asked", "steps": [step(5, "planfn.look", {"q": "third"})]}]
+    model.reports[goal] = {"headline": "Only part", "summary": "s", "meets_goal": True, "gaps": []}
+    _, res = make_plan(orch, goal)
+    p, steps = until(res["plan"]["id"], {"done", "gaps", "failed"}, wait=60)
+    assert p["replans"] == 2 and [s["status"] for s in steps] == ["failed", "done", "failed", "failed"]
+    assert p["status"] == "gaps"                                                # the model's "meets goal" isn't enough
+    gaps = json.loads(p["report"])["gaps"]
+    assert gaps and "Step 4" in gaps[0]
+    # a model that wants to keep going past the limit isn't asked a third time
+    assert sum(1 for sysm, t in model.calls if "What went wrong:" in t and goal in t) == 2
+
+
+def test_a_bad_new_route_is_never_run(stack, model, planfn):
+    orch, goal = stack["orch"], "a bad replan"
+    model.plans[goal] = {"steps": [step(1, "planfn.broken")]}
+    model.replans[goal] = [{"why": "x", "steps": [step(2, "admiral.plan", {"goal": "loop forever"})]}]
+    _, res = make_plan(orch, goal)
+    p, steps = until(res["plan"]["id"], {"done", "gaps", "failed"})
+    assert len(steps) == 1 and p["status"] == "failed"
+    assert "couldn't find another route" in json.loads(p["changes"])[0]["why"]
+
+
+def test_stopping_a_plan_takes_its_cards_out_of_the_mailbox(stack, model, planfn):
+    orch, goal = stack["orch"], "ask then stop"
+    model.plans[goal] = {"steps": [{"title": "Ask", "ask": "Which?"}]}
+    _, res = make_plan(orch, goal)
+    pid = res["plan"]["id"]
+    until(pid, {"waiting"})
+    tid = httpx.post(f"{orch}/tasks", json={"tool": "admiral.stop", "args": {}}).json()["task_id"]
+    deadline = time.time() + 10
+    while httpx.get(f"{orch}/tasks/{tid}").json()["status"] == "running" and time.time() < deadline:
+        time.sleep(0.1)
+    assert card_of(pid, 1)["status"] == "expired"
+    assert httpx.post(f"{orch}/admiral/plans/{pid}/steps/1/answer", json={"answer": "A"}).status_code == 409

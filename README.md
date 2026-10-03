@@ -653,6 +653,12 @@ of the month once reached (the fast path keeps working). Every request is
 logged in `ask_requests` and every model call in `llm_calls` with tokens and
 latency, for Libra and Parallax later.
 
+"How much of my budget is left" (or "check my monthly cap", "when does my cap
+reset") opens the budget panel: tokens used and left, today's use, the pace and
+where it's heading, which models used it, and when it resets. The month is
+yours: it starts at midnight on the 1st in your time zone (`digest.timezone`),
+not the server's UTC. This is my own cap, not your Anthropic credit balance.
+
 **Harder questions use a stronger model.** Questions that need real reasoning
 (why, explain, improve, recommend, compare, plan, "what's wrong") go to
 `llm.routes.reason` (Sonnet by default; about twice Haiku's price per token,
@@ -1262,10 +1268,22 @@ each one a call to one of her tools, and runs it.
   each step). "Show my plans" lists them; "stop the plan" stops it (running
   steps finish; nothing else starts).
 
-Planning, filling and checking are model calls, counted toward
+- **Questions.** When a plan needs something only you know (a budget you
+  didn't give, which of two things you meant), it asks: on the plan's panel and
+  as a mailbox card, with its choices as buttons or your own words. "Your call"
+  lets me decide. At most three questions a plan; your answer feeds the steps
+  after it. An OK for a change-tier step is a mailbox card too, and a card
+  can't change what the step runs.
+- **Changing course.** When a step still fails after its retry, or isn't
+  confirmed, the model sees what happened (and what's already done) and plans
+  another route for the steps that haven't run, checked like the first plan.
+  At most twice a plan; after that, or when there's no other route, the plan
+  finishes without it and the report says what's left open. Your "no" is never
+  routed around.
+
+Planning, filling, changing course and checking are model calls, counted toward
 `llm.monthly_token_cap`; when that's spent, a new plan says so instead of
-starting. Next: questions through the mailbox and replanning, the scheduling
-engine, and Morpho (plans kept as skills). Policy:
+starting. Next: the scheduling engine, and Morpho (plans kept as skills). Policy:
 `config/governance/functions/admiral.yaml`. Code:
 `services/orchestrator/app/admiral.py`.
 

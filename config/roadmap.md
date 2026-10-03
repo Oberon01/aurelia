@@ -77,7 +77,8 @@ Builds: planning and long tasks. A big request becomes a checked plan of governe
 Done when: "find the best computer within a $1000 budget" becomes a plan across Nebula, Kepler and Constellation that ends in a checked compare-and-contrast report; afterwards it's kept as a skill.
 Built so far:
 - Slice 1, plans that run: a request becomes a checked plan of up to 12 steps across my tools, each governed like a request of yours (a change-tier step waits on the plan's panel, showing exactly what it would run); independent steps run in parallel; a step is done only when its own result confirms it, and an unconfirmed one blocks what depends on it; a failed step is tried once more; plans survive a restart; "stop the plan" stops it; the end is a report checked against what you asked, with its gaps. The plan's panel shows it live, and your phone hears when it finishes or needs you.
-Next: questions through the mailbox and replanning; the scheduling engine; Morpho.
+- Slice 2, questions and changing course: a plan asks you what only you know (on its panel and as a mailbox card; "your call" lets me decide), and when a step still fails or isn't confirmed it plans another route for what hasn't run (at most twice), never around your "no". Also the budget panel: this month's model budget, its pace and when it resets, counted in your time zone.
+Next: the scheduling engine; Morpho.
 
 ## 10. Pulsar — Not started
 Builds: recurring automations on Admiral's scheduling engine, routines you set up in words, and initiative: deciding when something is worth interrupting you, by severity levels you set in governance.

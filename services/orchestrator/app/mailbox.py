@@ -89,6 +89,17 @@ def validate(kind: str, proposal: dict[str, Any]) -> dict[str, Any]:
             raise HTTPException(400, "The request doesn't say which device.")
         p["name"] = " ".join(str(p.get("name") or "").split())[:60]
         return p
+    if kind in ("plan_step", "plan_question"):   # a plan waiting for him (admiral.py)
+        try:
+            p["n"] = int(p.get("n"))
+            p["plan_id"] = str(p.get("plan_id") or "")
+        except (TypeError, ValueError):
+            raise HTTPException(400, "The card doesn't say which plan step.")
+        if kind == "plan_question":
+            p["answer"] = " ".join(str(p.get("answer") or "").split())[:500]
+            if not p["answer"]:
+                raise HTTPException(400, "Pick or type an answer.")
+        return p
     if kind == "about_you":                  # something Mnemosyne noticed about you
         from .profile import category
         fact = " ".join(str(p.get("fact") or "").split())
@@ -138,6 +149,8 @@ async def apply(conn, item_id: int, kind: str, p: dict[str, Any]) -> str:
         return "It will try the update again at its next check-in."
     if kind == "node_alert":
         return "Noted. I'll let you know again if it happens tomorrow or gets worse."
+    if kind in ("plan_step", "plan_question"):
+        return await _plan(p, approve=True)
     if kind == "about_you":
         from . import profile
         user = "owner"
@@ -168,6 +181,19 @@ async def apply(conn, item_id: int, kind: str, p: dict[str, Any]) -> str:
             p["tool"], json.dumps(p.get("args") or {}), json.dumps(p["schedule"]), item_id)
         return "Saved. It will run on schedule once Pulsar (Phase 10) is built."
     raise HTTPException(400, f"I don't know how to apply a '{kind}' proposal.")
+
+
+async def _plan(p: dict[str, Any], approve: bool) -> str:
+    """His answer on a plan's card: the plan carries on. The step itself (not the card) says what runs, so a
+    changed card can't change what a step does; only a question's answer comes from the card."""
+    from . import admiral
+    from .main import app as _app
+    try:
+        return await admiral.settle(_app, p["plan_id"], p["n"], approve, p.get("answer"), from_card=True)
+    except admiral.NotWaiting:
+        raise HTTPException(409, "That plan isn't waiting for this anymore.")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 # ---- reading ---------------------------------------------------------------------------
@@ -274,6 +300,8 @@ async def _decide(item_id: int, d: Decision, batch: bool = False) -> dict[str, A
             await auth.expire_old()                     # an expired request can't be approved
             if batch and d.action == "approve":
                 raise HTTPException(400, "Approve devices one at a time, after checking the code on each.")
+        if row["kind"] == "plan_question" and batch:
+            raise HTTPException(400, "Answer a plan's questions one at a time.")
     row = await pool.fetchrow("SELECT * FROM mailbox_items WHERE id=$1", item_id)
     if row is None:
         raise HTTPException(404, "No such mailbox item.")
@@ -292,6 +320,11 @@ async def _decide(item_id: int, d: Decision, batch: bool = False) -> dict[str, A
         if row["kind"] == "device":
             from . import auth
             await auth.decline(pool, proposal["device_id"])
+        if row["kind"] in ("plan_step", "plan_question"):          # "skip it" / "your call": the plan carries on
+            plan_done = await _plan(validate(row["kind"], {**proposal, "answer": "-"}), approve=False)
+            await pool.execute("UPDATE mailbox_items SET status='rejected', reason=$2, decided_at=now(), decided_by=$3, "
+                               "updated_at=now() WHERE id=$1", item_id, (d.reason or "").strip() or None, d.user)
+            return {"id": item_id, "status": "rejected", "done": plan_done}
         await pool.execute("UPDATE mailbox_items SET status='rejected', reason=$2, decided_at=now(), decided_by=$3, "
                            "updated_at=now() WHERE id=$1", item_id, (d.reason or "").strip() or None, d.user)
         done = ("Declined. That device isn't paired." if row["kind"] == "device" else

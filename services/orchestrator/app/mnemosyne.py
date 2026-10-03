@@ -115,6 +115,14 @@ TOOLS = [
                     "voice', and to ground any suggestion about what to build or improve.",
         input_schema={"type": "object", "properties": {"phase": {"type": "string"}}}),
     registry.ToolSpec(
+        name="budget", cancellable=False, display="panel", freshness_seconds=30,
+        description="Your monthly model budget (llm.monthly_token_cap): how much this month has used, what's left, the "
+                    "pace and where it's heading, which models used it, and when it resets (midnight on the 1st, his "
+                    "time). Use for 'how much of my budget is left', 'check my monthly cap', 'when does my cap reset', "
+                    "'token usage'. Always call it; never guess the numbers. It's your own cap, not his Anthropic "
+                    "credit balance (only Anthropic's console shows that).",
+        input_schema={"type": "object", "properties": {}}),
+    registry.ToolSpec(
         name="forget", cancellable=False, refreshes=["mnemosyne.facts", "mnemosyne.recall"],
         description="Forget a remembered fact (fact_id) or a past conversation (record_id), using ids from recall or "
                     "facts results. Forgetting a conversation also removes what was said in it from the log.",
@@ -323,8 +331,9 @@ async def forget_record(app, record_id: int, user: str) -> str:
 
 
 from . import history as _history  # noqa: E402  (her own releases and roadmap)
+from . import budget as _budget  # noqa: E402  (her monthly model budget)
 HANDLERS = {"recall": recall, "facts": facts, "remember": remember, "forget": forget,
-            "history": _history.history, "roadmap": _history.roadmap}
+            "history": _history.history, "roadmap": _history.roadmap, "budget": _budget.budget}
 
 
 @router.delete("/facts/{fact_id}")

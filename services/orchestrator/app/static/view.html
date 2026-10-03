@@ -311,6 +311,7 @@ details.mb-ev ul{margin:6px 0 0;padding-left:18px;font-family:var(--mono);font-s
 .mb-form label{font-family:var(--mono);font-size:12px;color:var(--ink-faint)}
 .mb-form input,.mb-form select{min-height:36px;padding:0 10px;border-radius:6px;border:1px solid var(--cyan-soft);background:rgba(4,7,11,.8);color:var(--ink-strong);font:inherit;font-size:14px;color-scheme:dark}
 .mb-form input[type=text]{flex:1;min-width:180px}
+.answer-in{min-height:36px;padding:0 10px;border-radius:6px;border:1px solid var(--cyan-soft);background:rgba(4,7,11,.8);color:var(--ink-strong);font:inherit;font-size:14px;color-scheme:dark;flex:1;min-width:160px}
 .mb-form input[type=checkbox]{min-height:0;width:18px;height:18px;padding:0;accent-color:var(--cyan)}
 .day{min-height:32px;min-width:44px;padding:0 8px;border-radius:6px;border:1px solid var(--cyan-soft);background:transparent;color:var(--ink-faint);font-family:var(--mono);font-size:12px}
 .day[aria-pressed=true]{background:var(--cyan);border-color:var(--cyan);color:var(--ground)}
@@ -1236,6 +1237,7 @@ function body(tool, d) {
   if (d.onscreen && typeof d.onscreen === "object") { wrap.append(onscreenView(d.onscreen, !!d.did)); used.add("onscreen"); used.add("headline"); }
   if (d.did && typeof d.did === "object") { wrap.prepend(didView(d.did)); used.add("did"); used.add("headline"); }
   if (d.plan && typeof d.plan === "object" && Array.isArray(d.plan.steps)) { wrap.append(planView(d.plan)); used.add("plan"); used.add("headline"); }
+  if (d.budget && typeof d.budget === "object" && typeof d.budget.cap === "number") { wrap.append(budgetView(d.budget)); used.add("budget"); used.add("headline"); }
   if (d.plans && Array.isArray(d.plans.items)) { wrap.append(plansView(d.plans)); used.add("plans"); used.add("headline"); }
   if (d.packages && Array.isArray(d.packages.items)) { wrap.append(packagesView(d.packages)); used.add("packages"); used.add("headline"); }
   if (d.mode && typeof d.mode === "object" && d.mode.node) {
@@ -1761,7 +1763,35 @@ function onscreenView(o, compact) {
 // Admiral: a plan's steps as they run, each marked from its own result; a step that waits for his OK
 // has its buttons here; the report (checked against what he asked) when it's done.
 const STEP_WORD = { pending: "to do", running: "running", waiting: "needs your OK", done: "done", unconfirmed: "not confirmed",
-                    failed: "failed", skipped: "skipped" };
+                    failed: "failed", skipped: "skipped", replaced: "replaced" };
+const PLAN_ASK = "admiral.ask";
+async function planPost(url, body) {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  let out = {}; try { out = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error(out.detail || "Couldn't send that; try again.");
+  return out;
+}
+// A plan's question: his choices as buttons, or his own words; "Your call" lets me decide.
+function planQuestion(p, st) {
+  const a = st.args || {}, box = el("div"); box.style.cssText = "display:flex;flex-direction:column;gap:6px;margin-top:4px";
+  box.append(el("div", null, a.question || ""));
+  const row = el("div"); row.style.cssText = "display:flex;flex-wrap:wrap;gap:6px";
+  const send = async body => {
+    box.querySelectorAll("button,input").forEach(x => x.disabled = true);
+    try { const out = await planPost(`/admiral/plans/${p.id}/steps/${st.n}/answer`, body);
+          box.replaceChildren(el("div", "more", out.done || "Thanks.")); }
+    catch (e) { box.querySelectorAll("button,input").forEach(x => x.disabled = false); say(e.message); }
+  };
+  (a.choices || []).forEach(c => { const b = el("button", "btn", c); b.type = "button"; b.addEventListener("click", () => send({ answer: c })); row.append(b); });
+  const mine = el("input", "answer-in"); mine.type = "text"; mine.placeholder = "Or say it in your words"; mine.setAttribute("aria-label", "Your answer");
+  const go = el("button", "btn", "Answer"); go.type = "button";
+  go.addEventListener("click", () => { if (mine.value.trim()) send({ answer: mine.value.trim() }); });
+  mine.addEventListener("keydown", e => { if (e.key === "Enter" && mine.value.trim()) send({ answer: mine.value.trim() }); });
+  const yours = el("button", "btn quiet", "Your call"); yours.type = "button"; yours.addEventListener("click", () => send({ your_call: true }));
+  const own = el("div"); own.style.cssText = "display:flex;flex-wrap:wrap;gap:6px"; own.append(mine, go, yours);
+  box.append(row, own);
+  return box;
+}
 function planView(p) {
   const box = el("div"); box.style.cssText = "display:flex;flex-direction:column;gap:10px";
   box.append(el("div", "facts", p.goal));
@@ -1774,27 +1804,30 @@ function planView(p) {
     }
   }
   if (p.error) box.append(el("div", "error", p.error));
+  (p.changes || []).forEach(c => box.append(el("div", "more", "Changed course: " + c)));
   const list = el("div", "procs");
   p.steps.forEach(st => {
     const row = el("div"); row.style.cssText = "display:flex;flex-direction:column;gap:2px;padding:6px 0;border-bottom:1px solid var(--cyan-soft)";
     const top = el("div"); top.style.cssText = "display:flex;justify-content:space-between;gap:8px";
     const t = el("span", null, `${st.n}. ${st.title}`); t.style.color = "var(--ink-strong)";
-    const w = el("span", "facts", STEP_WORD[st.status] || st.status);
+    const asking = st.tool === PLAN_ASK;
+    const w = el("span", "facts", asking && st.status === "waiting" ? "your answer" : STEP_WORD[st.status] || st.status);
+    if (st.status === "replaced") { t.style.opacity = ".5"; t.style.textDecoration = "line-through"; }
     if (["failed", "unconfirmed", "waiting"].includes(st.status)) w.style.color = "var(--warn, #e6b35f)";
     top.append(t, w); row.append(top);
-    if (st.note) row.append(el("div", "more", st.note));
-    if (st.status === "waiting") {
+    if (st.note && !(asking && st.status === "waiting")) row.append(el("div", "more", st.note));
+    if (asking && st.answer) row.append(el("div", "more", "You said: " + st.answer));
+    if (asking && st.status === "waiting") row.append(planQuestion(p, st));
+    else if (st.status === "waiting") {
       const what = Object.entries(st.args || {}).map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`).join(" · ");
       row.append(el("div", "facts", `${st.tool}${what ? " · " + what : ""}`));
       const btns = el("div"); btns.style.cssText = "display:flex;gap:8px;margin-top:4px";
       const go = (approve, b) => async () => {
         btns.querySelectorAll("button").forEach(x => x.disabled = true);
         try {
-          const r = await fetch(`/admiral/plans/${p.id}/steps/${st.n}/decide`, { method: "POST",
-                                headers: { "Content-Type": "application/json" }, body: JSON.stringify({ approve }) });
-          if (!r.ok) throw new Error();
-          btns.replaceChildren(el("div", "more", approve ? "Approved; running it." : "Skipped."));
-        } catch (e) { btns.querySelectorAll("button").forEach(x => x.disabled = false); say("Couldn't send that; try again."); }
+          const out = await planPost(`/admiral/plans/${p.id}/steps/${st.n}/decide`, { approve });
+          btns.replaceChildren(el("div", "more", out.done || (approve ? "Approved; running it." : "Skipped.")));
+        } catch (e) { btns.querySelectorAll("button").forEach(x => x.disabled = false); say(e.message); }
       };
       const ok = el("button", "btn", "Approve"), no = el("button", "btn quiet", "Skip it");
       ok.type = no.type = "button"; ok.addEventListener("click", go(true)); no.addEventListener("click", go(false));
@@ -1803,6 +1836,37 @@ function planView(p) {
     list.append(row);
   });
   box.append(list);
+  return box;
+}
+// My monthly model budget: how much is used, the pace, and when it starts over.
+function budgetView(b) {
+  const box = el("div"); box.style.cssText = "display:flex;flex-direction:column;gap:10px";
+  const bar = el("div", "vbar"), fill = el("span");
+  fill.style.width = Math.min(100, b.percent) + "%";
+  if (b.state !== "ok") fill.style.background = "var(--warn)";
+  bar.append(fill);
+  const line = el("div", "vline");
+  line.append(el("span", "vpos", `${b.used_text} of ${b.cap_text}`), el("span", "vflags", `${b.remaining_text} left`));
+  box.append(bar, line);
+  const facts = [
+    ["Resets", `${b.resets} (${b.resets_in})`],
+    ["Today", b.today_text],
+    b.pace_text ? ["Pace", b.pace_text] : null,
+    b.projected_text ? ["By month's end", `about ${b.projected_text}${b.projected_percent != null ? ` (${b.projected_percent}%)` : ""}`] : null,
+    b.hits_cap ? ["At this pace", `the cap is reached around ${b.hits_cap}`] : null,
+    b.local_calls ? ["Local model", `${b.local_calls} call${b.local_calls === 1 ? "" : "s"} (not counted)`] : null,
+  ].filter(Boolean);
+  const dl = el("div"); dl.style.cssText = "display:grid;grid-template-columns:max-content 1fr;gap:4px 14px";
+  facts.forEach(([k, v]) => { const kk = el("div", "facts", k); const vv = el("div", null, v);
+    if (k === "At this pace") vv.style.color = "var(--warn)"; dl.append(kk, vv); });
+  box.append(dl);
+  if ((b.models || []).length) {
+    const m = el("div", "procs");
+    b.models.forEach(x => { const r = el("div"); r.style.cssText = "display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px solid var(--cyan-soft)";
+      r.append(el("span", null, x.model), el("span", "facts", `${x.tokens_text} · ${x.share}% · ${x.calls} call${x.calls === 1 ? "" : "s"}`)); m.append(r); });
+    box.append(m);
+  }
+  if (b.note) box.append(el("div", "more", b.note));
   return box;
 }
 function plansView(ps) {
@@ -2206,7 +2270,7 @@ function linkView(link) {
 // ---------------------------------------------------------------- mailbox
 // Deciding happens only here, from your click: there is no tool for it, so
 // Aurelia can show you her ideas but never approve them herself.
-const KIND_LABEL = { device: "Waiting to pair", node_update: "Computers", node_alert: "Computers", about_you: "About you", automation: "Automations", criticality: "What matters most", retention: "Keep longer" };
+const KIND_LABEL = { plan_question: "Questions from plans", plan_step: "Plan steps waiting for you", device: "Waiting to pair", node_update: "Computers", node_alert: "Computers", about_you: "About you", automation: "Automations", criticality: "What matters most", retention: "Keep longer" };
 const CATEGORY_LABEL = { communication: "How to talk to you", mood: "Mood patterns", interests: "Interests", goals: "Goals",
   life: "What's going on", people: "People", learning: "What you know and are learning", rhythms: "Rhythms",
   work: "Work", preferences: "Preferences", general: "Other" };
@@ -2229,7 +2293,7 @@ function mailboxView(items) {
   for (const [kind, list] of Object.entries(groups).sort((a, b) => order(a[0]) - order(b[0]))) {
     const g = el("div", "mb-group");
     const head = el("div", "mb-ghead"); head.append(el("span", null, `${KIND_LABEL[kind] || kind} · ${list.length}`));
-    if (list.length > 1 && kind !== "device") {                // each device is approved on its own, code checked
+    if (list.length > 1 && kind !== "device" && kind !== "plan_question") {                // each device is approved on its own, code checked
       const all = el("button", "btn quiet", `Approve all ${list.length}`); all.type = "button";
       all.addEventListener("click", async () => {
         all.disabled = true;
@@ -2260,7 +2324,7 @@ function mailboxItem(item) {
   const c = el("div", "mb-item" + (item.urgent ? " urgent" : ""));
   const top = el("div", "mb-top");
   top.append(el("span", "mb-title", item.title),
-             el("span", "mb-conf", item.kind === "device" ? `asked ${item.age}` : ["node_update", "node_alert"].includes(item.kind) ? item.age
+             el("span", "mb-conf", item.kind === "device" ? `asked ${item.age}` : ["node_update", "node_alert", "plan_step", "plan_question"].includes(item.kind) ? item.age
                                  : `${Math.round(item.confidence * 100)}% sure · ${item.age}`));
   c.append(top);
   if (item.kind === "device") {
@@ -2274,7 +2338,7 @@ function mailboxItem(item) {
     const ul = el("ul"); item.evidence.forEach(e => ul.append(el("li", null, e))); ev.append(ul);
     c.append(ev);
   }
-  const eff = el("div", "mb-effect"); eff.append(el("b", null, "IF APPROVED  "), document.createTextNode(item.effect || ""));
+  const eff = el("div", "mb-effect"); eff.append(el("b", null, item.kind === "plan_question" ? "THEN  " : "IF APPROVED  "), document.createTextNode(item.effect || ""));
   c.append(eff);
 
   // "Change": edit the parts that make sense for this kind, then approve with your changes.
@@ -2324,10 +2388,21 @@ function mailboxItem(item) {
   const btns = el("div", "btns");
   const mk = (text, cls) => { const b = el("button", "btn " + (cls || ""), text); b.type = "button"; return b; };
   const approve = mk("Approve", "primary"), change = mk("Change"), later = mk("Not now", "quiet"), no = mk("Decline", "quiet");
+  if (item.kind === "plan_step") { no.textContent = "Skip it"; }
+  if (item.kind === "plan_question") {             // his answer: a choice, or his own words; "Your call" lets me decide
+    const q = el("div"); q.style.cssText = "display:flex;flex-wrap:wrap;gap:6px";
+    (p.choices || []).forEach(ch => { const b = mk(ch); b.addEventListener("click", () => act({ action: "modify", changes: { answer: ch } })); q.append(b); });
+    const mine = el("input", "answer-in"); mine.type = "text"; mine.placeholder = "Or say it in your words"; mine.setAttribute("aria-label", "Your answer");
+    const send = mk("Answer", "primary");
+    send.addEventListener("click", () => { if (mine.value.trim()) act({ action: "modify", changes: { answer: mine.value.trim() } }); });
+    const yours = mk("Your call", "quiet"); yours.addEventListener("click", () => act({ action: "reject", reason: "your call" }));
+    btns.replaceChildren(q, mine, send, later, yours);
+    btns.style.flexWrap = "wrap";
+  }
   if (item.kind === "node_update") { approve.textContent = "Retry"; no.textContent = "Leave it"; }
   if (item.kind === "node_alert") { approve.textContent = "Got it"; no.textContent = "Dismiss"; }
-  const noChange = item.kind === "node_update" || item.kind === "node_alert";
-  btns.append(approve, ...(noChange ? [] : [change]), ...(item.kind === "device" ? [] : [later]), no);   // a pairing request expires; no "not now"
+  const noChange = ["node_update", "node_alert", "plan_step"].includes(item.kind);   // a plan step runs as shown, or not at all
+  if (item.kind !== "plan_question") btns.append(approve, ...(noChange ? [] : [change]), ...(item.kind === "device" ? [] : [later]), no);   // a pairing request expires; no "not now"
   c.append(btns);
 
   const act = async (body, ok) => {
@@ -2341,7 +2416,7 @@ function mailboxItem(item) {
   });
   later.addEventListener("click", () => act({ action: "defer", days: 7 }));
   no.addEventListener("click", () => {
-    if (reasonForm.hidden) { reasonForm.hidden = false; form.hidden = true; no.textContent = "Decline for good"; reason.focus(); return; }
+    if (reasonForm.hidden && item.kind !== "plan_step") { reasonForm.hidden = false; form.hidden = true; no.textContent = "Decline for good"; reason.focus(); return; }
     act({ action: "reject", reason: reason.value });
   });
   return c;

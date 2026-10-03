@@ -11,6 +11,7 @@ tools:
   forget:   { tier: change }      # always asks you first: forgetting can't be undone
   history:  { tier: reference }   # her own releases: what each did, why, and what it lets her do
   roadmap:  { tier: reference }   # the build phases (config/roadmap.md)
+  budget:   { tier: reference }   # her monthly model budget: used, left, pace, when it resets
 
 rate_limit_per_minute: 30
 

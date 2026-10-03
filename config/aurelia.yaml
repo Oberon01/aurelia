@@ -129,6 +129,12 @@ fastpath:
       tool: constellation.notify
       args: { action: status }
       reply: "Here's where notifications are on."
+    # My monthly model budget (llm.monthly_token_cap): used, left, pace, and when it resets.
+    - name: budget
+      match: '^(?:(?:check|show(?: me)?|what(?:''s|s| is)|how(?:''s|s| is))\s+)?(?:my\s+|the\s+|your\s+)?(?:monthly\s+)?(?:token|model|ai|llm|claude|anthropic)\s+(?:cap|budget|usage|limit)(?:\s+(?:status|left|looking))?\??$|^(?:(?:check|show(?: me)?|what(?:''s|s| is))\s+)?(?:my\s+|the\s+|your\s+)?monthly\s+(?:cap|budget|limit|usage)\??$|^how (?:much|many tokens) (?:of (?:my|your|the) (?:monthly )?(?:token |model )?(?:budget|cap) )?(?:is left|(?:do|have) (?:i|we|you) (?:got )?(?:left|used))(?: this month)?\??$|^when (?:does|will) (?:my|the|your) (?:monthly )?(?:token |model )?(?:cap|budget|limit) (?:reset|refresh|renew|start over)\??$'
+      tool: mnemosyne.budget
+      args: {}
+      reply: "Here's this month's budget."
     # Admiral (Phase 9): a request that takes several steps becomes a checked plan (its panel shows it run).
     - name: plan-make
       match: '^(?:make|build|draw up|put together|come up with)\s+(?:me\s+)?a\s+plan\s+(?:to|for)\s+(?P<goal>.+?)\.?$|^plan(?::|\s+out|\s+how\s+to)\s+(?P<goal2>.+?)\.?$'

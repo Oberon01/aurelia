@@ -643,9 +643,13 @@ def _uses_cloud(cfg) -> bool:
 
 
 async def _cloud_tokens_this_month() -> int:
+    """Cloud tokens since midnight on the 1st in his time zone (the cap's month, as the budget panel shows it)."""
+    from datetime import datetime, timezone
+    from . import budget
+    start, _ = budget.month_bounds(datetime.now(timezone.utc), budget.tz_name())
     return await db.pool().fetchval(
         "SELECT COALESCE(SUM(input_tokens + output_tokens), 0) FROM llm_calls "
-        "WHERE provider = ANY($1::text[]) AND at >= date_trunc('month', now())", list(CLOUD_PROVIDERS)) or 0
+        "WHERE provider = ANY($1::text[]) AND at >= $2", list(CLOUD_PROVIDERS), start) or 0
 
 
 async def _log_llm_call(request_id: str, completion, started: float) -> None:

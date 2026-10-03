@@ -167,3 +167,18 @@ def test_plan_phrases_reach_admiral(said, tool, args):
         assert m is None or not m.pattern.tool.startswith("admiral.")
         return
     assert m and m.pattern.tool == tool and m.args == args
+
+
+@pytest.mark.skipif(not CONFIG.exists(), reason="the repo's config isn't in the test image")
+@pytest.mark.parametrize("said,hit", [
+    ("check my monthly cap", True), ("how much of my budget is left", True), ("when does my cap reset", True),
+    ("when does the monthly budget refresh?", True), ("token usage", True), ("what's my claude usage", True),
+    ("show me my model budget", True), ("how many tokens have I used this month", True), ("monthly limit", True),
+    ("what's my budget for groceries", False), ("check the budget spreadsheet", False),
+])
+def test_budget_phrases_open_the_budget_panel(said, hit):
+    from app import fastpath
+    from app.config import RuntimeConfig
+    cfg = RuntimeConfig.model_validate(yaml.safe_load(CONFIG.read_text()))
+    m = fastpath.match(said, cfg.fastpath.patterns)
+    assert bool(m and m.pattern.tool == "mnemosyne.budget") == hit, said
