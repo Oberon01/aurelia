@@ -18,8 +18,8 @@ ambient:
   enabled: true
   dim: 0.55
   quiet_hours: "23:00-07:00"
-  latitude:
-  longitude:
+  latitude: 32.933830
+  longitude: -97.080662
   units: fahrenheit
 
 quasar:

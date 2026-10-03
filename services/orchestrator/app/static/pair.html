@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pair with Aurelia</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#04121a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Aurelia">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet">
 <!--
@@ -87,9 +93,16 @@ function next() {
 
 function show(which) { ["ask", "waiting", "ended"].forEach(s => $(s).hidden = s !== which); }
 
-function save(p) { try { sessionStorage.setItem(KEY, JSON.stringify(p)); } catch (e) {} }
-function load() { try { return JSON.parse(sessionStorage.getItem(KEY) || "null"); } catch (e) { return null; } }
-function clear() { try { sessionStorage.removeItem(KEY); } catch (e) {} }
+// Kept across a reload: on iPhone, the home-screen app is often reloaded while you're away approving
+// its code (in Safari or on another device), and it must come back to the same code, not ask again.
+function save(p) { try { localStorage.setItem(KEY, JSON.stringify({ ...p, at: Date.now() })); } catch (e) {} }
+function load() {
+  try {
+    const p = JSON.parse(localStorage.getItem(KEY) || "null");
+    return p && Date.now() - (p.at || 0) < 15 * 60 * 1000 ? p : null;      // codes last 15 minutes
+  } catch (e) { return null; }
+}
+function clear() { try { localStorage.removeItem(KEY); } catch (e) {} }
 
 let timer = null;
 async function poll(p) {
@@ -138,8 +151,15 @@ $("name").value = (asked || "").slice(0, 60) || guessName().name;
 $("go").addEventListener("click", ask);
 $("name").addEventListener("keydown", e => { if (e.key === "Enter") ask(); });
 $("again").addEventListener("click", () => show("ask"));
-const pending = load();
-if (pending) poll(pending); else show("ask");
+// Already paired here (an app saved from this page, opened again): straight on to Aurelia.
+(async () => {
+  try {
+    const r = await fetch("/view/version", { cache: "no-store" });
+    if (r.ok) { clear(); location.replace(next()); return; }
+  } catch (e) {}
+  const pending = load();
+  if (pending) poll(pending); else show("ask");
+})();
 </script>
 </body>
 </html>
