@@ -68,6 +68,11 @@ def stack(tmp_path_factory):
     (tmp / "gov" / "functions" / "orbit.yaml").write_text("function: orbit\ntools:\n  tv_app: {tier: act}\n  tv_input: {tier: act}\n")
     (tmp / "gov" / "functions" / "quasar.yaml").write_text(
         "function: quasar\nrate_limit_per_minute: 1000\ntools:\n  find: {tier: reference}\n  play: {tier: act}\n  youtube: {tier: read}\n  spotify: {tier: act}\n  speaker: {tier: change}\n")
+    (tmp / "gov" / "functions" / "admiral.yaml").write_text(
+        "function: admiral\nrate_limit_per_minute: 1000\ntools:\n  plan: {tier: act}\n  plans: {tier: reference}\n  stop: {tier: act}\n")
+    (tmp / "gov" / "functions" / "planfn.yaml").write_text(          # Admiral's tests' stand-in function
+        "function: planfn\nrate_limit_per_minute: 1000\ntools:\n  look: {tier: reference}\n  act: {tier: act}\n"
+        "  flaky: {tier: act}\n  broken: {tier: act}\n  confirm: {tier: change}\n")
     (tmp / "gov" / "functions" / "constellation.yaml").write_text(
         "function: constellation\nrate_limit_per_minute: 1000\ntools:\n  devices: {tier: reference}\n  open: {tier: act}\n  apps: {tier: reference}\n  home: {tier: act}\n"
         "  look: {tier: read}\n  click: {tier: act}\n  type: {tier: act}\n  press: {tier: act}\n  scroll: {tier: act}\n"

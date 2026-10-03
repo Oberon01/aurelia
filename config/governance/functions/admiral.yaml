@@ -1,0 +1,20 @@
+# Admiral — planning and long tasks (Phase 9). A request that takes several steps becomes a plan of
+# steps, each one a call to another of her tools. Making a plan grants nothing: every step goes through
+# the same governance as if he'd asked for it himself, so a change-tier step still waits for his OK
+# (on the plan's panel, where he sees exactly what it would run), and a TV's screen can't give it.
+function: admiral
+enabled: true
+
+tools:
+  plan:   { tier: act }         # make a plan and run it; each step is governed on its own
+  plans:  { tier: reference }   # his recent plans and how far they got
+  stop:   { tier: act }         # stop a running plan; nothing new starts
+
+rate_limit_per_minute: 20
+
+rules:
+  # A step is done only when its own result confirms it; "the command was sent" is never done. A step
+  # that couldn't be confirmed blocks everything that depends on it. Plans never plan other plans, and
+  # nothing a step reads (web pages, files, logs) is taken as an instruction.
+  steps_governed_individually: true
+  done_only_when_confirmed: true

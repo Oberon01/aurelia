@@ -879,8 +879,10 @@ function loadNow() {
 }
 
 const dismissed = new Set();                    // release panels you closed: don't replay them
+const closedPlans = new Set();               // plan panels he closed: their updates don't reopen them
 function remove(rec, delay) {
   if (rec.tool === "chrysalis.release") dismissed.add(rec.taskId);
+  if (rec.tool === "admiral.plan" && delay === undefined) closedPlans.add(rec.taskId);
   if (rec.tool === "quasar.now" && rec.nowKey && rec.nowTitle && delay === undefined) nowDismissed.set(rec.nowKey, rec.nowTitle);
   if (rec === focused) setFocus(null);
   setTimeout(() => {
@@ -1233,6 +1235,8 @@ function body(tool, d) {
   }
   if (d.onscreen && typeof d.onscreen === "object") { wrap.append(onscreenView(d.onscreen, !!d.did)); used.add("onscreen"); used.add("headline"); }
   if (d.did && typeof d.did === "object") { wrap.prepend(didView(d.did)); used.add("did"); used.add("headline"); }
+  if (d.plan && typeof d.plan === "object" && Array.isArray(d.plan.steps)) { wrap.append(planView(d.plan)); used.add("plan"); used.add("headline"); }
+  if (d.plans && Array.isArray(d.plans.items)) { wrap.append(plansView(d.plans)); used.add("plans"); used.add("headline"); }
   if (d.packages && Array.isArray(d.packages.items)) { wrap.append(packagesView(d.packages)); used.add("packages"); used.add("headline"); }
   if (d.mode && typeof d.mode === "object" && d.mode.node) {
     const m = d.mode, box = el("div"); box.style.cssText = "display:flex;flex-direction:column;gap:8px";
@@ -1752,6 +1756,64 @@ function onscreenView(o, compact) {
   } else if (Array.isArray(o.items)) {
     box.append(el("div", "more", "Nothing to click in view."));
   }
+  return box;
+}
+// Admiral: a plan's steps as they run, each marked from its own result; a step that waits for his OK
+// has its buttons here; the report (checked against what he asked) when it's done.
+const STEP_WORD = { pending: "to do", running: "running", waiting: "needs your OK", done: "done", unconfirmed: "not confirmed",
+                    failed: "failed", skipped: "skipped" };
+function planView(p) {
+  const box = el("div"); box.style.cssText = "display:flex;flex-direction:column;gap:10px";
+  box.append(el("div", "facts", p.goal));
+  if (p.report) {
+    const r = p.report;
+    if (r.summary) { const sm = el("div", "lib-note", r.summary); sm.style.whiteSpace = "pre-wrap"; box.append(sm); }
+    if ((r.gaps || []).length) {
+      const g = el("div"); g.append(el("div", "facts", "Not covered"));
+      r.gaps.forEach(x => g.append(el("div", "more", "· " + x))); box.append(g);
+    }
+  }
+  if (p.error) box.append(el("div", "error", p.error));
+  const list = el("div", "procs");
+  p.steps.forEach(st => {
+    const row = el("div"); row.style.cssText = "display:flex;flex-direction:column;gap:2px;padding:6px 0;border-bottom:1px solid var(--cyan-soft)";
+    const top = el("div"); top.style.cssText = "display:flex;justify-content:space-between;gap:8px";
+    const t = el("span", null, `${st.n}. ${st.title}`); t.style.color = "var(--ink-strong)";
+    const w = el("span", "facts", STEP_WORD[st.status] || st.status);
+    if (["failed", "unconfirmed", "waiting"].includes(st.status)) w.style.color = "var(--warn, #e6b35f)";
+    top.append(t, w); row.append(top);
+    if (st.note) row.append(el("div", "more", st.note));
+    if (st.status === "waiting") {
+      const what = Object.entries(st.args || {}).map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`).join(" · ");
+      row.append(el("div", "facts", `${st.tool}${what ? " · " + what : ""}`));
+      const btns = el("div"); btns.style.cssText = "display:flex;gap:8px;margin-top:4px";
+      const go = (approve, b) => async () => {
+        btns.querySelectorAll("button").forEach(x => x.disabled = true);
+        try {
+          const r = await fetch(`/admiral/plans/${p.id}/steps/${st.n}/decide`, { method: "POST",
+                                headers: { "Content-Type": "application/json" }, body: JSON.stringify({ approve }) });
+          if (!r.ok) throw new Error();
+          btns.replaceChildren(el("div", "more", approve ? "Approved; running it." : "Skipped."));
+        } catch (e) { btns.querySelectorAll("button").forEach(x => x.disabled = false); say("Couldn't send that; try again."); }
+      };
+      const ok = el("button", "btn", "Approve"), no = el("button", "btn quiet", "Skip it");
+      ok.type = no.type = "button"; ok.addEventListener("click", go(true)); no.addEventListener("click", go(false));
+      btns.append(ok, no); row.append(btns);
+    }
+    list.append(row);
+  });
+  box.append(list);
+  return box;
+}
+function plansView(ps) {
+  const box = el("div", "procs");
+  if (!ps.items.length) box.append(el("div", "msg", "No plans yet."));
+  ps.items.forEach(x => {
+    const row = el("div"); row.style.cssText = "display:flex;flex-direction:column;gap:2px;padding:6px 0;border-bottom:1px solid var(--cyan-soft)";
+    const t = el("div", null, x.goal); t.style.color = "var(--ink-strong)";
+    row.append(t, el("div", "facts", `${x.status} · ${x.done} of ${x.steps} steps`));
+    box.append(row);
+  });
   return box;
 }
 function didView(d) {
@@ -2591,7 +2653,9 @@ function onEvent(ev) {
       if (rec.state === "running") renderProgress(rec, d);
       break;
     case "panel.result": {
+      if (!rec && d.plan && closedPlans.has(id)) return;           // he closed this plan's panel
       rec = rec || makePanel(id, ev.tool);
+      if (d.plan) { rec.closeAfter = null; clearTimeout(rec.timer); }  // a plan's panel stays until dismissed
       const wasShowing = !!rec.data && rec.taskId !== id;
       rec.state = "reading";
       rec.latestTask = id;
@@ -2636,6 +2700,7 @@ function onEvent(ev) {
         rec.state = "reading";
       }
       if (d.close_after !== undefined) rec.closeAfter = d.close_after;
+      if (rec.data && rec.data.plan) rec.closeAfter = null;
       if (d.status !== "failed" && rec.state === "reading" && rec.taskId === id) autoClose(rec);
       // An action finished: re-run the look-ups it changes that the merge didn't already update.
       if (d.status === "completed" && rec.taskId === id && (rec.refreshes || []).length)

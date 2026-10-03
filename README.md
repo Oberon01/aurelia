@@ -1229,6 +1229,46 @@ narrow, never widen, a function's policy.
 - **Functions register themselves** and heartbeat; a stopped function drops out
   after `registry.function_ttl_seconds`.
 
+## Admiral: plans (Phase 9)
+
+Admiral is part of Aurelia, not a separate service. A request that needs several
+of her tools in a row ("make a plan to find the best computer within a $1000
+budget", or any such request she judges needs one) becomes a plan of steps,
+each one a call to one of her tools, and runs it.
+
+- **Every step is governed on its own.** A step goes through the same task
+  path as a request of yours: governance, rate limits, the log (trigger
+  `admiral`). Making a plan grants nothing. A change-tier step waits: the plan's
+  panel shows exactly what it would run, with Approve and Skip it (a TV's screen
+  can't answer). The model is told not to plan buying, sending, posting,
+  deleting, installing or closing unless you asked for exactly that.
+- **Done means confirmed.** A step counts as done only from its own result: it
+  completed and nothing in it says it couldn't be confirmed (`unconfirmed`,
+  `verified: false`, `confirmed: false`). An unconfirmed step is not done:
+  nothing that depends on it runs, and the report says so. Never done because
+  a command was sent.
+- **Parallel where it can.** Steps whose dependencies are done run together
+  (three at a time). A step that needs earlier results gets its arguments from
+  the model, given those results, just before it runs.
+- **Retries and restarts.** A failed step is tried once more, then the plan
+  stops at it. Plans and steps live in Postgres (`plans`, `plan_steps`), so a
+  restart picks a running plan up where it was, reading the results of steps
+  that finished meanwhile instead of running them again.
+- **Checked against what you asked.** When the steps are done, the model checks
+  their results against your request and writes the report: the answer, where
+  it came from, and what it doesn't cover. Done with gaps is said as such.
+- **Panel and phone.** The plan's panel updates as it runs and stays until you
+  close it. Your phone hears once when a plan finishes or needs you (not for
+  each step). "Show my plans" lists them; "stop the plan" stops it (running
+  steps finish; nothing else starts).
+
+Planning, filling and checking are model calls, counted toward
+`llm.monthly_token_cap`; when that's spent, a new plan says so instead of
+starting. Next: questions through the mailbox and replanning, the scheduling
+engine, and Morpho (plans kept as skills). Policy:
+`config/governance/functions/admiral.yaml`. Code:
+`services/orchestrator/app/admiral.py`.
+
 ## Known gaps (by design, for later phases)
 
 - A task running inside a function container that gets replaced is cut off

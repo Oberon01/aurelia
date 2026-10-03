@@ -144,3 +144,26 @@ def test_library_phrases_reach_the_right_tool(said, tool, args):
         assert m is None or m.pattern.tool != "quasar.play", m.pattern.name
         return
     assert m and m.pattern.tool == tool and m.args == args, (said, m and m.pattern.name, m and m.args)
+
+
+@pytest.mark.skipif(not CONFIG.exists(), reason="the repo's config isn't in the test image")
+@pytest.mark.parametrize("said,tool,args", [
+    ("make a plan to find the best computer within a $1000 budget", "admiral.plan",
+     {"goal": "find the best computer within a $1000 budget"}),
+    ("put together a plan for my trip to Chicago", "admiral.plan", {"goal": "my trip to Chicago"}),
+    ("plan: compare the two cheapest NAS boxes", "admiral.plan", {"goal": "compare the two cheapest NAS boxes"}),
+    ("show my plans", "admiral.plans", {}),
+    ("how's the plan going?", "admiral.plans", {}),
+    ("stop the plan", "admiral.stop", {}),
+    ("cancel my plan", "admiral.stop", {}),
+    ("what's the plan for dinner", None, None),
+])
+def test_plan_phrases_reach_admiral(said, tool, args):
+    from app import fastpath
+    from app.config import RuntimeConfig
+    cfg = RuntimeConfig.model_validate(yaml.safe_load(CONFIG.read_text()))
+    m = fastpath.match(said, cfg.fastpath.patterns)
+    if tool is None:
+        assert m is None or not m.pattern.tool.startswith("admiral.")
+        return
+    assert m and m.pattern.tool == tool and m.args == args

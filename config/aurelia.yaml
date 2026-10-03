@@ -18,8 +18,8 @@ ambient:
   enabled: true
   dim: 0.55
   quiet_hours: "23:00-07:00"
-  latitude: 32.933830
-  longitude: -97.080662
+  latitude:
+  longitude:
   units: fahrenheit
 
 quasar:
@@ -129,6 +129,22 @@ fastpath:
       tool: constellation.notify
       args: { action: status }
       reply: "Here's where notifications are on."
+    # Admiral (Phase 9): a request that takes several steps becomes a checked plan (its panel shows it run).
+    - name: plan-make
+      match: '^(?:make|build|draw up|put together|come up with)\s+(?:me\s+)?a\s+plan\s+(?:to|for)\s+(?P<goal>.+?)\.?$|^plan(?::|\s+out|\s+how\s+to)\s+(?P<goal2>.+?)\.?$'
+      tool: admiral.plan
+      args: { goal: "{goal}{goal2}" }
+      reply: "Making a plan for that."
+    - name: plan-list
+      match: '^(?:show|list)\s+(?:me\s+)?(?:my\s+)?(?:recent\s+)?plans\??$|^what (?:are )?my plans\??$|^how(?:''s| is) (?:the|my) plan(?: going| doing)?\??$'
+      tool: admiral.plans
+      args: {}
+      reply: "Here are your plans."
+    - name: plan-stop
+      match: '^(?:stop|cancel|abort)\s+(?:the\s+|my\s+|that\s+)?plan\.?$'
+      tool: admiral.stop
+      args: {}
+      reply: "Stopping the plan."
     # Spotify (Quasar step 4). "Play X on spotify (on the TV)" is media-play-title (on: "spotify ...").
     - name: spotify-control
       match: '^(?P<action>pause|resume|skip|next|previous)(?: the)?(?: song| track| music)? (?:on|in) spotify$|^(?P<action2>pause|resume) spotify$'

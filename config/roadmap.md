@@ -2,7 +2,7 @@
 
 My build phases, in order: what each builds, when it counts as done, and where it stands. Kentrell
 and I work from this plan (the design doc has the full reasoning). It's written the way I'd say it
-to him: "I" is me, "you" is Kentrell. Phases are built in order, and a phase is done only after a
+to him: "I" is me, "you" is Kentrell. Phases are built in order (except Iris, which you moved to the end), and a phase is done only after a
 real-world check on your hardware. Keep it current: update a phase's status and its "built so far"
 list with the release that changes it.
 
@@ -38,7 +38,7 @@ Done when: a search returns result panels; a download reports progress in bytes.
 Builds: tool results kept in the conversation, numbered panels, focus on a panel, requests in parallel, day-long sessions, Mnemosyne (the record); then Kepler: cited research through Nebula, reading PDFs and Word files (from your downloads and file server), a library grouped into topics by meaning, explanations at your level, quizzes, notes in Trilium.
 Done when: "download the third one" and "summarize panel 2" work; a research question returns a cited summary, joins its topic, and can be recalled later by meaning.
 
-## 7. Constellation — In progress
+## 7. Constellation — Done
 Builds: per-device keys over Tailscale; my node agent on your computers, enrolled through the mailbox; the node as the machine's shell (Linux; Windows optional); content in a real browser; seeing and using the page on a screen; node health and diagnostics; power and presence; sound and media; moving things between devices; each display keeping its own panels; exam and gaming modes; app install and removal (always confirmed); the phone web app.
 Done when: "open YouTube on the living room TV" opens it on that computer, on the TV's input.
 Built so far:
@@ -64,16 +64,20 @@ Built so far:
 - Long answers open as a panel; a Raphael speaking style on trial.
 - I read my own releases and this roadmap, and harder questions (why, explain, improve, compare) use a stronger model.
 - The phone app: Aurelia installs to the home screen, and notifications (Web Push, encrypted end to end) for urgent mailbox items, long requests that finished, and things kept for the phone, only when it isn't already on screen.
-Still to do: the field check.
+Field check: done on your hardware (October 2026).
 Noted for later: media on Windows workstations (the Windows installer adds mpv and Node through winget, install cards use winget there, and a tap in a computer's own window plays on that computer).
 
-## 8. Iris — Not started
+## 8. Iris — Moved to the end (after 20), at your call
+Decided for when it's built: at most 10 looks per task before I stop and check with you; proven first on the Windows desk.
 Builds: sight. Models that take images (screenshots, photos, later cameras); pixel-level control of a whole desktop, not just my browser, on Linux and Windows. What's on screen is data; I never type passwords; anything that buys, sends or deletes waits for your OK. Later, with the GPU box: home cameras you choose, processed locally.
 Done when: on your Windows desktop I finish a task in an app I have no integration for, by seeing it, and a send button still asks first.
 
-## 9. Admiral — Not started
+## 9. Admiral — In progress
 Builds: planning and long tasks. A big request becomes a checked plan of governed steps that survives restarts, retries or replans, asks questions through the mailbox, runs independent steps in parallel, and checks the result against what you asked. Every step that acts on a device is validated by the state the device itself reports afterwards (the page among its pages, the program among its processes, the panel in the display's report), never by "the command was sent"; a step that can't be checked is marked unconfirmed, and the plan treats it as not done until it is. Also the scheduling engine, and Morpho (synthesis): plans that worked become reusable skills, skills learn their variations, and trust is earned for low-impact actions.
 Done when: "find the best computer within a $1000 budget" becomes a plan across Nebula, Kepler and Constellation that ends in a checked compare-and-contrast report; afterwards it's kept as a skill.
+Built so far:
+- Slice 1, plans that run: a request becomes a checked plan of up to 12 steps across my tools, each governed like a request of yours (a change-tier step waits on the plan's panel, showing exactly what it would run); independent steps run in parallel; a step is done only when its own result confirms it, and an unconfirmed one blocks what depends on it; a failed step is tried once more; plans survive a restart; "stop the plan" stops it; the end is a report checked against what you asked, with its gaps. The plan's panel shows it live, and your phone hears when it finishes or needs you.
+Next: questions through the mailbox and replanning; the scheduling engine; Morpho.
 
 ## 10. Pulsar — Not started
 Builds: recurring automations on Admiral's scheduling engine, routines you set up in words, and initiative: deciding when something is worth interrupting you, by severity levels you set in governance.

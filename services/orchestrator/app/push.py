@@ -235,7 +235,10 @@ async def task_done(app, task_id: str, tool: str, status: str, data: dict | None
     if device is None:
         return
     try:
-        secs = await db.pool().fetchval("SELECT duration_ms FROM task_runs WHERE id=$1", __import__("uuid").UUID(task_id))
+        row = await db.pool().fetchrow("SELECT duration_ms, trigger FROM task_runs WHERE id=$1", __import__("uuid").UUID(task_id))
+        secs = row["duration_ms"] if row else None
+        if row and row["trigger"] == "admiral":         # a plan's own steps: the plan tells him once, at its end
+            return
         if not secs or secs < TASK_PUSH_SECONDS * 1000:
             return
         if not await db.pool().fetchval("SELECT 1 FROM push_subscriptions WHERE device_id=$1", device):
