@@ -57,6 +57,8 @@ WINDOW_DAYS = 30                                        # a window's one-time si
 SEEN_EVERY_SECONDS = 60
 PUBLIC = {"/pair", "/pair/request", "/pair/status", "/pair/screen", "/pair/window", "/health", "/favicon.ico",
           "/quasar/spotify/callback",            # Spotify's redirect carries no cookie; a one-time state guards it
+          "/manifest.webmanifest", "/sw.js", "/icons/icon-192.png", "/icons/icon-512.png",   # the phone app's shell:
+          "/icons/icon-maskable-512.png", "/icons/apple-touch-icon.png",                      # code and pictures, no data
           "/node/agent.py", "/node/guard.py", "/node/install-linux.sh", "/node/install-windows.ps1"}   # the node agent: code, no secrets
 SCOPES = {"node": ("/nodes/",), "terminal": ("/ask",)}  # prefixes; browser keys aren't limited
 

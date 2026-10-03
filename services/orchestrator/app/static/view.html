@@ -4,6 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Aurelia</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#04121a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Aurelia">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet">
 <!--
@@ -458,6 +466,7 @@ button.gl:hover{color:var(--ink-strong)}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 /* ---- screen mode: a computer running her shell (the TV). Nobody types here; it shows her. ---- */
 body.screen .said,body.screen .slot,body.screen #form,body.screen .mailchip,body.screen .conn{display:none!important}
+@media (display-mode:standalone){.top{padding-top:max(16px,env(safe-area-inset-top))}.bottom{padding-bottom:max(12px,env(safe-area-inset-bottom))}}
 body.screen .top{justify-content:center}
 body.screen{grid-template-rows:auto minmax(0,1fr) auto}   /* no reply slot here: panels get its row */
 body.screen .floor{padding-top:32px}
@@ -503,6 +512,7 @@ body.screen .answer{font-size:22px}
   <div class="brand"><div class="mark">AURELIA</div><div class="clock" id="clock"></div><div class="weather" id="weather"></div></div>
   <div class="said" id="said"></div>
   <div class="right">
+    <button type="button" class="mailchip" id="notify" hidden>Notify me</button>
     <button type="button" class="mailchip" id="mailchip" hidden>0 for review</button>
     <div class="conn" id="conn" role="status"><span class="dot"></span><span id="connText">Connecting…</span></div>
   </div>
@@ -2671,6 +2681,42 @@ async function catchUpOnRelease() {
     events.forEach(e => { if (!(e.type === "panel.open" && panels.has(id))) onEvent(e); });
   } catch (e) { /* nothing to catch up on */ }
 }
+
+// ---------------------------------------------------------------- the phone app: notifications
+// Installed to the home screen, the view is an app (manifest + service worker). "Notify me" asks this
+// device for permission (it must be a tap) and gives the server this display's push subscription; the
+// server then tells it about urgent mailbox items, things it asked for that finished, and anything kept
+// for it, when it isn't on screen. The service worker only shows notifications; it caches nothing.
+const notifyBtn = document.getElementById("notify");
+const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+const iosBrowser = /iP(hone|ad|od)/.test(navigator.userAgent) && !standalone;
+let swReg = null;
+async function setupNotify() {
+  if (SCREEN || !("serviceWorker" in navigator)) return;
+  try { swReg = await navigator.serviceWorker.register("/sw.js", { scope: "/" }); } catch (e) { return; }
+  const can = "PushManager" in window && "Notification" in window;
+  if (!can) { if (iosBrowser) { notifyBtn.textContent = "Add to Home Screen"; notifyBtn.hidden = false; } return; }
+  const sub = await swReg.pushManager.getSubscription();
+  notifyBtn.hidden = !!sub && Notification.permission === "granted";
+  if (Notification.permission === "denied") notifyBtn.hidden = true;
+}
+notifyBtn.addEventListener("click", async () => {
+  if (!("PushManager" in window)) {
+    say("On iPhone, notifications come with the app: tap Share, then Add to Home Screen, and open Aurelia from there.");
+    return;
+  }
+  try {
+    if (await Notification.requestPermission() !== "granted") { say("Notifications are off for this device."); notifyBtn.hidden = true; return; }
+    const { key } = await (await fetch("/push/key")).json();
+    const raw = Uint8Array.from(atob(key.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((key.length + 3) % 4)), c => c.charCodeAt(0));
+    const sub = await swReg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: raw });
+    const r = await fetch("/push/subscribe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sub.toJSON()) });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.status);
+    notifyBtn.hidden = true;
+    say("Notifications are on for this device. Say \"send me a test notification\" to try it.");
+  } catch (e) { say("I couldn't turn notifications on here (" + (e.message || e) + ")."); }
+});
+setupNotify();
 
 function connect() {
   const conn = document.getElementById("conn");

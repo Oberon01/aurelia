@@ -114,6 +114,17 @@ fastpath:
       args: { name: "{name}" }
       reply: "Here's the {name} function."
     # YouTube (Quasar step 3): his feeds and search as posters; a tapped poster plays by its id.
+    # Notifications on his phone (the installed app).
+    - name: notify-test
+      match: '^(?:send me a |send a )?test notification|test (?:my )?notifications$'
+      tool: constellation.notify
+      args: { action: test }
+      reply: "Sending a test notification."
+    - name: notify-status
+      match: '^(?:which|what) devices (?:have|get) notifications(?: on)?\??$|^notification status$'
+      tool: constellation.notify
+      args: { action: status }
+      reply: "Here's where notifications are on."
     # Spotify (Quasar step 4). "Play X on spotify (on the TV)" is media-play-title (on: "spotify ...").
     - name: spotify-control
       match: '^(?P<action>pause|resume|skip|next|previous)(?: the)?(?: song| track| music)? (?:on|in) spotify$|^(?P<action2>pause|resume) spotify$'

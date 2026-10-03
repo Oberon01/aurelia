@@ -247,6 +247,10 @@ async def _finish(request: Request, task_id: str, tool: str, body: Result) -> No
     await publish(redis, PanelEvent(type="panel.close", task_id=task_id, tool=tool,
                                     data={"status": body.status, "has_result": bool(body.data),
                                           "error": body.error}, device=device))
+    if device is not None:                  # it took a while and he isn't looking: tell his phone
+        import asyncio
+        from . import push
+        asyncio.create_task(push.task_done(request.app, task_id, tool, body.status, body.data, body.error, device))
 
 
 async def _within_rate_limit(request: Request, function: str, per_minute: int) -> bool:

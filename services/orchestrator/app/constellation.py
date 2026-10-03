@@ -149,6 +149,12 @@ TOOLS = [
         input_schema={"type": "object", "properties": {"target": {"type": "string"}}},
         cancellable=False, freshness_seconds=10, display="panel"),
     registry.ToolSpec(
+        name="notify", description="Notifications on his devices: action test sends a test notification to the "
+                                   "display he's asking from (it must have turned notifications on with its 'Notify "
+                                   "me' button); action status lists which devices have notifications on.",
+        input_schema={"type": "object", "properties": {"action": {"type": "string", "enum": ["test", "status"]}}},
+        cancellable=False),
+    registry.ToolSpec(
         name="clear", description="Close panels on one of his displays (or a group: 'all presentation devices', "
                                   "'everywhere'): all of them, or the numbers in panels. Checked against what that "
                                   "display then reports. everything: also bring a computer running your shell back "
@@ -1322,6 +1328,12 @@ async def deliver(app, user: str, targets: list[dict], tool: str, args: dict, da
         if d["name"] in later and sender:
             await redis.set(SENT_KEY.format(tasks[d["name"]]), json.dumps({"sender": sender, "to": d["name"]}),
                             ex=QUEUE_HOURS * 3600)
+    kept_for = [d["id"] for d in targets if d["name"] in later]
+    if kept_for:                                                 # a phone in a pocket: tell it something's waiting
+        from . import push
+        asyncio.create_task(push.notify(app, f"From {sent_from}" if sent_from and sent_from != "another display" else "Waiting for you",
+                                        str(data.get("headline") or "Something was sent to this screen")[:200],
+                                        "/view", f"sent-{tasks[later[0]][:8]}", devices=kept_for))
     return {"shown": shown, "later": later, "tasks": tasks}
 
 
@@ -1395,6 +1407,28 @@ async def send(app, user: str, args: dict) -> dict:
     if notes:
         out["note"] = "; ".join(notes) + "."
     return out
+
+
+async def notify_tool(app, user: str, args: dict) -> dict:
+    from . import push
+    if str(args.get("action") or "test") == "status":
+        rows = await db.pool().fetch("SELECT d.name, s.last_ok, s.failures FROM push_subscriptions s JOIN devices d "
+                                     "ON d.id = s.device_id WHERE d.status='approved' ORDER BY d.name")
+        names = sorted({r["name"] for r in rows})
+        return {"headline": f"Notifications on {len(names)} device{'s' if len(names) != 1 else ''}",
+                "note": {"text": ", ".join(names) if names else "None yet: tap \"Notify me\" in Aurelia on your phone "
+                                                                  "(on iPhone, from the app on your home screen).", "url": ""}}
+    me = await _asker(args.get("_self"))
+    if me is None:
+        raise ValueError("Ask from the device you want the test on.")
+    if not await db.pool().fetchval("SELECT 1 FROM push_subscriptions WHERE device_id=$1", me):
+        raise ValueError("This device hasn't turned notifications on yet: tap \"Notify me\" at the top (on iPhone, in "
+                         "the app added to your home screen).")
+    n = await push.notify(app, "Aurelia", "Notifications work on this device.", "/view", "test", devices=[me],
+                          even_on_screen=True)
+    if not n:
+        raise ValueError("Its push service didn't take it, so no notification was sent. Tap \"Notify me\" again.")
+    return {"headline": "Sent a test notification", "did": {"node": "this device", "what": "Its push service accepted it"}}
 
 
 CLEAR_TRIES = (3.0, 3.0, 4.0)
@@ -1970,7 +2004,7 @@ async def live_frame(node_id: int, request: Request):
 HANDLERS = {"devices": devices, "open": open_, "apps": apps, "home": home, "look": look, "click": click, "type": type_,
             "press": press, "scroll": scroll, "back": back, "media": media, "submit": submit, "health": health,
             "list_processes": list_processes, "close_process": close_process, "kill_process": kill_process,
-            "sign_in": sign_in, "logins": logins, "send": send, "clear": clear, "screens": screens, "diagnose": diagnose_node,
+            "sign_in": sign_in, "logins": logins, "send": send, "clear": clear, "notify": notify_tool, "screens": screens, "diagnose": diagnose_node,
             "power": power, "restart": restart, "wake": wake, "sound": sound, "watch": watch,
             "install": install, "install_package": install_package, "uninstall": uninstall, "remove_package": remove_package,
             "clipboard": clipboard, "copy": copy, "paste": paste, "mode": mode}
@@ -2033,7 +2067,7 @@ async def _run(app, tool: str, task_id: str, args: dict) -> None:
     from . import tasks
     try:
         row = await db.pool().fetchrow("SELECT user_id FROM task_runs WHERE id=$1", uuid.UUID(task_id))
-        if tool in ("send", "power", "restart", "wake", "paste"):
+        if tool in ("send", "power", "restart", "wake", "paste", "notify"):
             args = {**args, "_self": task_id}               # who's asking: this task's display
         data = await HANDLERS[tool](app, row["user_id"] if row else "owner", args)
         result = tasks.Result(status="completed", data=data)

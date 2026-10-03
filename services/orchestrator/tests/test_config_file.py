@@ -116,6 +116,8 @@ def test_health_phrases_reach_the_right_tool(said, tool, args):
     ("what's playing on spotify", "quasar.spotify", {"action": "now"}),
     ("spotify volume 40", "quasar.spotify", {"action": "volume", "level": "40"}),
     ("my spotify speakers", "quasar.spotify", {"action": "devices"}),
+    ("send me a test notification", "constellation.notify", {"action": "test"}),
+    ("which devices have notifications on", "constellation.notify", {"action": "status"}),
     ("play the album Discovery", "quasar.play", {"what": "the album Discovery", "on": ""}),
     ("play", "constellation.media", {"action": "play", "target": ""}),
     ("pause the video on the tv", "constellation.media", {"action": "pause", "target": "tv"}),

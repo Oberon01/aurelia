@@ -97,6 +97,30 @@ Open that address on any device in your tailnet and pair it. The SSH tunnel
 (`ssh -L 8080:localhost:8080 server`, then `http://localhost:8080`) keeps
 working too; it's just another browser to pair.
 
+## The phone app and notifications
+
+Aurelia installs as an app on your phone: open it in Safari (iPhone) or Chrome
+(Android), then Share > **Add to Home Screen** (Android: Install app). It opens
+full screen with its own icon. On iPhone, the home-screen app keeps its own
+sign-in, separate from Safari's, so it pairs once more the first time you open
+it: approve its code in the mailbox.
+
+Tap **Notify me** at the top (on iPhone, only inside the home-screen app; Apple
+allows notifications nowhere else) and allow it. From then on your phone hears,
+when Aurelia isn't already open and on its screen:
+
+- a new urgent mailbox item (a device asking to pair, a computer that needs you)
+- something you asked from the phone that took a while and is done, or failed
+- something sent to the phone that's waiting for it
+
+"Send me a test notification" checks it; "which devices have notifications on"
+lists them. What's sent is encrypted for that one phone (Web Push, RFC 8291), so
+Apple's or Google's push service carries it without being able to read it, and
+signed with Aurelia's own key (made once, kept on the server). The server only
+ever posts to the real push services. The app's service worker shows
+notifications and nothing else: it caches nothing, so the app is always the
+live view.
+
 ## Constellation: her computers
 
 A computer running her **node agent** is one she can act on: open a page or an

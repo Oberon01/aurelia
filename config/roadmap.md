@@ -63,7 +63,9 @@ Built so far:
 - No ghost confirmations: sends are tried three times and confirmed only by the display's own report (and you hear when a kept one finally shows); opening a page or an app, going home and the clipboard are checked on the computer itself, and anything I couldn't see happen is called "asked", not "done".
 - Long answers open as a panel; a Raphael speaking style on trial.
 - I read my own releases and this roadmap, and harder questions (why, explain, improve, compare) use a stronger model.
-Still to do: the phone web app with push notifications, and the field check.
+- The phone app: Aurelia installs to the home screen, and notifications (Web Push, encrypted end to end) for urgent mailbox items, long requests that finished, and things kept for the phone, only when it isn't already on screen.
+Still to do: the field check.
+Noted for later: media on Windows workstations (the Windows installer adds mpv and Node through winget, install cards use winget there, and a tap in a computer's own window plays on that computer).
 
 ## 8. Iris — Not started
 Builds: sight. Models that take images (screenshots, photos, later cameras); pixel-level control of a whole desktop, not just my browser, on Linux and Windows. What's on screen is data; I never type passwords; anything that buys, sends or deletes waits for your OK. Later, with the GPU box: home cameras you choose, processed locally.

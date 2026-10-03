@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
-from . import (ambient, assistant, auth, constellation, quasar, db, digest, glance, learning, llm_api, mailbox, memory, mnemosyne,
+from . import (ambient, assistant, auth, constellation, push, quasar, db, digest, glance, learning, llm_api, mailbox, memory, mnemosyne,
                nodes, registry, releases, tasks)
 from .config import ConfigStore
 from .events import CHANNEL
@@ -40,6 +40,7 @@ async def lifespan(app: FastAPI):
     mnemo = asyncio.create_task(mnemosyne.register_loop(app))
     stars = asyncio.create_task(constellation.register_loop(app))
     media = asyncio.create_task(quasar.register_loop(app))
+    pushes = asyncio.create_task(push.mailbox_loop(app))
     log.info("orchestrator ready")
     try:
         yield
@@ -54,6 +55,7 @@ async def lifespan(app: FastAPI):
         mnemo.cancel()
         stars.cancel()
         media.cancel()
+        pushes.cancel()
         await db.close()
         await app.state.redis.aclose()
         log.info("orchestrator stopped")
@@ -75,6 +77,7 @@ app.include_router(auth.router)
 app.include_router(constellation.router)
 app.include_router(nodes.router)
 app.include_router(quasar.router)
+app.include_router(push.router)
 app.include_router(quasar.node_router)
 
 
@@ -102,6 +105,40 @@ async def view(request: Request):
     if key and await auth.device_for(key):
         auth.set_cookie(out, key)              # a paired browser stays paired as long as it's used
     return out
+
+
+# ---- the phone app: installable (manifest, icons) and its service worker (notifications only) ---------
+
+STATIC = Path(__file__).parent / "static"
+MANIFEST = {"name": "Aurelia", "short_name": "Aurelia", "id": "/view", "start_url": "/view", "scope": "/",
+            "display": "standalone", "background_color": "#04121a", "theme_color": "#04121a",
+            "icons": [{"src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png"},
+                      {"src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png"},
+                      {"src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}]}
+ICONS = {"icon-192.png", "icon-512.png", "icon-maskable-512.png", "apple-touch-icon.png"}
+
+
+@app.get("/manifest.webmanifest", include_in_schema=False)
+async def manifest():
+    from fastapi.responses import JSONResponse
+    return JSONResponse(MANIFEST, media_type="application/manifest+json", headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/sw.js", include_in_schema=False)
+async def service_worker():
+    from fastapi.responses import Response
+    return Response((STATIC / "sw.js").read_text(encoding="utf-8"), media_type="text/javascript",
+                    headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
+
+
+@app.get("/icons/{name}", include_in_schema=False)
+async def icon(name: str):
+    from fastapi import HTTPException
+    from fastapi.responses import Response
+    if name not in ICONS:
+        raise HTTPException(404)
+    return Response((STATIC / "icons" / name).read_bytes(), media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=604800"})
 
 
 @app.get("/view/version", include_in_schema=False)
