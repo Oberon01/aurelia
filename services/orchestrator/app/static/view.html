@@ -797,7 +797,8 @@ function reportScreen() {
     .map(p => ({ n: p.num, title: panelTitle(p), headline: p.headline || null, tool: p.tool, queued: !!p.queued,
                  tasks: [...(ids.get(p) || []), p.taskId, p.latestTask].filter(Boolean) }));
   window.fetch("/view/screen", { method: "POST", headers: { "Content-Type": "application/json" },
-                                 body: JSON.stringify({ panels: list, visible: document.visibilityState === "visible" }) })
+                                 body: JSON.stringify({ panels: list, visible: document.visibilityState === "visible",
+                                                        app: matchMedia("(display-mode: standalone)").matches || navigator.standalone === true }) })
     .catch(() => {});
 }
 setInterval(reportScreen, 60000);

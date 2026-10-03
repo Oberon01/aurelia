@@ -83,6 +83,8 @@ function guessName() {
            : /Mac OS X/.test(ua) ? "Mac" : /Linux/.test(ua) ? "Linux" : "";
   const br = /Edg\//.test(ua) ? "Edge" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome"
            : /Safari\//.test(ua) ? "Safari" : "Browser";
+  const app = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  if (app) return { os, browser: "app", name: os === "iPhone" ? "iPhone" : os ? `Aurelia on ${os}` : "Aurelia app" };
   return { os, browser: br, name: os ? `${br} on ${os}` : br };
 }
 

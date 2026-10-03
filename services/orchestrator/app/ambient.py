@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 import httpx
 from fastapi import APIRouter, Request
 
-from . import auth
+from . import auth, db
 
 log = logging.getLogger("aurelia.ambient")
 router = APIRouter(tags=["ambient"])
@@ -107,6 +107,11 @@ async def report_screen(request: Request):
                        "tasks": [str(t)[:40] for t in (p.get("tasks") or [])[:20]]})
     report = {"panels": panels, "visible": body.get("visible") is not False, "at": round(datetime.now().timestamp(), 3)}
     redis = request.app.state.redis
+    if body.get("app") is True and not await redis.get(f"aurelia:display:{dev['id']}:app"):
+        # The home-screen app: say so on the devices panel ("phone app"), once.
+        await db.pool().execute("UPDATE devices SET info = info || jsonb_build_object('app', true, 'browser', 'app') "
+                                "WHERE id=$1 AND kind='browser'", dev["id"])
+        await redis.set(f"aurelia:display:{dev['id']}:app", "1", ex=86400)
     await redis.set(SCREEN_REPORT.format(dev["id"]), json.dumps(report), ex=REPORT_SECONDS)
     if report["visible"]:                                    # something kept for this display is on it at last
         from .constellation import SENT_KEY

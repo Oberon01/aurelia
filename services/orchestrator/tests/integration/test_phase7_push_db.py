@@ -97,3 +97,17 @@ def test_his_phone_hears_what_finished_a_test_and_urgent_mailbox_items(stack, mo
     # A new urgent mailbox item (a device asking to pair) reaches the phone.
     httpx.post(f"{orch}/pair/request", json={"kind": "node", "name": "Garage PC"}).raise_for_status()
     assert wait_for(lambda: any("Garage PC wants to pair" in m["title"] and u == "high" for d, m, u in sent), 25), sent
+
+
+def test_the_home_screen_app_is_labelled_a_phone_app(stack):
+    from app import auth
+    orch = stack["orch"]
+    phone = device("Safari on iPhone", {"os": "iPhone", "browser": "Safari"})
+    auth._by_id.clear()
+    httpx.post(f"{orch}/view/screen", headers={"X-Aurelia-Device": str(phone)},
+               json={"panels": [], "visible": True, "app": True}).raise_for_status()
+    [row] = sql("SELECT info FROM devices WHERE id=$1", phone)
+    info = json.loads(row["info"]) if isinstance(row["info"], str) else row["info"]
+    assert info["app"] is True and info["browser"] == "app"
+    listed = next(d for d in httpx.get(f"{orch}/devices").json()["devices"] if d["id"] == phone)
+    assert listed["app"] is True
