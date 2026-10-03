@@ -71,6 +71,10 @@ def test_nothing_gets_in_without_a_key(stack):
     assert check(orch, "/mailbox/1/decide", key="aur_made_up", method="POST").status_code == 401
     for public in ("/pair", "/pair/request", "/pair/status", "/health"):
         assert check(orch, public).status_code == 200
+    assert check(orch, "/quasar/spotify/callback").status_code == 200              # Spotify's redirect has no cookie
+    r = httpx.get(f"{orch}/quasar/spotify/callback", params={"code": "x", "state": "made-up"})
+    assert r.status_code == 400 and "aurelia_key" not in r.cookies                    # but it does nothing without a state
+    assert check(orch, "/quasar/spotify/login", html=True).status_code == 401         # signing in starts from a paired screen
     assert "Pair this device" in httpx.get(f"{orch}/pair").text
 
 

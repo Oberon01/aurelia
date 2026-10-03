@@ -58,7 +58,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.7.0"
+VERSION = "0.7.1"
 IS_WINDOWS = platform.system() == "Windows"
 EXIT_REVOKED = 3                                   # the service manager doesn't restart after this
 EXIT_UPDATED = 75                                  # restart me: a new version is in place
@@ -1865,6 +1865,82 @@ def youtube_item(vid: str, title: str = "") -> dict:
             "kind": "video"}
 
 
+# ---- a Spotify speaker (Quasar step 4) ---------------------------------------------------------------
+#
+# This computer as a Spotify Connect speaker named after it (librespot, from the system's own
+# packages). Aurelia doesn't play Spotify herself: she tells Spotify what to play on this speaker
+# through Spotify's own API and reads back what Spotify says. The first time, he picks this speaker
+# once in the Spotify app on his phone (it's found on the home network); librespot then keeps that
+# sign-in in its own cache here (only this account can read it) and comes back signed in after a
+# restart, so Aurelia can start music on it from then on. Nothing about it leaves this computer.
+
+class Speaker:
+    def __init__(self):
+        self.proc: subprocess.Popen | None = None
+        self.name = ""
+        self.starts: list[float] = []
+        self.lock = threading.Lock()
+
+    def cache(self) -> Path:
+        d = config_dir() / "spotify"
+        d.mkdir(parents=True, exist_ok=True)
+        if not IS_WINDOWS:
+            os.chmod(d, 0o700)
+        return d
+
+    def argv(self, exe: str, name: str) -> list[str]:
+        return [exe, "--name", name, "--cache", str(self.cache()), "--disable-audio-cache", "--bitrate", "320",
+                "--initial-volume", "70", "--enable-volume-normalisation",
+                "--device-type", "tv" if (SHELL and SHELL.running()) else "computer"]
+
+    def running(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
+
+    def start(self, name: str) -> bool:
+        with self.lock:
+            if self.running() and self.name == name:
+                return True
+            if IS_WINDOWS:
+                raise ValueError("on Windows, the Spotify app itself is the speaker: open it once on this computer")
+            exe = shutil.which("librespot")
+            if not exe:
+                raise ValueError("librespot isn't installed here (it makes this computer a Spotify speaker)")
+            now = time.time()
+            self.starts = [t for t in self.starts if now - t < 120]
+            if len(self.starts) >= 5:
+                raise ValueError("my Spotify speaker keeps stopping here; check its log")
+            if self.running():
+                self.proc.terminate()
+            self.starts.append(now)
+            kw = {} if IS_WINDOWS else {"start_new_session": True}
+            self.proc = subprocess.Popen(self.argv(exe, name), env=session_env(), stdin=subprocess.DEVNULL,
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True, **kw)
+            self.name = name
+            time.sleep(1.0)
+            if not self.running():
+                raise ValueError("my Spotify speaker didn't start here")
+            log(f"Spotify speaker on as {name}")
+            return True
+
+    def supervise(self, name: str, stop: threading.Event) -> None:
+        """Keeps it running (it's how Spotify finds this computer), quietly backing off if it can't."""
+        while not stop.wait(15):
+            if not self.running() and shutil.which("librespot") and current_mode() != "exam":
+                try:
+                    self.start(name)
+                except ValueError as exc:
+                    log("spotify speaker:", exc)
+
+
+SPEAKER = Speaker()
+
+
+def do_spotify_speaker(args: dict) -> dict:
+    name = " ".join(str(args.get("name") or "").split())[:60] or socket.gethostname()
+    SPEAKER.start(name)
+    return {"speaker": name, "running": SPEAKER.running()}
+
+
 # ---- her window on a workstation --------------------------------------------------------------------
 #
 # On his own computers, Aurelia is a window of her own, not a browser tab: an app window (Edge,
@@ -1956,7 +2032,7 @@ def cmd_app() -> int:
 # computer itself (Start menu: "Aurelia - end exam mode", or `aurelia_node.py mode normal`).
 
 MODES = ("normal", "gaming", "exam")
-GAMING_OK = {"mode", "power", "sound", "player", "clipboard_get", "clipboard_set", "health"}
+GAMING_OK = {"mode", "power", "sound", "player", "clipboard_get", "clipboard_set", "health", "spotify_speaker"}
 GAME_DIRS = ("steamapps/common/", "epic games/", "gog galaxy/games/", "riot games/", "ea games/",
              "ubisoft game launcher/games/", "battle.net/", "xboxgames/")
 MODE_CHANGED = threading.Event()
@@ -3844,7 +3920,8 @@ def do_page_clear(args: dict) -> dict:
 COMMANDS.update({"logins": do_logins, "sign_in": do_sign_in, "play": do_play, "packages_find": do_packages_find,
                  "package_check_remove": do_package_check_remove, "package_install": do_package_install,
                  "package_remove": do_package_remove, "clipboard_get": do_clipboard_get,
-                 "clipboard_set": do_clipboard_set, "mode": do_mode, "youtube_feed": do_youtube_feed})
+                 "clipboard_set": do_clipboard_set, "mode": do_mode, "youtube_feed": do_youtube_feed,
+                 "spotify_speaker": do_spotify_speaker})
 COMMANDS.update({"page_look": do_page_look, "page_click": do_page_click, "page_type": do_page_type,
                  "page_key": do_page_key, "page_scroll": do_page_scroll, "page_back": do_page_back,
                  "page_media": do_page_media, "page_clear": do_page_clear})
@@ -4018,6 +4095,13 @@ def cmd_run() -> int:
         threading.Thread(target=live_loop, args=(server, key, SHELL.stop_event), daemon=True).start()
     if not cfg.get("shell"):                                  # a desktop someone games on (her shell isn't a desktop)
         threading.Thread(target=auto_gaming_loop, args=(threading.Event(),), daemon=True).start()
+    if not IS_WINDOWS and shutil.which("librespot"):          # this computer as a Spotify speaker, named after it
+        try:
+            SPEAKER.start(cfg.get("name") or socket.gethostname())
+        except ValueError as exc:
+            log("spotify speaker:", exc)
+        threading.Thread(target=SPEAKER.supervise, args=(cfg.get("name") or socket.gethostname(), threading.Event()),
+                         daemon=True).start()
     while True:
         try:
             if time.time() - said_hello_at > HELLO_SECONDS or (SHELL and SHELL.changed.is_set()) or MODE_CHANGED.is_set():

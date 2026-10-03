@@ -56,6 +56,7 @@ KEY_CACHE_SECONDS = 30
 WINDOW_DAYS = 30                                        # a window's one-time sign-in link, unused, expires
 SEEN_EVERY_SECONDS = 60
 PUBLIC = {"/pair", "/pair/request", "/pair/status", "/pair/screen", "/pair/window", "/health", "/favicon.ico",
+          "/quasar/spotify/callback",            # Spotify's redirect carries no cookie; a one-time state guards it
           "/node/agent.py", "/node/guard.py", "/node/install-linux.sh", "/node/install-windows.ps1"}   # the node agent: code, no secrets
 SCOPES = {"node": ("/nodes/",), "terminal": ("/ask",)}  # prefixes; browser keys aren't limited
 

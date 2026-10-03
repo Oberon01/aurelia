@@ -1423,3 +1423,44 @@ def test_the_real_player_takes_youtubes_separate_sound_and_drops_my_key(tmp_path
             p.command("quit")
         except Exception:
             pass
+
+
+# ---- a Spotify speaker (Quasar step 4) --------------------------------------------------------------
+
+def test_the_spotify_speaker_is_named_after_this_computer_and_keeps_its_sign_in_here(monkeypatch, tmp_path):
+    monkeypatch.setattr(agent, "config_dir", lambda: tmp_path)
+    monkeypatch.setattr(agent, "IS_WINDOWS", False)
+    monkeypatch.setattr(agent, "SHELL", None)
+    sp = agent.Speaker()
+    argv = sp.argv("/usr/bin/librespot", "TV PC")
+    assert argv[:3] == ["/usr/bin/librespot", "--name", "TV PC"] and "--disable-audio-cache" in argv
+    assert argv[argv.index("--cache") + 1] == str(tmp_path / "spotify")
+    assert (tmp_path / "spotify").stat().st_mode & 0o777 == 0o700                   # only this account reads it
+    assert argv[argv.index("--device-type") + 1] == "computer"
+
+
+def test_no_librespot_says_what_it_needs(monkeypatch):
+    monkeypatch.setattr(agent, "IS_WINDOWS", False)
+    monkeypatch.setattr(agent.shutil, "which", lambda n: None)
+    with pytest.raises(ValueError, match="librespot isn't installed"):
+        agent.Speaker().start("Desk")
+    monkeypatch.setattr(agent, "IS_WINDOWS", True)
+    with pytest.raises(ValueError, match="Spotify app itself is the speaker"):
+        agent.Speaker().start("Desk")
+
+
+def test_the_speaker_starts_and_runs(monkeypatch, tmp_path):
+    monkeypatch.setattr(agent, "config_dir", lambda: tmp_path)
+    monkeypatch.setattr(agent, "IS_WINDOWS", False)
+    monkeypatch.setattr(agent, "SHELL", None)
+    monkeypatch.setattr(agent.time, "sleep", lambda s: None)
+    monkeypatch.setattr(agent.shutil, "which", lambda n: "/usr/bin/librespot")
+    monkeypatch.setattr(agent, "session_env", lambda: {})
+    started = []
+
+    class P:
+        def __init__(self, argv, **kw): started.append(argv)
+        def poll(self): return None
+    monkeypatch.setattr(agent.subprocess, "Popen", P)
+    sp = agent.Speaker()
+    assert sp.start("TV PC") and sp.start("TV PC") and len(started) == 1           # already on: not started twice

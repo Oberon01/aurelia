@@ -1,6 +1,6 @@
 # Quasar — video and music on your computers, played by her own player (Phase 7; Phase 15 brought
 # forward). Sources are services with APIs, never web pages: your Jellyfin library, titles on a Roku TV,
-# YouTube; Spotify next. Control while it plays (pause, skip, subtitles) is Constellation's media.
+# YouTube, and Spotify (your tokens stay on the server; no client secret is used). Control while it plays (pause, skip, subtitles) is Constellation's media.
 function: quasar
 enabled: true
 
@@ -8,6 +8,7 @@ tools:
   find:            { tier: reference }   # your library: search, continue watching, next up, recently added
   play:            { tier: act }         # play it full screen on one of your computers; checked with the player
   youtube:         { tier: read }        # your YouTube feeds and search, read on your computer with its own sign-in
+  spotify:         { tier: act }         # your Spotify on your speakers; every change checked with Spotify itself
 
 rate_limit_per_minute: 60
 

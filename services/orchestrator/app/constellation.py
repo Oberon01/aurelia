@@ -1069,6 +1069,9 @@ async def _player(app, node: dict, action: str, extra: dict | None = None) -> di
     players = [p for p in data.get("players") or [] if isinstance(p, dict)]
     playing = {"node": node["name"], "players": players}
     if not players:
+        sp = await _spotify_here(app, node, action, extra)    # its Spotify speaker, through Spotify itself
+        if sp is not None:
+            return sp
         return {"headline": f"Nothing is playing on {node['name']}", "playing": playing}
     top = players[0]
     if action == "now_playing":
@@ -1077,6 +1080,31 @@ async def _player(app, node: dict, action: str, extra: dict | None = None) -> di
     else:
         head = f"{PLAYER_DONE.get(action, 'Done')} · {_track(top)}"
     return {"headline": head[:140], "playing": playing}
+
+
+SPOTIFY_ACTIONS = {"play": "resume", "pause": "pause", "toggle": "pause", "next": "next", "previous": "previous",
+                   "now_playing": "now", "stop": "pause"}
+
+
+async def _spotify_here(app, node: dict, action: str, extra: dict | None) -> dict | None:
+    """When Spotify is what's playing on this computer (its speaker), the same words control it there."""
+    from . import quasar, spotify
+    if action not in SPOTIFY_ACTIONS:
+        return None
+    try:
+        sp = quasar._sp(app)
+        if not await sp.signed_in():
+            return None
+        st = await sp.state()
+    except ValueError:
+        return None
+    dev = (st or {}).get("device") or {}
+    if not dev or spotify.device_for([dev], node["name"]) is None:
+        return None
+    act = SPOTIFY_ACTIONS[action]
+    if action == "toggle" and not st.get("is_playing"):
+        act = "resume"
+    return await quasar.spotify_tool(app, "owner", {"action": act, "on": dev.get("name") or node["name"]})
 
 
 SOUND_SAY = {"up": "Turned it up", "down": "Turned it down", "mute": "Muted", "unmute": "Sound on",

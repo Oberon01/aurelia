@@ -166,8 +166,10 @@ def heard(j, path, item, wait=15):
 def test_she_plays_his_library_on_a_computer_with_her_own_player(node, jellyfin):
     orch = node["orch"]
 
-    assert httpx.get(f"{orch}/quasar/check", timeout=30).json() == {"ok": True, "server": "atlas-ai", "version": "10.11.0",
-                                                                  "signed_in_as": "kentrell"}
+    chk = httpx.get(f"{orch}/quasar/check", timeout=30).json()
+    assert {k: v for k, v in chk.items() if k != "spotify"} == {"ok": True, "server": "atlas-ai", "version": "10.11.0",
+                                                                "signed_in_as": "kentrell"}
+    assert chk["spotify"]["set_up"] is False and "spotify_client_id" in chk["spotify"]["problem"]
     lib = ok(orch, "quasar.find", {})
     groups = {g["name"]: [i["name"] for i in g["items"]] for g in lib["catalog"]["groups"]}
     assert groups["Continue"] == ["It Didn't Have to Be Magic"] and "Frieren" in str(lib)

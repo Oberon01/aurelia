@@ -40,6 +40,9 @@ class QuasarConfig(BaseModel):
     queue_episodes: int = 12                  # a show keeps going: this many episodes are queued after the one asked for
     ticket_hours: float = 8                   # how long a computer's link to one stream works
     library_limit: int = 500                  # most titles shown per section (shows, movies, music) at once
+    spotify_client_id: str = ""               # his Spotify developer app (public by design; no secret is used)
+    spotify_redirect_uri: str = ""            # exactly as registered on that app
+    spotify_confirm_seconds: float = 12       # how long Spotify gets to report the change before I say it didn't
 
 
 class RetentionConfig(BaseModel):

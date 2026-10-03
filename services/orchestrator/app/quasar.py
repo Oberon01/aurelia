@@ -10,6 +10,10 @@ his with its own YouTube sign-in (the TV PC: the cookies in its browser never le
 yt-dlp shipped in Aurelia's own release (app/ytdlp_bundle.py). A video plays in that computer's
 player like anything else, from YouTube's own streams; thumbnails come through /quasar/ytart.
 
+Spotify (step 4, app/spotify.py): Spotify plays on Spotify Connect devices (his phone, the Spotify app,
+and his computers as speakers through librespot in the node agent); Aurelia chooses what and where
+with Spotify's Web API and reports what Spotify then says is playing where.
+
 On a Roku TV (no computer of his by that name): a title from his library opens in the Roku's
 Jellyfin app on that exact item, and Jellyfin's own list of what each of its apps is playing
 confirms it. Anything else ("play The Bear on the TV", "Stranger Things on Netflix") goes through
@@ -67,7 +71,7 @@ ROKU_JELLYFIN = "Jellyfin"                              # the Jellyfin app on a 
 ROKU_CONFIRM = 25.0                                     # how long Jellyfin gets to report the Roku playing it
 SERVICES = (r"netflix|hulu|(?:amazon )?prime(?: video)?|amazon|disney(?:\+| plus)?|hbo max|max|peacock|"
             r"paramount(?:\+| plus)?|apple tv(?:\+| plus)?|youtube(?: tv)?|tubi|pluto(?: tv)?|crunchyroll|plex|"
-            r"jellyfin|starz|showtime|fubo|sling|espn(?:\+| plus)?|the roku channel|roku channel")
+            r"jellyfin|starz|showtime|fubo|sling|espn(?:\+| plus)?|the roku channel|roku channel|spotify")
 
 TOOLS = [
     registry.ToolSpec(
@@ -109,6 +113,20 @@ TOOLS = [
             "feed": {"type": "string", "enum": list(YT_FEEDS)}, "query": {"type": "string"}, "on": {"type": "string"},
             "limit": {"type": "integer", "minimum": 1, "maximum": 60}}},
         cancellable=False, freshness_seconds=120, display="panel"),
+    registry.ToolSpec(
+        name="spotify", description="His Spotify (he has Premium): action play (what: a song, album, artist or one "
+                                    "of his playlists; kind to say which), pause, resume, next, previous, volume "
+                                    "(level 0-100), now (what's playing where) or devices (his Spotify speakers). on: "
+                                    "where ('the TV', 'the desk', 'my phone'); leave out for wherever Spotify is "
+                                    "already playing. It plays on Spotify Connect devices, his computers among them, "
+                                    "and every change is checked with what Spotify then reports; say exactly that.",
+        input_schema={"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["play", "pause", "resume", "next", "previous", "volume", "now",
+                                                   "devices"]},
+            "what": {"type": "string"}, "kind": {"type": "string", "enum": ["song", "album", "artist", "playlist"]},
+            "on": {"type": "string"}, "level": {"type": "integer", "minimum": 0, "maximum": 100}},
+            "required": ["action"]},
+        cancellable=False),
 ]
 
 
@@ -527,6 +545,12 @@ async def play(app, user: str, args: dict) -> dict:
     if service is None and args.get("app"):
         service, tv_said = split_service(str(args["app"]))[0], on
     yt = str(args.get("id") or "")
+    m = re.search(r"\byt:([A-Za-z0-9_-]{11})\b", f"{yt} {what_said}")
+    if m:                                                   # a YouTube video by its id, however it was asked for
+        yt = f"yt:{m.group(1)}"
+        what_said = re.sub(r"(?i)^(?:the )?youtube video\s*", "", what_said.replace(m.group(0), "")).strip()
+    elif YT_ID.match(yt):                                   # an id from YouTube (Jellyfin's are 32 hex digits)
+        yt = f"yt:{yt}"
     if yt.startswith("yt:") or service in ("youtube", "youtube tv") and not args.get("id"):
         try:
             node = await _yt_node(app, tv_said if service else on)
@@ -538,7 +562,7 @@ async def play(app, user: str, args: dict) -> dict:
                     pass
             raise
         if yt.startswith("yt:"):
-            vid, title = yt[3:], str(args.get("what") or "")
+            vid, title = yt[3:], what_said
             if not YT_ID.match(vid):
                 raise ValueError("That isn't a YouTube video.")
         else:                                               # "play lo-fi beats on youtube": the top result
@@ -552,6 +576,9 @@ async def play(app, user: str, args: dict) -> dict:
                 raise ValueError(f"YouTube has nothing for “{what_said}”.")
             vid, title = hits[0]["id"], hits[0].get("title") or what_said
         return await play_youtube(app, user, node, vid, title)
+    if service == "spotify":                               # "play X on spotify (on the TV)"
+        return await spotify_tool(app, user, {"action": "play", "what": what_said, "on": tv_said,
+                                              "kind": args.get("kind")})
     jf = Jellyfin(app.state.redis)
     if service:                                             # "on Netflix (on the TV)": a streaming app, on a Roku
         if not what_said and not args.get("id"):
@@ -766,7 +793,193 @@ async def ytart(vid: str):
     return Response(r.content, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
 
 
-HANDLERS = {"find": find, "play": play, "youtube": youtube}
+# ---- Spotify (step 4) --------------------------------------------------------------------------------
+
+def _sp(app):
+    from . import spotify
+    cfg = app.state.config.current.quasar
+    return spotify.Spotify(app.state.redis, cfg.spotify_client_id, cfg.spotify_redirect_uri)
+
+
+SPEAKER_WAIT = 15.0
+
+
+class NeedsSpeaker(ValueError):
+    def __init__(self, node: str):
+        super().__init__(f"{node} needs librespot to be a Spotify speaker")
+        self.node = node
+
+
+async def _sp_device(app, user: str, sp, on: str) -> dict:
+    """The Spotify device he means: by its name, or the computer he names (its speaker is named after
+    it; if it isn't running, the computer is asked to start it)."""
+    from . import constellation, spotify
+    devices = await sp.devices()
+    d = spotify.device_for(devices, on)
+    if d:
+        return d
+    node = None
+    try:
+        node = await _where(app, on)
+    except ValueError:
+        pass
+    if node:
+        d = spotify.device_for(devices, node["name"])
+        if d:
+            return d
+        try:
+            await constellation._ask_new(app, node, "spotify_speaker", {"name": node["name"]}, timeout=20)
+        except ValueError as exc:
+            low = str(exc).lower()
+            if "librespot" in low and "installed" in low:
+                raise NeedsSpeaker(node["name"])
+            raise
+        loop = asyncio.get_running_loop()
+        end = loop.time() + SPEAKER_WAIT
+        while loop.time() < end:
+            await asyncio.sleep(1.0)
+            d = spotify.device_for(await sp.devices(), node["name"])
+            if d:
+                return d
+        raise ValueError(f"{node['name']}'s Spotify speaker is on, but Spotify doesn't list it yet. Once, open Spotify "
+                         f"on your phone, tap the speaker icon and pick “{node['name']}”; after that I can start music "
+                         "there myself.")
+    names = ", ".join(x.get("name", "") for x in devices) or "none right now"
+    if not on:
+        raise ValueError(f"Spotify isn't playing anywhere, so say where. Your Spotify speakers: {names}.")
+    raise ValueError(f"I don't see a Spotify speaker called “{on}”. Yours: {names}.")
+
+
+async def _sp_confirm(app, sp, check) -> dict | None:
+    """Spotify's own state, once it shows the change (or None when it never did)."""
+    loop = asyncio.get_running_loop()
+    end = loop.time() + app.state.config.current.quasar.spotify_confirm_seconds
+    st = {}
+    while True:
+        try:
+            st = await sp.state()
+        except ValueError:
+            st = {}
+        if check(st):
+            return st
+        if loop.time() > end:
+            return None
+        await asyncio.sleep(0.75)
+
+
+async def spotify_tool(app, user: str, args: dict) -> dict:
+    from . import spotify
+    sp = _sp(app)
+    action = str(args.get("action") or "now").lower()
+    action = {"skip": "next", "back": "previous", "unpause": "resume", "play_pause": "pause"}.get(action, action)
+    on = " ".join(str(args.get("on") or "").split())
+    if action == "devices":
+        devs = await sp.devices()
+        return {"headline": f"{len(devs)} Spotify speaker{'s' if len(devs) != 1 else ''}",
+                "spotify": {"devices": [{"name": d.get("name"), "type": d.get("type"), "active": d.get("is_active"),
+                                         "volume": d.get("volume_percent")} for d in devs]}}
+    if action == "now":
+        st = await sp.state()
+        if not st or not st.get("item"):
+            return {"headline": "Nothing is playing on Spotify", "now": {"node": "Spotify", "active": False}}
+        n = spotify.playing_now(st)
+        return {"headline": f"{'Playing' if st.get('is_playing') else 'Paused'}: {n['title']} on {n['node']}", "now": n}
+    if action == "play":
+        what = " ".join(str(args.get("what") or "").split())
+        if not what:
+            raise ValueError("Play what on Spotify?")
+        kind = spotify.KINDS.get(str(args.get("kind") or "").lower())
+        found = await sp.search(what, kind or "track,album,artist,playlist")
+        mine = await sp.my_playlists() if kind in (None, "playlist") else []
+        it = spotify.pick(found, what, kind, mine)
+        if it is None:
+            raise ValueError(f"Spotify has nothing for “{what}”.")
+        try:
+            dev = await _sp_device(app, user, sp, on)
+        except NeedsSpeaker as exc:                         # offer to make that computer a Spotify speaker
+            return {"headline": f"{exc.node} isn't a Spotify speaker yet",
+                    "did": {"node": exc.node, "what": "It needs librespot (a Spotify Connect speaker) first"},
+                    "confirm": {"tool": "constellation.install_package",
+                                "reason": f"{exc.node} needs librespot to play Spotify (it becomes a Spotify speaker "
+                                          "named after it). Install it from Ubuntu's packages?",
+                                "reply": "Installed. Ask me to play it again; the first time, pick it once in the "
+                                         "Spotify app on your phone.",
+                                "args": {"target": exc.node, "name": "librespot", "source": "apt"}}}
+        body = {"uris": [it["uri"]]} if it["type"] == "track" else {"context_uri": it["uri"]}
+        await sp.call("PUT", "/me/player/play", {"device_id": dev["id"]}, body)
+
+        def landed(st):
+            item, ctx = st.get("item") or {}, (st.get("context") or {}).get("uri")
+            right = item.get("uri") == it["uri"] or ctx == it["uri"] or (
+                it["type"] == "artist" and it["uri"] in {a.get("uri") for a in item.get("artists") or []})
+            return (st.get("device") or {}).get("id") == dev["id"] and st.get("is_playing") and right
+        st = await _sp_confirm(app, sp, landed)
+        if st is None:
+            return {"headline": f"Asked Spotify to play {spotify.label(it)} on {dev['name']}",
+                    "did": {"node": dev["name"], "what": f"Spotify hasn't reported {spotify.label(it)} playing on "
+                                                         f"{dev['name']} yet, so I can't say it is.", "unconfirmed": True}}
+        n = spotify.playing_now(st)
+        return {"headline": f"Playing {spotify.label(it)} on {dev['name']}", "now": n}
+    st0 = await sp.state()
+    if not st0 or not st0.get("device"):
+        raise ValueError("Spotify isn't playing anywhere right now.")
+    dev = st0["device"] if not on else await _sp_device(app, user, sp, on)
+    q = {"device_id": dev["id"]}
+    before = (st0.get("item") or {}).get("uri")
+    if action == "pause":
+        await sp.call("PUT", "/me/player/pause", q)
+        check = lambda st: st.get("is_playing") is False                     # noqa: E731
+        say = "Paused Spotify"
+    elif action == "resume":
+        await sp.call("PUT", "/me/player/play", q)
+        check = lambda st: st.get("is_playing") is True                      # noqa: E731
+        say = "Spotify is playing again"
+    elif action in ("next", "previous"):
+        await sp.call("POST", f"/me/player/{action}", q)
+        check = lambda st: (st.get("item") or {}).get("uri") not in (None, before)    # noqa: E731
+        say = "Skipped" if action == "next" else "Back one"
+    elif action == "volume":
+        level = max(0, min(100, int(args.get("level") or 0)))
+        await sp.call("PUT", "/me/player/volume", {**q, "volume_percent": level})
+        check = lambda st: (st.get("device") or {}).get("volume_percent") == level    # noqa: E731
+        say = f"Spotify volume {level}%"
+    else:
+        raise ValueError("I can play, pause, resume, skip, go back, set the volume, or say what's playing.")
+    st = await _sp_confirm(app, sp, check)
+    if st is None:
+        return {"headline": f"Asked Spotify: {say.lower()}",
+                "did": {"node": dev.get("name"), "what": "Spotify hasn't reported the change yet, so I can't say it happened.",
+                        "unconfirmed": True}}
+    return {"headline": f"{say} on {(st.get('device') or {}).get('name') or dev.get('name')}", "now": spotify.playing_now(st)}
+
+
+@router.get("/spotify/login", include_in_schema=False)
+async def spotify_login(request: Request):
+    """From a paired display: off to Spotify's own page to approve me (once)."""
+    from fastapi.responses import RedirectResponse
+    try:
+        url = await _sp(request.app).login_url()
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return RedirectResponse(url, status_code=302)
+
+
+@router.get("/spotify/callback", include_in_schema=False)
+async def spotify_callback(request: Request, code: str = "", state: str = "", error: str = ""):
+    from fastapi.responses import HTMLResponse
+    page = '<!doctype html><meta name="viewport" content="width=device-width"><title>Aurelia</title>' \
+           '<body style="font:16px system-ui;background:#04121a;color:#e9fbfe;padding:24px"><p>{}</p>' \
+           '<p><a style="color:#5fd4e6" href="/view">Back to me</a></p>'
+    if error:
+        return HTMLResponse(page.format("Spotify wasn't connected (you declined, or it was cancelled)."), status_code=400)
+    try:
+        await _sp(request.app).finish(code, state)
+    except ValueError as exc:
+        return HTMLResponse(page.format(str(exc)), status_code=400)
+    return HTMLResponse(page.format("Spotify is connected. I can play your music now."))
+
+
+HANDLERS = {"find": find, "play": play, "youtube": youtube, "spotify": spotify_tool}
 
 
 # ---- the computers' side: streams and what their players say ------------------------------------------
@@ -909,12 +1122,18 @@ async def health(request: Request):
 async def check(request: Request):
     """Can I reach Jellyfin and sign in? (For setting up: wakes it if it's asleep, up to a minute.)"""
     try:
+        sp = _sp(request.app)
+        spot = {"set_up": True, "signed_in": await sp.signed_in(),
+                "sign_in_at": "/quasar/spotify/login"}
+    except ValueError as exc:
+        spot = {"set_up": False, "problem": str(exc)}
+    try:
         jf = Jellyfin(request.app.state.redis)
         info = await jf.ping()
         await jf.auth(fresh=True)
     except (NotSetUp, ValueError, httpx.HTTPError) as exc:
-        return {"ok": False, "problem": str(exc)}
-    return {"ok": True, **info, "signed_in_as": jf.user}
+        return {"ok": False, "problem": str(exc), "spotify": spot}
+    return {"ok": True, **info, "signed_in_as": jf.user, "spotify": spot}
 
 
 class Invoke(BaseModel):

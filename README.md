@@ -375,7 +375,7 @@ not installer reruns. Installing apps on Windows isn't built yet.
 work web pages or TV menus to play things any more. She asks a service with an
 API what to play and hands it to her own player on the computer (mpv, full
 screen on top of her shell), which tells her exactly what it's doing. Step 1 is
-your Jellyfin library; step 2 is your Roku TVs; step 3 is YouTube; Spotify comes next.
+your Jellyfin library; step 2 is your Roku TVs; step 3 is YouTube; step 4 is Spotify.
 
 | Say | What happens |
 |---|---|
@@ -392,6 +392,9 @@ your Jellyfin library; step 2 is your Roku TVs; step 3 is YouTube; Spotify comes
 | `show me my youtube` / `youtube subscriptions` / `my watch later` | `quasar.youtube`: your feed as thumbnails, read on the TV PC with its own sign-in; tap one to play it |
 | `youtube lofi beats` / `search lofi beats on youtube` | YouTube search, as thumbnails you can play |
 | `play lofi beats on youtube` | the top result (not a live stream), in my player |
+| `play Discovery on spotify on the TV` | `quasar.spotify`: on that Spotify speaker; Spotify itself confirms it |
+| `pause spotify` / `skip the song on spotify` / `what's playing on spotify` / `spotify volume 40` | Spotify, checked with Spotify |
+| `my spotify speakers` | every Spotify Connect device Spotify knows for you |
 
 **YouTube (step 3, agent 0.7.0).** Your home feed (what YouTube recommends
 you), subscriptions, Watch Later, history and search come back as thumbnails;
@@ -411,6 +414,25 @@ offer to install the first time it's missing. When YouTube changes something
 and yt-dlp catches up, updating the pin (`uv lock --upgrade-package yt-dlp` in
 `services/orchestrator`) and releasing is the whole fix. "youtube X" and
 "search X on youtube" now give playable thumbnails here instead of links.
+
+**Spotify (step 4, agent 0.7.1).** I don't play Spotify myself: Spotify plays
+on Spotify Connect speakers (your phone, the Spotify app on a computer, and your
+computers through librespot, named after the computer), and I choose what and
+where through Spotify's own API, then read back what Spotify says is playing
+on which speaker. That's what I tell you; if Spotify doesn't report it, I say
+"Asked" instead. Pause, skip and "what's playing" on a computer whose Spotify
+speaker is playing go to Spotify too.
+
+Set up, once: your Spotify developer app's client id and redirect address are
+under `quasar:` in `config/aurelia.yaml` (the id is public; no secret is used:
+sign-in is PKCE). Then open `/quasar/spotify/login` on one of your screens and
+approve it on Spotify's page; `/quasar/check` says whether it's connected. The
+tokens stay on the server and refresh themselves. A computer becomes a speaker
+with librespot from its own packages (the installer's `--system` step, or the
+install card I show the first time); pick it once in the Spotify app on your
+phone, and after that it signs itself back in and I can start music there. On
+Windows, the Spotify app itself is the speaker. Spotify's API needs Premium to
+control playback (you have it).
 
 **On a Roku TV (step 2).** A computer always wins: if the TV PC is plugged into
 the living room TV, "play Dune on the living room TV" plays it there with my

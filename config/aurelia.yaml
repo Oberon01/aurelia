@@ -29,6 +29,10 @@ quasar:
   queue_episodes: 12      # a show keeps going with the next episodes
   ticket_hours: 8         # how long a computer's link to one stream works
   library_limit: 500      # most titles shown per section (shows, movies, music) at once
+  # Spotify (your developer app; the client id is public, and no secret is used). The redirect must be
+  # exactly what's registered on that app. Sign in once at /quasar/spotify/login from one of your screens.
+  spotify_client_id: "66b36ae7746e41308ecc47154b46c2b4"
+  spotify_redirect_uri: "https://docker-home.tail0150f0.ts.net:8443/quasar/spotify/callback"
 
 retention:
   # Saved result panels: full for hot_days, then a summary until warm_days,
@@ -109,6 +113,27 @@ fastpath:
       args: { name: "{name}" }
       reply: "Here's the {name} function."
     # YouTube (Quasar step 3): his feeds and search as posters; a tapped poster plays by its id.
+    # Spotify (Quasar step 4). "Play X on spotify (on the TV)" is media-play-title (on: "spotify ...").
+    - name: spotify-control
+      match: '^(?P<action>pause|resume|skip|next|previous)(?: the)?(?: song| track| music)? (?:on|in) spotify$|^(?P<action2>pause|resume) spotify$'
+      tool: quasar.spotify
+      args: { action: "{action}{action2}" }
+      reply: "On Spotify."
+    - name: spotify-now
+      match: '^what(?:''s| is) (?:playing )?on spotify\??$'
+      tool: quasar.spotify
+      args: { action: now }
+      reply: "Here's what Spotify is playing."
+    - name: spotify-volume
+      match: '^spotify volume (?:to )?(?P<level>\d{1,3})%?$'
+      tool: quasar.spotify
+      args: { action: volume, level: "{level}" }
+      reply: "Spotify volume {level}."
+    - name: spotify-devices
+      match: '^(?:my |show(?: me)? my |list my )?spotify (?:speakers|devices)\??$'
+      tool: quasar.spotify
+      args: { action: devices }
+      reply: "Here are your Spotify speakers."
     - name: youtube-play-id
       match: '^play the youtube video (?P<id>yt:[A-Za-z0-9_-]{11})(?:\s+on\s+(?:the |my )?(?P<on>.+?))?$'
       tool: quasar.play

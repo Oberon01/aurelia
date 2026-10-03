@@ -307,3 +307,13 @@ def test_youtube_thumbnails_only_take_a_video_id():
     from fastapi import HTTPException
     with pytest.raises(HTTPException):
         run(quasar.ytart("../../etc"))
+
+
+@pytest.mark.parametrize("args", [{"what": "the youtube video yt:dQw4w9WgXcQ"}, {"what": "yt:dQw4w9WgXcQ"},
+                                  {"id": "dQw4w9WgXcQ"}, {"id": "yt:dQw4w9WgXcQ", "what": "A song"}])
+def test_a_youtube_id_plays_from_youtube_however_it_arrives(yt, args):
+    app, asked, answers = yt
+    answers["play"] = {"player": {"active": True, "item": "yt:dQw4w9WgXcQ", "title": "A song"}}
+    out = run(quasar.play(app, "owner", args))
+    assert asked[-1][0] == "play" and asked[-1][1]["items"][0]["youtube"] == "dQw4w9WgXcQ"   # never Jellyfin
+    assert out["headline"] == "Playing A song on TV PC"
