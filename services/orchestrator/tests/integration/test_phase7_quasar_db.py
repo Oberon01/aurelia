@@ -189,6 +189,16 @@ def test_she_plays_his_library_on_a_computer_with_her_own_player(node, jellyfin)
     start = heard(jellyfin, "/Sessions/Playing", "e2")[0]
     assert start["PositionTicks"] >= 5 * TICKS and start["PlayMethod"] == "DirectPlay"
 
+    # The live "now playing" panel: from the player's own reports, for any display that opens now.
+    playing = []
+    for _ in range(40):
+        playing = httpx.get(f"{orch}/quasar/now").json()["playing"]
+        if playing:
+            break
+        time.sleep(0.3)
+    assert playing and playing[0]["now"]["title"].startswith("Frieren · S1E2") and playing[0]["now"]["node"] == "Living room TV"
+    assert playing[0]["now"]["art"] == "/quasar/art/e2" and playing[0]["key"] == f"node-{node['id']}"
+
     # Control, from the player itself (the computer has no shell: everything goes to the player).
     assert ok(orch, "constellation.media", {"action": "pause"})["headline"].startswith("Paused · 0:")
     assert ok(orch, "constellation.media", {"action": "now_playing"})["headline"].startswith(
@@ -204,6 +214,11 @@ def test_she_plays_his_library_on_a_computer_with_her_own_player(node, jellyfin)
     assert stopped["headline"] == "Stopped Frieren · S1E3 · Killing Magic" and stopped["now"]["active"] is False
     heard(jellyfin, "/Sessions/Playing/Stopped", "e3")
     assert ok(orch, "constellation.media", {"action": "now_playing"})["headline"] == "Nothing is playing on Living room TV"
+    for _ in range(40):                                                    # stopped: the panel goes
+        if not httpx.get(f"{orch}/quasar/now").json()["playing"]:
+            break
+        time.sleep(0.3)
+    assert httpx.get(f"{orch}/quasar/now").json()["playing"] == []
 
     # Music: the album, in order; a show by season and episode from the start.
     res = ok(orch, "quasar.play", {"what": "discovery"})

@@ -273,7 +273,7 @@ td .clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;o
 .cat .art .rb span{display:block;height:100%;background:var(--cyan)}
 .cat .t{font-size:13px;line-height:1.3;color:var(--ink-strong);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .cat .s{font-size:12px;color:var(--ink-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.nowp{display:flex;gap:16px;align-items:flex-start;min-width:0}
+.nowp{display:flex;gap:16px;align-items:flex-start;min-width:0;flex-shrink:0}
 .nowp .art{flex:0 0 96px;aspect-ratio:2/3;border-radius:6px;overflow:hidden;border:1px solid var(--cyan-soft);background:rgba(95,212,230,.06)}
 .nowp .art.sq{aspect-ratio:1/1}
 .nowp .art.wide{flex-basis:160px;aspect-ratio:16/9}
@@ -576,7 +576,7 @@ if (!session || !/^[A-Za-z0-9_-]{8,64}$/.test(session)) {
 let focused = null;                             // the panel you clicked: what you type is about it
 const cmd = document.getElementById("cmd");
 
-const TITLES = { "aurelia.reply": "Aurelia",
+const TITLES = { "aurelia.reply": "Aurelia", "quasar.now": "Now playing",
   "orbit.status": "Home", "orbit.lock": "Lock", "orbit.unlock": "Unlock", "orbit.light": "Light",
   "orbit.thermostat": "Thermostat", "orbit.login": "SmartRent sign-in", "orbit.alias": "Nickname",
   "orbit.aliases": "Nicknames", "orbit.forget_alias": "Nickname", "orbit.tv_status": "TV",
@@ -840,9 +840,37 @@ function autoClose(rec) {
   arm();
 }
 
+// What's playing where (my player on a computer, or Spotify): one panel each, kept up to date while it
+// plays and gone when it stops. Closing it keeps it closed until something else starts playing there.
+const nowDismissed = new Map();                 // key -> the title that was showing when it was closed
+function showNow(d) {
+  if (!d || !d.key) return;
+  const id = "now-" + d.key, n = d.now || {};
+  let rec = panels.get(id);
+  if (!n.active) { nowDismissed.delete(d.key); if (rec) remove(rec, 0); return; }
+  if (nowDismissed.get(d.key) === n.title) return;
+  nowDismissed.delete(d.key);
+  if (!rec) {
+    rec = makePanel(id, "quasar.now");
+    Object.assign(rec, { closeAfter: null, cancellable: false, nowKey: d.key });   // never closes by itself
+  }
+  for (const r of recs())                       // the one-off "Playing X" answer: this live panel replaces it
+    if (r !== rec && r.tool !== "quasar.now" && r.data && r.data.now && r.data.now.node === n.node && r.state === "reading") remove(r, 0);
+  rec.state = "reading"; rec.nowTitle = n.title; rec.heard = Date.now();
+  renderResult(rec, { headline: `${n.paused ? "Paused" : "Playing"} on ${n.node}`, now: n });
+  relayout(); requestAnimationFrame(relayout);         // again once its picture and wrapped title have their size
+}
+setInterval(() => {                              // a computer that went quiet without saying it stopped
+  for (const rec of recs()) if (rec.tool === "quasar.now" && Date.now() - (rec.heard || 0) > 90000) remove(rec, 0);
+}, 15000);
+function loadNow() {
+  fetch("/quasar/now").then(r => r.json()).then(j => (j.playing || []).forEach(showNow)).catch(() => {});
+}
+
 const dismissed = new Set();                    // release panels you closed: don't replay them
 function remove(rec, delay) {
   if (rec.tool === "chrysalis.release") dismissed.add(rec.taskId);
+  if (rec.tool === "quasar.now" && rec.nowKey && rec.nowTitle && delay === undefined) nowDismissed.set(rec.nowKey, rec.nowTitle);
   if (rec === focused) setFocus(null);
   setTimeout(() => {
     rec.node.classList.add("leaving");
@@ -936,7 +964,7 @@ function renderResult(rec, data, memo) {
     if (words.length) meta.append(el("span", "age" + (memo.stale && !memo.updated ? " stale" : ""), words.join(" · ")));
   }
   const pinId = memo && memo.taskId ? memo.taskId : rec.latestTask;
-  if (pinId && !/^(confirm|release)-/.test(String(pinId))) meta.append(pinButton(pinId, rec.pinned || (memo && memo.tier === "pinned")));
+  if (pinId && !/^(confirm|release|now)-/.test(String(pinId))) meta.append(pinButton(pinId, rec.pinned || (memo && memo.tier === "pinned")));
   head.append(meta);
   n.append(head);
   const hl = headlineFor(rec.tool, rest);
@@ -1031,7 +1059,10 @@ function nextSteps(tool, d) {
     out.push({ label: "Quiz me on this", say: `quiz me on ${d.topic.name}` }, { label: "Explain it", say: `explain ${d.topic.name}` });
   }
   if (d.explain && typeof d.explain === "object") out.push({ label: "Quiz me", say: `quiz me on ${d.explain.subject}` });
-  if (d.now && typeof d.now === "object" && d.now.active) {
+  if (d.now && typeof d.now === "object" && d.now.active && d.now.source === "spotify") {
+    out.push(d.now.paused ? { label: "Play", say: "resume spotify" } : { label: "Pause", say: "pause spotify" });
+    out.push({ label: "Next", say: "skip the song on spotify" });
+  } else if (d.now && typeof d.now === "object" && d.now.active) {
     const on = `on the ${d.now.node.toLowerCase()}`;
     out.push(d.now.paused ? { label: "Play", say: `resume ${on}` } : { label: "Pause", say: `pause ${on}` });
     if (d.now.next) out.push({ label: "Next", say: `next episode ${on}` });
@@ -2489,6 +2520,7 @@ function onEvent(ev) {
   const id = ev.task_id, d = ev.data || {};
   // A presentation display shows only what's addressed to it (the server already sends only that).
   if (document.body.classList.contains("ambient") && ev.type.startsWith("panel.") && ev.device == null) return;
+  if (ev.type === "now.playing") { showNow(d); return; }           // the live "now playing" panel
   if (ev.type === "screen.check") { reportScreen(); return; }      // checking a send: report now
   if (ev.type === "panels.clear") {                   // "close the panels on the TV": all, or those numbers
     const nums = Array.isArray(d.panels) && d.panels.length ? new Set(d.panels) : null;
@@ -2650,6 +2682,7 @@ function connect() {
     catchUpOnRelease();
     fetch("/mailbox/count").then(r => r.json()).then(updateChip).catch(() => {});
     loadGlance(); loadAmbient();
+    if (!document.body.classList.contains("ambient")) loadNow();
     if (!digestChecked) { digestChecked = true; fetch("/digest/check", { method: "POST" }).catch(() => {}); }
   };
   ws.onmessage = m => { try { onEvent(JSON.parse(m.data)); } catch (e) { console.warn("bad event", e); } };

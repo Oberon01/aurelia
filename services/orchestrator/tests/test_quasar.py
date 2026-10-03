@@ -317,3 +317,26 @@ def test_a_youtube_id_plays_from_youtube_however_it_arrives(yt, args):
     out = run(quasar.play(app, "owner", args))
     assert asked[-1][0] == "play" and asked[-1][1]["items"][0]["youtube"] == "dQw4w9WgXcQ"   # never Jellyfin
     assert out["headline"] == "Playing A song on TV PC"
+
+
+def test_now_playing_is_kept_while_it_plays_and_taken_down_once(monkeypatch):
+    import fakeredis.aioredis
+    from app import events
+    sent = []
+
+    async def publish(redis, ev): sent.append(ev)
+    monkeypatch.setattr(events, "publish", publish)
+    r = fakeredis.aioredis.FakeRedis()
+    run(quasar.publish_now(r, "node-5", {"active": True, "title": "Dune", "node": "TV PC"}))
+    assert run(r.get(quasar.NOW_KEY.format("node-5"))) and sent[-1].type == "now.playing" and sent[-1].device is None
+    run(quasar.publish_now(r, "node-5", {"active": False}))
+    run(quasar.publish_now(r, "node-5", {"active": False}))                  # already down: said once
+    assert [e.data["now"].get("active") for e in sent] == [True, False]
+
+
+def test_the_tvs_dont_get_the_now_playing_panel():
+    from app import events
+    ev = {"type": "now.playing", "device": None}
+    assert events.for_display(ev, {"id": 1, "kind": "browser", "role": "companion"})
+    assert not events.for_display(ev, {"id": 2, "kind": "screen", "role": "presentation"})
+    assert not events.for_display(ev, {"id": 3, "kind": "browser", "role": "presentation"})

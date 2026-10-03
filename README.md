@@ -396,6 +396,15 @@ your Jellyfin library; step 2 is your Roku TVs; step 3 is YouTube; step 4 is Spo
 | `pause spotify` / `skip the song on spotify` / `what's playing on spotify` / `spotify volume 40` | Spotify, checked with Spotify |
 | `my spotify speakers` | every Spotify Connect device Spotify knows for you |
 
+**Now playing.** While anything plays, through my player on any computer or
+on Spotify anywhere, your displays show a live "Now playing" panel for it:
+what's playing, on which device, the time (it runs by itself), the poster,
+thumbnail or cover, and Play/Pause, Next and Stop. It comes from what the
+player or Spotify itself reports, so it stays up exactly as long as that
+plays and goes when it stops. A display you open later shows what's playing at
+that moment. Closing it keeps it closed until something else plays there. TVs
+and other presentation screens don't get it (they're showing the thing itself).
+
 **YouTube (step 3, agent 0.7.0).** Your home feed (what YouTube recommends
 you), subscriptions, Watch Later, history and search come back as thumbnails;
 tap one and it plays full screen in my player, controlled like anything else

@@ -1098,7 +1098,71 @@ async def player_state(body: PlayerState, request: Request):
         await _tell_jellyfin(redis, dev["id"], st)
     except (NotSetUp, ValueError) as exc:
         log.info("couldn't report playback to Jellyfin: %s", exc)
+    await publish_now(redis, f"node-{dev['id']}", now_block(dev["name"], st))
     return {"ok": True}
+
+
+# ---- "now playing": one live panel per thing playing, on his displays (not the TVs) -------------------
+#
+# From what the player or Spotify itself reports, every few seconds while it plays; it goes away
+# when that stops. A display that opens later asks /quasar/now for what's playing at that moment.
+
+NOW_KEY = "aurelia:now:{}"
+NOW_SECONDS = 75                                        # not heard from in this long: no longer playing
+SPOTIFY_PAUSED_SECONDS = 600                            # paused this long on Spotify: the panel goes
+
+
+async def publish_now(redis, key: str, now: dict) -> None:
+    from .events import PanelEvent, publish
+    if now.get("active"):
+        await redis.set(NOW_KEY.format(key), json.dumps(now), ex=NOW_SECONDS)
+    elif not await redis.delete(NOW_KEY.format(key)):
+        return                                          # it wasn't playing: nothing to take down
+    await publish(redis, PanelEvent(type="now.playing", task_id=f"now-{key}", tool=f"{NAME}.now",
+                                    data={"key": key, "now": now}))
+
+
+@router.get("/now", include_in_schema=False)
+async def now_playing(request: Request):
+    redis = request.app.state.redis
+    out = []
+    async for k in redis.scan_iter(match=NOW_KEY.format("*")):
+        raw = await redis.get(k)
+        if raw:
+            key = (k.decode() if isinstance(k, bytes) else k).rsplit(":", 1)[-1]
+            out.append({"key": key, "now": json.loads(raw)})
+    return {"playing": out}
+
+
+async def spotify_watch(app) -> None:
+    """Spotify doesn't call back: while I'm signed in, I look every few seconds (more often while it
+    plays) and publish what it says is playing where."""
+    from . import spotify
+    last, sent, paused_since = None, 0.0, None
+    while True:
+        wait = 20
+        try:
+            sp = _sp(app)
+            if await sp.signed_in():
+                st = await sp.state()
+                playing = bool(st and st.get("item") and st.get("is_playing"))
+                paused_since = None if playing else (paused_since or time.time())
+                if st and st.get("item") and (playing or time.time() - paused_since < SPOTIFY_PAUSED_SECONDS):
+                    n = spotify.playing_now(st)
+                    sig = (n.get("title"), n.get("node"), n.get("paused"))
+                    if sig != last or time.time() - sent > 30:          # the panel's clock runs by itself between
+                        await publish_now(app.state.redis, "spotify", n)
+                        sent = time.time()
+                    last, wait = sig, 6
+                elif last is not None:
+                    await publish_now(app.state.redis, "spotify", {"active": False})
+                    last = None
+        except ValueError:
+            wait = 60                                       # not set up or not signed in: look again later
+        except Exception:
+            log.exception("spotify watch")
+            wait = 60
+        await asyncio.sleep(wait)
 
 
 def _ticks(sec) -> int:
@@ -1153,6 +1217,7 @@ async def art(item_id: str, request: Request):
 
 async def register_loop(app) -> None:
     from .settings import settings
+    asyncio.create_task(spotify_watch(app))
     while True:
         ttl = app.state.config.current.registry.function_ttl_seconds
         try:

@@ -16,7 +16,8 @@ EventType = Literal["panel.open", "panel.progress", "panel.result", "panel.close
                     "confirm.ask",              # a confirmation card that came after her reply (a slow tool)
                     "screen.check",             # "say what you're showing, now" (checking a send)
                     "sent.shown",               # something kept for another display was shown there at last
-                    "panels.clear"]             # close panels on this display (all, or data.panels by number)
+                    "panels.clear",             # close panels on this display (all, or data.panels by number)
+                    "now.playing"]              # what's playing where (her player, Spotify): the live "now playing" panel
 
 
 class PanelEvent(BaseModel):
@@ -41,7 +42,7 @@ def for_display(event: dict[str, Any], me: dict[str, Any] | None) -> bool:
     dev = event.get("device")
     if dev is not None:
         return dev == me["id"]
-    if str(event.get("type", "")).startswith(("panel.", "confirm.")) and (me.get("kind") == "screen"
+    if str(event.get("type", "")).startswith(("panel.", "confirm.", "now.")) and (me.get("kind") == "screen"
                                                          or me.get("role") == "presentation"):
         return False
     return True
