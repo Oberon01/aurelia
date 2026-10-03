@@ -412,6 +412,9 @@ async def _orbit(app, user: str, tool: str, args: dict, wait: float = 45) -> dic
                              "is in config/governance/functions/orbit.yaml.")
         if exc.status_code in (403, 429):
             raise ValueError(str(d.get("reason") or exc.detail))
+        if exc.status_code == 502:                          # Orbit is up but doesn't know the tool: an older Orbit
+            raise ValueError(f"Orbit didn't take orbit.{tool}; it may be running an older version "
+                             "(docker compose up -d --build orbit).")
         raise NoRoku(str(exc.detail))
     res = await tasks.wait_for_result(tid, wait)
     if res is None:

@@ -183,3 +183,16 @@ def test_a_missing_governance_entry_is_said_plainly_not_as_a_missing_tv(monkeypa
     with pytest.raises(ValueError, match="governance has it as 'change'") as e:
         run(quasar._orbit(types.SimpleNamespace(), "owner", "tv_play", {}))
     assert not isinstance(e.value, quasar.NoRoku)
+
+
+def test_an_orbit_that_doesnt_know_the_tool_is_said_plainly(monkeypatch):
+    import types
+    from fastapi import HTTPException
+    from app import tasks
+
+    async def launch(app, start):
+        raise HTTPException(502, "function 'orbit' did not accept the task: 404")
+    monkeypatch.setattr(tasks, "launch", launch)
+    with pytest.raises(ValueError, match="older version") as e:
+        run(quasar._orbit(types.SimpleNamespace(), "owner", "tv_play", {}))
+    assert not isinstance(e.value, quasar.NoRoku)
