@@ -375,7 +375,7 @@ not installer reruns. Installing apps on Windows isn't built yet.
 work web pages or TV menus to play things any more. She asks a service with an
 API what to play and hands it to her own player on the computer (mpv, full
 screen on top of her shell), which tells her exactly what it's doing. Step 1 is
-your Jellyfin library; step 2 is your Roku TVs; YouTube and Spotify come next.
+your Jellyfin library; step 2 is your Roku TVs; step 3 is YouTube; Spotify comes next.
 
 | Say | What happens |
 |---|---|
@@ -389,6 +389,28 @@ your Jellyfin library; step 2 is your Roku TVs; YouTube and Spotify come next.
 | `play Dune on the bedroom TV` (a Roku, no computer) | in the Roku's Jellyfin app, on that exact title; Jellyfin confirms it's playing |
 | `play The Bear on the TV` (not in your library) | Roku's own search opens it in whichever of your apps has it |
 | `play Stranger Things on Netflix on the TV` | the same, in that app only |
+| `show me my youtube` / `youtube subscriptions` / `my watch later` | `quasar.youtube`: your feed as thumbnails, read on the TV PC with its own sign-in; tap one to play it |
+| `youtube lofi beats` / `search lofi beats on youtube` | YouTube search, as thumbnails you can play |
+| `play lofi beats on youtube` | the top result (not a live stream), in my player |
+
+**YouTube (step 3, agent 0.7.0).** Your home feed (what YouTube recommends
+you), subscriptions, Watch Later, history and search come back as thumbnails;
+tap one and it plays full screen in my player, controlled like anything else
+(pause, skip ahead, stop, "what's playing"), and it counts as playing only when
+my player says it's playing that video. It's read on the TV PC with the TV PC's
+own YouTube sign-in: sign in to YouTube once in my shell there ("sign in to
+youtube on the TV PC"), and the cookies stay in its browser profile; they're
+read in place and never sent anywhere. Without a sign-in, search still works,
+but the feeds aren't yours (I say so). The reading is done by yt-dlp, which
+comes from my own release: it's pinned in my lock file, tested by Chrysalis,
+fetched by the computer with its own key and checked against my checksum
+before it's used, and it runs as a Python package, never as a downloaded
+program. YouTube needs a JavaScript runtime beside it: Node 20 or newer, which
+the installer's `--system` step now installs (Ubuntu's `nodejs`), or which I
+offer to install the first time it's missing. When YouTube changes something
+and yt-dlp catches up, updating the pin (`uv lock --upgrade-package yt-dlp` in
+`services/orchestrator`) and releasing is the whole fix. "youtube X" and
+"search X on youtube" now give playable thumbnails here instead of links.
 
 **On a Roku TV (step 2).** A computer always wins: if the TV PC is plugged into
 the living room TV, "play Dune on the living room TV" plays it there with my

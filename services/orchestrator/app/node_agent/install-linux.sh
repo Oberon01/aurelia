@@ -140,6 +140,8 @@ RULES
   sudo apt-get install -y mpv >/dev/null 2>&1 || echo "  (mpv isn't available; I can't play video or music here)"
   # 5b. The clipboard, when you ask me to copy something to or from this computer.
   sudo apt-get install -y wl-clipboard xclip >/dev/null 2>&1 || echo "  (wl-clipboard isn't available; I can't reach the clipboard here)"
+  # 5c. YouTube's JavaScript runtime (yt-dlp, which comes from Aurelia's release, needs Node 20+).
+  sudo apt-get install -y nodejs >/dev/null 2>&1 || echo "  (nodejs isn't available; YouTube won't play here until it is)"
   # 6. Reading the whole system log (diagnostics), not only this account's.
   sudo usermod -aG adm "$ME" && echo "  She can read the system log after the next login or restart."
   echo "Done. Restart and shutdown no longer need a password for this account."

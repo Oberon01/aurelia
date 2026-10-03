@@ -58,7 +58,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.6.7"
+VERSION = "0.7.0"
 IS_WINDOWS = platform.system() == "Windows"
 EXIT_REVOKED = 3                                   # the service manager doesn't restart after this
 EXIT_UPDATED = 75                                  # restart me: a new version is in place
@@ -1509,13 +1509,16 @@ class Mpv:
         return s.makefile("rwb", buffering=0), s
 
     def command(self, *args):
+        """A command by position, or one dict with named arguments (loadfile with per-file options:
+        the same on old and new mpv, whose positional loadfile arguments differ)."""
         with self.lock:
             self.next_id += 1
             rid = self.next_id
             opened = self._open()
             f, sock = opened if isinstance(opened, tuple) else (opened, None)
             try:
-                f.write((json.dumps({"command": list(args), "request_id": rid}) + "\n").encode())
+                cmd = args[0] if len(args) == 1 and isinstance(args[0], dict) else list(args)
+                f.write((json.dumps({"command": cmd, "request_id": rid}) + "\n").encode())
                 while True:
                     line = f.readline()
                     if not line:
@@ -1558,15 +1561,21 @@ class Mpv:
         self.last = {k: st[k] for k in ("title", "item", "kind", "position", "duration")}
         return st
 
+    def _load(self, it: dict, flags: str) -> None:
+        if it.get("opts"):
+            self.command({"name": "loadfile", "url": it["url"], "flags": flags, "options": it["opts"]})
+        else:
+            self.command("loadfile", it["url"], flags)
+
     def play(self, items: list[dict], start: float = 0.0, header: str | None = None) -> dict:
         self.start()
-        if header:
-            self.command("set_property", "http-header-fields", header)
+        # Always set: my key goes only with streams from my own server, never to anyone else's.
+        self.command("set_property", "http-header-fields", [header] if header else [])
         self.items, self.last = items, {}
         self.command("set_property", "pause", False)
-        self.command("loadfile", items[0]["url"], "replace")
+        self._load(items[0], "replace")
         for it in items[1:]:
-            self.command("loadfile", it["url"], "append")
+            self._load(it, "append")
         deadline, seen_busy = time.monotonic() + 20, False
         while time.monotonic() < deadline:                    # confirmed from the player itself
             idle = self.get("idle-active", True)
@@ -1690,10 +1699,17 @@ def player_busy() -> bool:
 
 def do_play(args: dict) -> dict:
     """Play streams from Aurelia's own server (/nodes/media/<ticket>), in order, full screen; start:
-    seconds into the first. Nothing else: no other address, no files, no scripts."""
+    seconds into the first. Or one YouTube video by its id, resolved here (with this computer's own
+    YouTube sign-in) into YouTube's own streams. Nothing else: no other address, no files, no scripts."""
     raw = args.get("items")
     if not isinstance(raw, list) or not raw:
         raise ValueError("nothing to play")
+    if raw[0].get("youtube"):
+        it = youtube_item(str(raw[0]["youtube"]), str(raw[0].get("title") or ""))
+        p = player()
+        st = p.play([it], float(args.get("start") or 0), None)        # no header: my key never goes to Google
+        p.report()
+        return {"player": st}
     items = []
     for it in raw[:500]:
         path = str((it or {}).get("path") or "")
@@ -1705,6 +1721,148 @@ def do_play(args: dict) -> dict:
     st = p.play(items, float(args.get("start") or 0), f"Authorization: Bearer {NODE_KEY}" if NODE_KEY else None)
     p.report()
     return {"player": st}
+
+
+# ---- YouTube (Quasar step 3) -------------------------------------------------------------------------
+#
+# yt-dlp reads YouTube for her: his feeds (home, subscriptions, Watch Later) and search, with this
+# computer's own YouTube sign-in (the cookies in her shell's browser profile, read here and never sent
+# anywhere), and the streams for a video, which her player plays. yt-dlp itself comes from Aurelia's
+# release, pinned and tested there, fetched with this computer's key and checked against her checksum
+# before it's used; it runs as a Python package from that one file, never as a downloaded program.
+# YouTube needs a JavaScript runtime beside it: Deno, or Node 20 or newer (Ubuntu's nodejs package).
+
+YT_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
+YT_FEEDS = {"home": ":ytrec", "subscriptions": ":ytsubs", "watch_later": ":ytwatchlater", "history": ":ythistory"}
+YT_FORMAT = "bv*[height<=1080][vcodec!^=av01]+ba/b[height<=1080]/bv*+ba/b"
+
+
+def ytdlp_bundle() -> Path:
+    """Aurelia's yt-dlp, here: the one she announces, checked against her checksum."""
+    if not SERVER_URL:
+        raise ValueError("I'm not connected to Aurelia")
+    meta = call(SERVER_URL, "/nodes/ytdlp", key=NODE_KEY, timeout=15)
+    sha, version = str(meta.get("sha256") or ""), str(meta.get("version") or "")
+    if not re.fullmatch(r"[0-9a-f]{64}", sha):
+        raise ValueError("Aurelia didn't say which yt-dlp to use")
+    d = config_dir() / "ytdlp"
+    f = d / f"yt-dlp-{sha[:16]}.zip"
+    if f.exists() and hashlib.sha256(f.read_bytes()).hexdigest() == sha:
+        return f
+    req = urllib.request.Request(SERVER_URL.rstrip("/") + "/nodes/ytdlp.zip",
+                                 headers={"User-Agent": f"aurelia-node/{VERSION}", "Authorization": f"Bearer {NODE_KEY}"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        data = r.read()
+    if hashlib.sha256(data).hexdigest() != sha:
+        raise ValueError("the yt-dlp download didn't match Aurelia's checksum, so I didn't use it")
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_suffix(".tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, f)
+    for old in d.glob("yt-dlp-*.zip"):                        # only the one in use is kept
+        if old != f:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+    log(f"yt-dlp {version} ready")
+    return f
+
+
+def js_runtime() -> list[str]:
+    """yt-dlp's JavaScript runtime for YouTube: Deno, else Node 20+."""
+    if shutil.which("deno"):
+        return []                                              # yt-dlp's default
+    node = shutil.which("node") or shutil.which("nodejs")
+    if node:
+        m = re.match(r"v?(\d+)", _run([node, "--version"]).strip())
+        if m and int(m.group(1)) >= 20:
+            return ["--js-runtimes", f"node:{node}"]
+    raise ValueError("YouTube needs Node.js here (Ubuntu's nodejs package, version 20 or newer)")
+
+
+def youtube_cookies() -> list[str]:
+    """This computer's YouTube sign-in: the cookies in her shell's browser profile (read in place)."""
+    if IS_WINDOWS:
+        return []
+    browser = find_browser() or ""
+    prof = (Path.home() / "snap" / "chromium" / "common" / "aurelia-shell") if "/snap/" in browser \
+        else config_dir() / "shell-profile"
+    if not (prof / "Default" / "Cookies").exists():
+        return []
+    name = "chrome" if "google-chrome" in browser else "edge" if "edge" in browser else "chromium"
+    return ["--cookies-from-browser", f"{name}:{prof}"]
+
+
+def ytdlp(args: list[str], timeout: float = 90) -> str:
+    bundle = ytdlp_bundle()
+    env = {**session_env(), "PYTHONPATH": str(bundle)}
+    argv = [sys.executable, "-m", "yt_dlp", "--ignore-config", "--no-warnings", "--no-progress",
+            *youtube_cookies(), *args]
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, env=env)
+    except subprocess.TimeoutExpired:
+        raise ValueError("YouTube took too long to answer")
+    if r.returncode != 0:
+        err = " ".join((r.stderr or "").split())
+        if re.search(r"sign in|log ?in|cookies|account", err, re.I):
+            raise ValueError("YouTube wants a sign-in for that, and this computer isn't signed in to YouTube "
+                             "(sign in once in my shell's browser here)")
+        raise ValueError("YouTube said no: " + (err.removeprefix("ERROR: ")[:200] or f"exit {r.returncode}"))
+    return r.stdout
+
+
+def _yt_entry(e: dict) -> dict | None:
+    vid = str(e.get("id") or "")
+    if not YT_ID.match(vid):
+        return None                                            # channels, playlists, shorts shelves: not a video
+    out = {"id": vid, "title": str(e.get("title") or "")[:200], "channel": str(e.get("channel") or e.get("uploader") or "")[:100]}
+    if e.get("duration"):
+        out["seconds"] = int(float(e["duration"]))
+    if e.get("view_count"):
+        out["views"] = int(e["view_count"])
+    if e.get("upload_date"):
+        out["date"] = str(e["upload_date"])[:8]
+    if e.get("live_status") == "is_live":
+        out["live"] = True
+    return out
+
+
+def do_youtube_feed(args: dict) -> dict:
+    """His YouTube: home (recommended), subscriptions, watch_later, history, or a search."""
+    feed = str(args.get("feed") or "home")
+    n = max(1, min(60, int(args.get("limit") or 30)))
+    if feed == "search":
+        q = " ".join(str(args.get("query") or "").split())[:200]
+        if not q:
+            raise ValueError("search YouTube for what?")
+        url = f"ytsearch{n}:{q}"
+    elif feed in YT_FEEDS:
+        url = YT_FEEDS[feed]
+    else:
+        raise ValueError("I can read your YouTube home, subscriptions, Watch Later, history, or a search")
+    out = json.loads(ytdlp(["--flat-playlist", "-J", "--playlist-end", str(n), url], timeout=120) or "{}")
+    items = [x for x in (_yt_entry(e) for e in out.get("entries") or [] if isinstance(e, dict)) if x]
+    return {"feed": feed, "items": items[:n], "signed_in": bool(youtube_cookies())}
+
+
+def youtube_item(vid: str, title: str = "") -> dict:
+    """One video's streams for her player (best up to 1080p), from YouTube itself."""
+    if not YT_ID.match(vid):
+        raise ValueError("that isn't a YouTube video id")
+    info = json.loads(ytdlp([*js_runtime(), "-f", YT_FORMAT, "-J", "--no-playlist",
+                             f"https://www.youtube.com/watch?v={vid}"], timeout=120) or "{}")
+    fmts = info.get("requested_formats") or ([info] if info.get("url") else [])
+    if not fmts or not fmts[0].get("url"):
+        raise ValueError("YouTube didn't give me a stream for that video")
+    ua = str((fmts[0].get("http_headers") or {}).get("User-Agent") or "")
+    opts = {"force-media-title": (title or str(info.get("title") or ""))[:200]}
+    if ua:
+        opts["user-agent"] = ua
+    if len(fmts) > 1 and fmts[1].get("url"):
+        opts["audio-files-append"] = fmts[1]["url"]             # YouTube sends picture and sound separately
+    return {"url": fmts[0]["url"], "opts": opts, "title": opts["force-media-title"], "item": f"yt:{vid}",
+            "kind": "video"}
 
 
 # ---- her window on a workstation --------------------------------------------------------------------
@@ -3686,7 +3844,7 @@ def do_page_clear(args: dict) -> dict:
 COMMANDS.update({"logins": do_logins, "sign_in": do_sign_in, "play": do_play, "packages_find": do_packages_find,
                  "package_check_remove": do_package_check_remove, "package_install": do_package_install,
                  "package_remove": do_package_remove, "clipboard_get": do_clipboard_get,
-                 "clipboard_set": do_clipboard_set, "mode": do_mode})
+                 "clipboard_set": do_clipboard_set, "mode": do_mode, "youtube_feed": do_youtube_feed})
 COMMANDS.update({"page_look": do_page_look, "page_click": do_page_click, "page_type": do_page_type,
                  "page_key": do_page_key, "page_scroll": do_page_scroll, "page_back": do_page_back,
                  "page_media": do_page_media, "page_clear": do_page_clear})

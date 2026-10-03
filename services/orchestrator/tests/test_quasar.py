@@ -196,3 +196,114 @@ def test_an_orbit_that_doesnt_know_the_tool_is_said_plainly(monkeypatch):
     with pytest.raises(ValueError, match="older version") as e:
         run(quasar._orbit(types.SimpleNamespace(), "owner", "tv_play", {}))
     assert not isinstance(e.value, quasar.NoRoku)
+
+
+# ---- step 3: YouTube --------------------------------------------------------------------------------
+
+def test_every_quasar_tool_is_one_it_runs():
+    assert {t.name for t in quasar.TOOLS} == set(quasar.HANDLERS)
+
+
+def test_the_yt_dlp_bundle_is_the_pinned_package_and_the_same_every_time():
+    import io
+    import zipfile
+    from app import ytdlp_bundle
+    ytdlp_bundle._cache = None
+    a = ytdlp_bundle.build()
+    ytdlp_bundle._cache = None
+    b = ytdlp_bundle.build()
+    assert a["sha256"] == b["sha256"] and a["version"].startswith("yt-dlp ")
+    names = zipfile.ZipFile(io.BytesIO(a["zip"])).namelist()
+    assert "yt_dlp/__main__.py" in names and any(n.startswith("yt_dlp_ejs/") for n in names)
+    assert not any("__pycache__" in n or n.startswith("..") for n in names)
+
+
+@pytest.fixture
+def yt(monkeypatch):
+    import types
+    asked = []
+    answers = {}
+
+    async def ask(app, node, kind, args, timeout=25):
+        asked.append((kind, args))
+        return answers[kind](args) if callable(answers.get(kind)) else answers.get(kind, {})
+
+    async def where(app, on):
+        return {"id": 5, "name": "TV PC"}
+
+    async def fetchval(*a):
+        return '{"agent_version": "0.7.0"}'
+
+    async def no_tv(app, user, node):
+        return {}
+    from app import constellation, db
+    monkeypatch.setattr(constellation, "_ask_new", ask)
+    monkeypatch.setattr(constellation, "show_on_tv", no_tv)
+    monkeypatch.setattr(quasar, "_where", where)
+    monkeypatch.setattr(db, "pool", lambda: types.SimpleNamespace(fetchval=fetchval))
+
+    class R:
+        async def get(self, k): return None
+    app = types.SimpleNamespace(state=types.SimpleNamespace(redis=R()))
+    return app, asked, answers
+
+
+def test_his_youtube_feed_comes_back_as_posters(yt):
+    app, asked, answers = yt
+    answers["youtube_feed"] = {"signed_in": True, "items": [
+        {"id": "dQw4w9WgXcQ", "title": "A song", "channel": "Rick", "seconds": 213, "date": "20091025"},
+        {"id": "bad id", "title": "x"}]}
+    out = run(quasar.youtube(app, "owner", {"feed": "subs"}))
+    assert asked == [("youtube_feed", {"feed": "subscriptions", "query": "", "limit": 30})]
+    assert out["headline"] == "Subscriptions · 1 video" and "note" not in out
+    assert out["catalog"]["items"] == [{"id": "yt:dQw4w9WgXcQ", "name": "A song", "type": "video", "channel": "Rick",
+                                        "art": "/quasar/ytart/dQw4w9WgXcQ", "minutes": 4, "date": "2009-10-25"}]
+
+
+def test_a_feed_without_his_sign_in_says_so(yt):
+    app, asked, answers = yt
+    answers["youtube_feed"] = {"signed_in": False, "items": []}
+    out = run(quasar.youtube(app, "owner", {}))
+    assert asked[0][1]["feed"] == "home" and "isn't signed in to YouTube" in out["note"]
+
+
+def test_a_tapped_video_plays_by_its_id_and_the_player_confirms_it(yt):
+    app, asked, answers = yt
+    answers["play"] = {"player": {"active": True, "item": "yt:dQw4w9WgXcQ", "title": "A song", "position": 0.4}}
+    out = run(quasar.play(app, "owner", {"id": "yt:dQw4w9WgXcQ", "on": ""}))
+    assert asked == [("play", {"items": [{"youtube": "dQw4w9WgXcQ", "title": ""}]})]
+    assert out["headline"] == "Playing A song on TV PC" and out["now"]["art"] == "/quasar/ytart/dQw4w9WgXcQ"
+
+
+def test_a_player_showing_something_else_is_not_called_playing(yt):
+    app, asked, answers = yt
+    answers["play"] = {"player": {"active": True, "item": "jf:abc", "title": "Dune"}}
+    with pytest.raises(ValueError, match="didn't start it"):
+        run(quasar.play(app, "owner", {"id": "yt:dQw4w9WgXcQ"}))
+
+
+def test_play_x_on_youtube_plays_the_top_result_that_isnt_live(yt):
+    app, asked, answers = yt
+    answers["youtube_feed"] = {"items": [{"id": "jNQXAC9IVRw", "title": "Live now", "live": True},
+                                         {"id": "dQw4w9WgXcQ", "title": "Lofi"}]}
+    answers["play"] = {"player": {"active": True, "item": "yt:dQw4w9WgXcQ", "title": "Lofi"}}
+    out = run(quasar.play(app, "owner", {"what": "lofi beats", "on": "youtube on the tv"}))
+    assert asked[0] == ("youtube_feed", {"feed": "search", "query": "lofi beats", "limit": 5})
+    assert asked[1] == ("play", {"items": [{"youtube": "dQw4w9WgXcQ", "title": "Lofi"}]})
+    assert out["headline"] == "Playing Lofi on TV PC"
+
+
+def test_no_nodejs_offers_to_install_it(yt):
+    app, asked, answers = yt
+
+    def fail(args):
+        raise ValueError("YouTube needs Node.js here (Ubuntu's nodejs package, version 20 or newer)")
+    answers["play"] = fail
+    out = run(quasar.play(app, "owner", {"id": "yt:dQw4w9WgXcQ"}))
+    assert out["confirm"]["tool"] == "constellation.install_package" and out["confirm"]["args"]["name"] == "nodejs"
+
+
+def test_youtube_thumbnails_only_take_a_video_id():
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException):
+        run(quasar.ytart("../../etc"))

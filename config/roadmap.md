@@ -51,7 +51,8 @@ Built so far:
 - Power and presence: lock, sleep, screen off/on, idle time, restart and shutdown (always confirmed; I watch for it to come back), wake-on-LAN; shutdowns that can't hang (installer --system); diagnostics say how the last shutdown went.
 - Sound and media: the computer's volume, mute and which output it plays through; next, previous and what's playing for any player (Spotify, VLC, a browser tab).
 - Watching a screen live in a panel ("show me the TV PC screen"), even while I'm signing in; the frames go only to your display, never to me.
-- Quasar step 2: a title by name on a Roku TV: from your library in its Jellyfin app (confirmed by Jellyfin), anything else through Roku's search in whichever of your apps has it, and the TV's own state says whether it's playing, open, or only found.
+- Quasar step 3: YouTube in my own player: your home feed, subscriptions, Watch Later, history and search as thumbnails, read on the TV PC with its own sign-in; yt-dlp comes from my release, checksummed.
+- Quasar step 2: a title by name on a Roku TV: from your library in its Jellyfin app (confirmed by Jellyfin), anything else through Roku's search in whichever of your apps has it, and the TV's own state says whether it's playing, open, or only found. (To improve later: Roku's search often won't open a title by itself, so it ends at "found".)
 - Video and music with my own player (Quasar, brought forward from Phase 15): I play from services with APIs, never by working a web page. Step 1: your Jellyfin library (find, play a show where you left off and keep going, movies, albums), full screen on any computer, controlled and confirmed through the player itself, with your resume points kept in Jellyfin. The live view now uses the browser's screencast, so the TV no longer jumps.
 - The Windows installer (PowerShell, no admin; Python installed for you), and modes: gaming (I keep out of the way, never the GPU; on by itself while a game runs) and exam (nothing of mine runs until a timer brings me back).
 - A shared clipboard across your devices (text; a computer's clipboard, a phone's Copy card; never passwords or keys).
@@ -60,7 +61,7 @@ Built so far:
 - No ghost confirmations: sends are tried three times and confirmed only by the display's own report (and you hear when a kept one finally shows); opening a page or an app, going home and the clipboard are checked on the computer itself, and anything I couldn't see happen is called "asked", not "done".
 - Long answers open as a panel; a Raphael speaking style on trial.
 - I read my own releases and this roadmap, and harder questions (why, explain, improve, compare) use a stronger model.
-Still to do: the rest of Quasar's sources (YouTube, including your home feed, read with the TV PC's own sign-in; Spotify through its API with my computers as Spotify speakers), the phone web app with push notifications, and the field check.
+Still to do: Quasar's last source (Spotify through its API with my computers as Spotify speakers), the phone web app with push notifications, and the field check.
 
 ## 8. Iris — Not started
 Builds: sight. Models that take images (screenshots, photos, later cameras); pixel-level control of a whole desktop, not just my browser, on Linux and Windows. What's on screen is data; I never type passwords; anything that buys, sends or deletes waits for your OK. Later, with the GPU box: home cameras you choose, processed locally.

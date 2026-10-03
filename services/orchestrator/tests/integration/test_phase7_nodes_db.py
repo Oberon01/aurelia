@@ -671,3 +671,12 @@ def test_gaming_and_exam_modes(node):
     again = subprocess.run([sys.executable, str(AGENT), "run"], env={"HOME": str(cfg.parents[1]), "XDG_CONFIG_HOME": str(cfg.parent),
                                                                      "PATH": f"{bin_}:/usr/bin:/bin"}, timeout=20)
     assert again.returncode == 4                                                  # started during the exam: stays stopped
+
+
+def test_yt_dlp_is_only_for_paired_computers_and_matches_its_checksum(node):
+    import hashlib
+    orch, h = node["orch"], {"Authorization": f"Bearer {node['key']}"}
+    assert httpx.get(f"{orch}/nodes/ytdlp").status_code == 401
+    meta = httpx.get(f"{orch}/nodes/ytdlp", headers=h, timeout=60).json()
+    z = httpx.get(f"{orch}/nodes/ytdlp.zip", headers=h, timeout=60).content
+    assert hashlib.sha256(z).hexdigest() == meta["sha256"] and meta["bytes"] == len(z) and "yt-dlp" in meta["version"]

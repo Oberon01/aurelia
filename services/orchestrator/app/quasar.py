@@ -3,7 +3,12 @@
 Aurelia doesn't operate players built for eyes (web pages, TV menus). She asks services with
 APIs for what to play and hands it to a player she controls: her own player on each computer
 (mpv, in the node agent), which tells her exactly what it's doing. Step 1 is his Jellyfin
-library; step 2 is his Roku TVs (below); YouTube and Spotify come next.
+library; step 2 is his Roku TVs (below); step 3 is YouTube (below); Spotify comes next.
+
+YouTube: his feeds (home, subscriptions, Watch Later, history) and search are read by a computer of
+his with its own YouTube sign-in (the TV PC: the cookies in its browser never leave it), using
+yt-dlp shipped in Aurelia's own release (app/ytdlp_bundle.py). A video plays in that computer's
+player like anything else, from YouTube's own streams; thumbnails come through /quasar/ytart.
 
 On a Roku TV (no computer of his by that name): a title from his library opens in the Roku's
 Jellyfin app on that exact item, and Jellyfin's own list of what each of its apps is playing
@@ -52,6 +57,12 @@ TYPES = {"movies": ["Movie"], "shows": ["Series", "Episode"], "music": ["MusicAl
          "any": ["Movie", "Series", "Episode", "MusicAlbum", "MusicArtist", "Audio", "Playlist"]}
 FIELDS = "Overview,ProductionYear,RunTimeTicks,UserData,SeriesName,ParentIndexNumber,IndexNumber,AlbumArtist,Album,Artists"
 TICKS = 10_000_000
+YT_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
+YT_FEEDS = {"home": "Your YouTube", "subscriptions": "Subscriptions", "watch_later": "Watch Later",
+            "history": "Watched on YouTube", "search": "YouTube"}
+YT_SINCE = (0, 7, 0)
+YT_FEED_WORDS = {"home page": "home", "homepage": "home", "feed": "home", "recommended": "home", "recommendations": "home",
+                 "subs": "subscriptions", "watch later": "watch_later", "later": "watch_later", "watched": "history"}
 ROKU_JELLYFIN = "Jellyfin"                              # the Jellyfin app on a Roku
 ROKU_CONFIRM = 25.0                                     # how long Jellyfin gets to report the Roku playing it
 SERVICES = (r"netflix|hulu|(?:amazon )?prime(?: video)?|amazon|disney(?:\+| plus)?|hbo max|max|peacock|"
@@ -83,10 +94,21 @@ TOOLS = [
                                  "says the TV really shows (playing, open in an app, or only found).",
         input_schema={"type": "object", "properties": {
             "what": {"type": "string"}, "id": {"type": "string"}, "on": {"type": "string"},
-            "app": {"type": "string", "description": "a streaming service, only if he named one"},
+            "app": {"type": "string", "description": "a streaming service, only if he named one; 'youtube' "
+                                                     "searches YouTube and plays the top result"},
             "season": {"type": "integer"}, "episode": {"type": "integer"},
             "shuffle": {"type": "boolean"}, "from_start": {"type": "boolean"}}},
         cancellable=False),
+    registry.ToolSpec(
+        name="youtube", description="His YouTube, as posters he can tap to play: feed home (what YouTube recommends "
+                                    "him, his home page), subscriptions (new from channels he follows), watch_later, "
+                                    "history, or search (with query). Read on his computer with its own YouTube "
+                                    "sign-in (on: which one; leave out for the one running your shell). Each item's id "
+                                    "('yt:…') plays with Quasar's play.",
+        input_schema={"type": "object", "properties": {
+            "feed": {"type": "string", "enum": list(YT_FEEDS)}, "query": {"type": "string"}, "on": {"type": "string"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 60}}},
+        cancellable=False, freshness_seconds=120, display="panel"),
 ]
 
 
@@ -499,12 +521,38 @@ async def on_roku(app, user: str, tv: str, what: str, args: dict, service: str |
 
 async def play(app, user: str, args: dict) -> dict:
     from . import constellation
-    jf = Jellyfin(app.state.redis)
     on = " ".join(str(args.get("on") or "").split())
     what_said = " ".join(str(args.get("what") or "").split())
     service, tv_said = split_service(on)
     if service is None and args.get("app"):
         service, tv_said = split_service(str(args["app"]))[0], on
+    yt = str(args.get("id") or "")
+    if yt.startswith("yt:") or service in ("youtube", "youtube tv") and not args.get("id"):
+        try:
+            node = await _yt_node(app, tv_said if service else on)
+        except ValueError:
+            if service and tv_said and not yt:              # no computer by that name: the Roku's YouTube app
+                try:
+                    return await on_roku(app, user, tv_said, what_said, args, service)
+                except NoRoku:
+                    pass
+            raise
+        if yt.startswith("yt:"):
+            vid, title = yt[3:], str(args.get("what") or "")
+            if not YT_ID.match(vid):
+                raise ValueError("That isn't a YouTube video.")
+        else:                                               # "play lo-fi beats on youtube": the top result
+            if not what_said:
+                raise ValueError("Play what from YouTube?")
+            from . import constellation
+            d = await constellation._ask_new(app, node, "youtube_feed", {"feed": "search", "query": what_said,
+                                                                         "limit": 5}, timeout=150)
+            hits = [x for x in d.get("items") or [] if YT_ID.match(str(x.get("id") or "")) and not x.get("live")]
+            if not hits:
+                raise ValueError(f"YouTube has nothing for “{what_said}”.")
+            vid, title = hits[0]["id"], hits[0].get("title") or what_said
+        return await play_youtube(app, user, node, vid, title)
+    jf = Jellyfin(app.state.redis)
     if service:                                             # "on Netflix (on the TV)": a streaming app, on a Roku
         if not what_said and not args.get("id"):
             raise ValueError("Play what?")
@@ -610,10 +658,115 @@ def now_block(node_name: str, st: dict, known: dict | None = None) -> dict:
            "subtitles": st.get("subtitles"), "next": st.get("next"), "index": st.get("index"), "count": st.get("count")}
     if jid:
         out["art"] = f"/quasar/art/{(meta or {}).get('SeriesId') or (meta or {}).get('AlbumId') or jid}"
+    elif item.startswith("yt:") and YT_ID.match(item[3:]):
+        out["art"] = f"/quasar/ytart/{item[3:]}"
     return {k: v for k, v in out.items() if v is not None}
 
 
-HANDLERS = {"find": find, "play": play}
+# ---- YouTube (step 3) --------------------------------------------------------------------------------
+
+def yt_shape(x: dict) -> dict:
+    vid = str(x.get("id") or "")
+    out = {"id": f"yt:{vid}", "name": x.get("title") or "", "type": "video", "channel": x.get("channel") or "",
+           "art": f"/quasar/ytart/{vid}"}
+    if x.get("seconds"):
+        out["minutes"] = max(1, round(int(x["seconds"]) / 60))
+    if x.get("date") and re.fullmatch(r"\d{8}", str(x["date"])):
+        d = str(x["date"])
+        out["date"] = f"{d[:4]}-{d[4:6]}-{d[6:]}"
+    if x.get("live"):
+        out["live"] = True
+    return out
+
+
+async def _yt_node(app, on: str) -> dict:
+    node = await _where(app, on)
+    info = await db.pool().fetchval("SELECT info FROM devices WHERE id=$1", node["id"])
+    info = json.loads(info) if isinstance(info, str) else (info or {})
+    if _version(info.get("agent_version")) < YT_SINCE:
+        raise ValueError(f"{node['name']} is running an older agent without YouTube; it updates itself within ten minutes.")
+    return node
+
+
+async def youtube(app, user: str, args: dict) -> dict:
+    from . import constellation
+    said = re.sub(r"[^a-z]+", " ", str(args.get("feed") or "").lower()).strip()
+    feed = YT_FEED_WORDS.get(said, said)
+    feed = feed if feed in YT_FEEDS else ("search" if args.get("query") else "home")
+    q = " ".join(str(args.get("query") or "").split())[:200]
+    node = await _yt_node(app, " ".join(str(args.get("on") or "").split()))
+    d = await constellation._ask_new(app, node, "youtube_feed", {"feed": feed, "query": q,
+                                                                 "limit": int(args.get("limit") or 30)}, timeout=150)
+    items = [yt_shape(x) for x in d.get("items") or [] if YT_ID.match(str(x.get("id") or ""))]
+    what = f"YouTube for “{q}”" if feed == "search" else YT_FEEDS[feed]
+    out = {"headline": f"{what} · {len(items)} video{'s' if len(items) != 1 else ''}" if items else f"{what}: nothing",
+           "catalog": {"source": "youtube", "node": node["name"], "items": items}}
+    if not d.get("signed_in") and feed != "search":
+        out["note"] = (f"{node['name']} isn't signed in to YouTube, so this isn't yours. Sign in once on it "
+                       "(\"sign in to youtube on the TV PC\"), and your feed follows.")
+    return out
+
+
+async def play_youtube(app, user: str, node: dict, vid: str, title: str = "") -> dict:
+    """One YouTube video on a computer, in my player; confirmed by the player like anything else."""
+    from . import constellation
+    info = await db.pool().fetchval("SELECT info FROM devices WHERE id=$1", node["id"])
+    info = json.loads(info) if isinstance(info, str) else (info or {})
+    if _version(info.get("agent_version")) < YT_SINCE:
+        raise ValueError(f"{node['name']} is running an older agent without YouTube; it updates itself within ten minutes.")
+    redis = app.state.redis
+    raw = await redis.get(STATE.format(node["id"]))
+    before = json.loads(raw) if raw else {}
+    tv = asyncio.create_task(constellation.show_on_tv(app, user, node))
+    try:
+        data = await constellation._ask_new(app, node, "play", {"items": [{"youtube": vid, "title": title}]}, timeout=150)
+    except ValueError as exc:
+        await tv
+        low = str(exc).lower()
+        if "node.js" in low or "nodejs" in low:                   # YouTube needs a JavaScript runtime there
+            return {"headline": f"{node['name']} needs Node.js for YouTube",
+                    "did": {"node": node["name"], "what": "YouTube needs Node.js (20 or newer) on that computer"},
+                    "confirm": {"tool": "constellation.install_package",
+                                "reason": f"YouTube needs a JavaScript runtime on {node['name']}. Install Node.js "
+                                          "from Ubuntu's packages?",
+                                "reply": "Installed Node.js. Ask me to play it again.",
+                                "args": {"target": node["name"], "name": "nodejs", "source": "apt"}}}
+        if "isn't installed" in low and "mpv" in low:
+            return {"headline": f"{node['name']} needs my player first",
+                    "did": {"node": node["name"], "what": "My player (mpv) isn't installed there"},
+                    "confirm": {"tool": "constellation.install_package",
+                                "reason": f"{node['name']} needs my player (mpv) to play video. Install it from Ubuntu's packages?",
+                                "reply": "Installed my player. Ask me to play it again.",
+                                "args": {"target": node["name"], "name": "mpv", "source": "apt"}}}
+        raise
+    except BaseException:
+        await tv
+        raise
+    st = data.get("player") or {}
+    if not st.get("active") or st.get("item") != f"yt:{vid}":
+        raise ValueError(f"{node['name']}'s player didn't start it.")
+    t = st.get("title") or title or "the video"
+    switched = before.get("active") and before.get("title") and before["title"] != t
+    return {"headline": f"Switched to {t} on {node['name']}" if switched else f"Playing {t} on {node['name']}",
+            "now": now_block(node["name"], st), **await tv}
+
+
+@router.get("/ytart/{vid}", include_in_schema=False)
+async def ytart(vid: str):
+    """A video's thumbnail, from YouTube's image server (only an id goes out; nothing of his)."""
+    if not YT_ID.match(vid):
+        raise HTTPException(404)
+    async with httpx.AsyncClient(timeout=10, follow_redirects=True) as c:
+        try:
+            r = await c.get(f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg")
+        except httpx.HTTPError:
+            raise HTTPException(502)
+    if r.status_code != 200:
+        raise HTTPException(404)
+    return Response(r.content, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
+
+
+HANDLERS = {"find": find, "play": play, "youtube": youtube}
 
 
 # ---- the computers' side: streams and what their players say ------------------------------------------

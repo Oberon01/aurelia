@@ -108,12 +108,33 @@ fastpath:
       tool: probe.function
       args: { name: "{name}" }
       reply: "Here's the {name} function."
-    # The web (Nebula). "Look up …" goes to the model, so she searches, reads and answers.
+    # YouTube (Quasar step 3): his feeds and search as posters; a tapped poster plays by its id.
+    - name: youtube-play-id
+      match: '^play the youtube video (?P<id>yt:[A-Za-z0-9_-]{11})(?:\s+on\s+(?:the |my )?(?P<on>.+?))?$'
+      tool: quasar.play
+      args: { id: "{id}", "on": "{on|}" }
+      reply: "On it."
+    - name: youtube-feed
+      match: '^(?:what(?:''s| is) on |show(?: me)? |open )?(?:my )?youtube(?: (?P<feed>home(?: ?page)?|feed|recommendations|subscriptions|subs|watch later|history))?(?: page)?\??$'
+      tool: quasar.youtube
+      args: { feed: "{feed|home}" }
+      reply: "Here's your YouTube."
+    - name: youtube-subs
+      match: '^(?:anything new|what(?:''s| is) new) (?:from|on) my (?:youtube )?subscriptions\??$'
+      tool: quasar.youtube
+      args: { feed: subscriptions }
+      reply: "Here's what's new from your subscriptions."
+    - name: youtube-later
+      match: '^(?:show(?: me)? |open )?my watch later\??$'
+      tool: quasar.youtube
+      args: { feed: watch_later }
+      reply: "Here's your Watch Later."
     - name: youtube-search
-      match: '^(?:(?:search|find|look up)\s+(?:on\s+)?youtube\s+(?:for\s+)?(?P<q>.+)|(?:search for|find|look up)\s+(?P<q2>.+?)\s+on youtube|youtube\s+(?P<q3>.+))$'
-      tool: nebula.youtube
-      args: { query: "{q}{q2}{q3}" }
+      match: '^(?:(?:search|find|look up)\s+(?:on\s+)?youtube\s+(?:for\s+)?(?P<q>.+)|(?:search for|search|find|look up)\s+(?P<q2>.+?)\s+on youtube|youtube\s+(?P<q3>.+))$'
+      tool: quasar.youtube
+      args: { feed: search, query: "{q}{q2}{q3}" }
       reply: "Here's what YouTube has."
+    # The web (Nebula). "Look up …" goes to the model, so she searches, reads and answers.
     - name: web-search
       match: '^(?:search (?:the web |online |google )?for|google|web search(?: for)?)\s+(?P<q>.+)$'
       tool: nebula.search

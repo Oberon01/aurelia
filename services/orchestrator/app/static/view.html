@@ -263,6 +263,9 @@ td .clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;o
 .cat .card{display:flex;flex-direction:column;gap:5px;cursor:pointer;min-width:0;background:none;border:0;padding:0;text-align:left;color:inherit;font:inherit}
 .cat .art{position:relative;aspect-ratio:2/3;border-radius:6px;overflow:hidden;background:rgba(95,212,230,.06);border:1px solid var(--cyan-soft)}
 .cat .art.sq{aspect-ratio:1/1}
+.cat.wide{grid-template-columns:repeat(auto-fill,minmax(200px,1fr))}
+.cat .art.wide{aspect-ratio:16/9}
+.cat .art .live{position:absolute;right:6px;top:6px;font-size:11px;padding:0 6px;border-radius:9px;background:#b3261e;color:#fff}
 .cat .art img{width:100%;height:100%;object-fit:cover;display:block}
 .cat .art .n{position:absolute;left:6px;top:6px;min-width:20px;padding:0 5px;border-radius:5px;background:#04121a;color:#e9fbfe;font:700 12px/1.5 ui-monospace,Menlo,monospace;text-align:center}
 .cat .art .seen{position:absolute;right:6px;top:6px;font-size:11px;padding:0 6px;border-radius:9px;background:rgba(4,18,26,.85);color:var(--ink-dim)}
@@ -273,6 +276,7 @@ td .clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;o
 .nowp{display:flex;gap:16px;align-items:flex-start;min-width:0}
 .nowp .art{flex:0 0 96px;aspect-ratio:2/3;border-radius:6px;overflow:hidden;border:1px solid var(--cyan-soft);background:rgba(95,212,230,.06)}
 .nowp .art.sq{aspect-ratio:1/1}
+.nowp .art.wide{flex-basis:160px;aspect-ratio:16/9}
 .nowp .art img{width:100%;height:100%;object-fit:cover;display:block}
 .nowp .info{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
 .nowp .vline{flex-wrap:wrap;gap:2px 12px}
@@ -1785,6 +1789,7 @@ function clipboardView(c) {
 }
 // His library (Jellyfin): posters, numbered, grouped when there's no search. A tap plays it.
 function sayPlay(x) {
+  if (x.type === "video") return `play the youtube video ${x.id}`;     // by its id: exactly that one
   if (x.type === "episode") return `play ${x.show} season ${x.season} episode ${x.episode}`;
   if (x.type === "song") return `play the song ${x.name}${x.artist ? " by " + x.artist : ""}`;
   if (x.type === "album") return `play the album ${x.name}${x.artist ? " by " + x.artist : ""}`;
@@ -1794,15 +1799,17 @@ function catalogView(c) {
   const box = el("div", "cat-group"); box.style.gap = "16px";
   let n = 0;
   const grid = items => {
-    const g = el("div", "cat");
+    const g = el("div", "cat" + (items.length && items.every(x => x.type === "video") ? " wide" : ""));
     items.forEach(x => {
       n += 1;
-      const card = el("button", "card"), art = el("div", "art" + (["album", "artist", "song"].includes(x.type) ? " sq" : ""));
+      const card = el("button", "card"), art = el("div", "art" + (["album", "artist", "song"].includes(x.type) ? " sq" : x.type === "video" ? " wide" : ""));
       const img = new Image(); img.loading = "lazy"; img.alt = ""; img.src = x.art; img.onerror = () => img.remove();
       art.append(img, el("span", "n", String(n)));
       if (x.watched) art.append(el("span", "seen", "watched"));
+      if (x.live) art.append(el("span", "live", "live"));
       if (x.resume_minutes && x.minutes) { const rb = el("div", "rb"), f = el("span"); f.style.width = Math.min(100, x.resume_minutes / x.minutes * 100) + "%"; rb.append(f); art.append(rb); }
-      const sub = x.type === "episode" ? `S${x.season}E${x.episode} · ${x.show}` :
+      const sub = x.type === "video" ? [x.channel, x.live ? null : x.minutes ? `${x.minutes} min` : null, x.date].filter(Boolean).join(" · ") :
+        x.type === "episode" ? `S${x.season}E${x.episode} · ${x.show}` :
         x.type === "show" ? ["Show", x.year].filter(Boolean).join(" · ") :
         ["album", "song"].includes(x.type) ? (x.artist || x.type) : x.type === "artist" ? "Artist" :
         [x.year, x.minutes ? `${x.minutes} min` : null].filter(Boolean).join(" · ");
@@ -1825,7 +1832,7 @@ function catalogView(c) {
 function nowView(p) {
   const box = el("div", "nowp");
   if (!p.active) { box.append(el("div", "facts", `${p.node} · nothing is playing`)); return box; }
-  if (p.art) { const a = el("div", "art" + (p.kind === "audio" ? " sq" : "")), img = new Image(); img.alt = ""; img.src = p.art; img.onerror = () => a.remove(); a.append(img); box.append(a); }
+  if (p.art) { const a = el("div", "art" + (p.kind === "audio" ? " sq" : String(p.art).startsWith("/quasar/ytart/") ? " wide" : "")), img = new Image(); img.alt = ""; img.src = p.art; img.onerror = () => a.remove(); a.append(img); box.append(a); }
   const info = el("div", "info");
   info.append(el("div", "ttl", p.title || "Playing"));
   const bar = el("div", "vbar"), fill = el("span"); bar.append(fill);

@@ -399,3 +399,24 @@ async def linux_installer():
 async def windows_installer():
     return PlainTextResponse((AGENT_DIR / "install-windows.ps1").read_text(encoding="utf-8"),
                              headers={"Cache-Control": "no-store"})
+
+
+# ---- yt-dlp for YouTube (Quasar step 3): Aurelia's own pinned copy, for paired nodes only -----------
+
+@router.get("/nodes/ytdlp", include_in_schema=False)
+async def ytdlp_meta(request: Request):
+    await node_from(request)
+    import asyncio
+    from . import ytdlp_bundle
+    b = await asyncio.to_thread(ytdlp_bundle.build)
+    return {"version": b["version"], "sha256": b["sha256"], "bytes": len(b["zip"])}
+
+
+@router.get("/nodes/ytdlp.zip", include_in_schema=False)
+async def ytdlp_zip(request: Request):
+    from fastapi.responses import Response
+    await node_from(request)
+    import asyncio
+    from . import ytdlp_bundle
+    b = await asyncio.to_thread(ytdlp_bundle.build)
+    return Response(b["zip"], media_type="application/zip", headers={"Cache-Control": "no-store"})

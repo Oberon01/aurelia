@@ -1274,3 +1274,152 @@ def test_going_home_says_which_app_wont_close(monkeypatch, tmp_path):
     monkeypatch.setattr(agent, "SHELL", HomeShell([{"id": "v", "url": "https://aurelia/view", "title": "Aurelia"}]))
     with pytest.raises(ValueError, match=r"still on top of me there \(stubborn\)"):
         agent.do_home({})
+
+
+# ---- YouTube (Quasar step 3) ------------------------------------------------------------------------
+
+@pytest.fixture
+def ytdlp_env(monkeypatch, tmp_path):
+    import hashlib
+    data = b"PK-fake-bundle"
+    sha = hashlib.sha256(data).hexdigest()
+    got = {"downloads": 0, "data": data}
+    monkeypatch.setattr(agent, "config_dir", lambda: tmp_path)
+    monkeypatch.setattr(agent, "SERVER_URL", "https://aurelia.example")
+    monkeypatch.setattr(agent, "NODE_KEY", "aur_node")
+    monkeypatch.setattr(agent, "call", lambda server, path, body=None, key=None, timeout=10: {"sha256": sha, "version": "yt-dlp X"})
+
+    class R:
+        def __init__(self, d): self.d = d
+        def read(self): return self.d
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def urlopen(req, timeout=0):
+        got["downloads"] += 1
+        got["auth"] = req.get_header("Authorization")
+        return R(got["data"])
+    monkeypatch.setattr(agent.urllib.request, "urlopen", urlopen)
+    return got
+
+
+def test_yt_dlp_comes_from_aurelia_checked_and_is_kept(ytdlp_env, tmp_path):
+    f = agent.ytdlp_bundle()
+    assert f.read_bytes() == b"PK-fake-bundle" and ytdlp_env["auth"] == "Bearer aur_node"
+    agent.ytdlp_bundle()
+    assert ytdlp_env["downloads"] == 1                                       # the same one: not fetched again
+
+
+def test_a_yt_dlp_that_doesnt_match_the_checksum_is_never_used(ytdlp_env, tmp_path):
+    ytdlp_env["data"] = b"something else"
+    with pytest.raises(ValueError, match="didn't match"):
+        agent.ytdlp_bundle()
+    assert not list((tmp_path / "ytdlp").glob("*.zip")) if (tmp_path / "ytdlp").exists() else True
+
+
+def test_yt_dlp_runs_as_a_package_from_the_bundle_with_this_computers_sign_in(monkeypatch, tmp_path):
+    prof = tmp_path / "shell-profile" / "Default"
+    prof.mkdir(parents=True)
+    (prof / "Cookies").write_text("")
+    monkeypatch.setattr(agent, "config_dir", lambda: tmp_path)
+    monkeypatch.setattr(agent, "IS_WINDOWS", False)
+    monkeypatch.setattr(agent, "find_browser", lambda: "/usr/bin/chromium")
+    monkeypatch.setattr(agent, "ytdlp_bundle", lambda: tmp_path / "b.zip")
+    monkeypatch.setattr(agent, "session_env", lambda: {"HOME": "/home/aurelia"})
+    seen = {}
+
+    def run(argv, capture_output, text, timeout, env):
+        seen.update(argv=argv, env=env)
+        return agent.subprocess.CompletedProcess(argv, 0, '{"entries": []}', "")
+    monkeypatch.setattr(agent.subprocess, "run", run)
+    agent.do_youtube_feed({"feed": "subscriptions"})
+    a = seen["argv"]
+    assert a[:3] == [agent.sys.executable, "-m", "yt_dlp"] and seen["env"]["PYTHONPATH"] == str(tmp_path / "b.zip")
+    assert a[a.index("--cookies-from-browser") + 1] == f"chromium:{tmp_path / 'shell-profile'}"
+    assert a[-1] == ":ytsubs" and "--flat-playlist" in a
+
+
+def test_feeds_keep_only_videos(monkeypatch):
+    out = {"entries": [{"id": "dQw4w9WgXcQ", "title": "A song", "channel": "Rick", "duration": 213.0, "view_count": 9,
+                        "upload_date": "20091025"},
+                       {"id": "UCabcdefghijklmnopqrstuv", "title": "A channel"},             # not a video
+                       {"id": "jNQXAC9IVRw", "title": "Zoo", "live_status": "is_live"}]}
+    monkeypatch.setattr(agent, "ytdlp", lambda args, timeout=90: __import__("json").dumps(out))
+    monkeypatch.setattr(agent, "youtube_cookies", lambda: [])
+    got = agent.do_youtube_feed({"feed": "search", "query": "never  gonna"})
+    assert [x["id"] for x in got["items"]] == ["dQw4w9WgXcQ", "jNQXAC9IVRw"]
+    assert got["items"][0] == {"id": "dQw4w9WgXcQ", "title": "A song", "channel": "Rick", "seconds": 213, "views": 9,
+                               "date": "20091025"}
+    assert got["items"][1]["live"] is True and got["signed_in"] is False
+    with pytest.raises(ValueError, match="home, subscriptions"):
+        agent.do_youtube_feed({"feed": "trending"})
+
+
+def test_a_youtube_video_plays_from_youtubes_streams_and_my_key_never_goes_with_it(monkeypatch):
+    info = {"title": "A song", "requested_formats": [
+        {"url": "https://rr1.googlevideo.com/v?x=1", "http_headers": {"User-Agent": "Mozilla/5.0 X", "Accept": "a,b"}},
+        {"url": "https://rr1.googlevideo.com/a?x=2"}]}
+    calls = []
+    monkeypatch.setattr(agent, "ytdlp", lambda args, timeout=90: (calls.append(args), __import__("json").dumps(info))[1])
+    monkeypatch.setattr(agent, "js_runtime", lambda: ["--js-runtimes", "node:/usr/bin/node"])
+    sent = []
+
+    class P(agent.Mpv):
+        def start(self): pass
+        def command(self, *a): sent.append(a); return {"idle-active": False, "duration": 213.0}.get(a[1], None) if a and a[0] == "get_property" else None
+        def status(self): return {"active": True, "item": self.items[0]["item"], "title": self.items[0]["title"]}
+        def report(self): pass
+    p = P("/nonexistent")
+    monkeypatch.setattr(agent, "player", lambda: p)
+    out = agent.do_play({"items": [{"youtube": "dQw4w9WgXcQ", "title": ""}]})
+    assert out["player"] == {"active": True, "item": "yt:dQw4w9WgXcQ", "title": "A song"}
+    assert calls[0][-1] == "https://www.youtube.com/watch?v=dQw4w9WgXcQ" and "--js-runtimes" in calls[0]
+    assert ("set_property", "http-header-fields", []) in sent                   # cleared: no Authorization to Google
+    load = next(a[0] for a in sent if a and isinstance(a[0], dict))
+    assert load["url"] == "https://rr1.googlevideo.com/v?x=1" and load["options"] == {
+        "force-media-title": "A song", "user-agent": "Mozilla/5.0 X", "audio-files-append": "https://rr1.googlevideo.com/a?x=2"}
+    with pytest.raises(ValueError, match="isn't a YouTube video id"):
+        agent.do_play({"items": [{"youtube": "../../etc/passwd"}]})
+
+
+def test_youtube_needs_a_new_enough_javascript_runtime(monkeypatch):
+    monkeypatch.setattr(agent.shutil, "which", lambda n: "/usr/bin/node" if n == "node" else None)
+    monkeypatch.setattr(agent, "_run", lambda argv, timeout=4: "v18.19.0\n")
+    with pytest.raises(ValueError, match="Node.js"):
+        agent.js_runtime()
+    monkeypatch.setattr(agent, "_run", lambda argv, timeout=4: "v22.3.0\n")
+    assert agent.js_runtime() == ["--js-runtimes", "node:/usr/bin/node"]
+
+
+def test_a_feed_that_needs_a_sign_in_says_so(monkeypatch, tmp_path):
+    monkeypatch.setattr(agent, "ytdlp_bundle", lambda: tmp_path / "b.zip")
+    monkeypatch.setattr(agent, "youtube_cookies", lambda: [])
+    monkeypatch.setattr(agent, "session_env", lambda: {})
+    monkeypatch.setattr(agent.subprocess, "run", lambda *a, **k: agent.subprocess.CompletedProcess(
+        a[0], 1, "", "ERROR: [youtube:tab] watch_later: The playlist does not exist. Use --cookies to sign in"))
+    with pytest.raises(ValueError, match="isn't signed in to YouTube"):
+        agent.do_youtube_feed({"feed": "watch_later"})
+
+
+@pytest.mark.skipif(not (agent.shutil.which("mpv") and agent.shutil.which("ffmpeg")), reason="needs mpv and ffmpeg")
+def test_the_real_player_takes_youtubes_separate_sound_and_drops_my_key(tmp_path, monkeypatch):
+    import subprocess as sp
+    v, a = tmp_path / "v.mp4", tmp_path / "a.wav"
+    sp.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=duration=20", str(v)], check=True)
+    sp.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=duration=20", str(a)], check=True)
+    monkeypatch.setenv("AURELIA_MPV_ARGS", "--vo=null --ao=null")
+    monkeypatch.setattr(agent, "session_env", lambda: dict(agent.os.environ))
+    p = agent.Mpv(str(tmp_path / "mpv.sock"))
+    try:
+        p.play([{"url": str(v), "title": "x", "item": "jf:1"}], header="Authorization: Bearer aur_secret")
+        assert p.get("http-header-fields") == ["Authorization: Bearer aur_secret"]
+        p.play([{"url": str(v), "title": "A song", "item": "yt:dQw4w9WgXcQ",
+                 "opts": {"audio-files-append": str(a), "force-media-title": "A song"}}])
+        tracks = p.get("track-list", [])
+        assert any(t["type"] == "audio" and t.get("external") for t in tracks)
+        assert p.get("http-header-fields") == [] and p.get("media-title") == "A song"
+    finally:
+        try:
+            p.command("quit")
+        except Exception:
+            pass
