@@ -83,7 +83,7 @@ llm:
       base_url: http://host.docker.internal:11434
       model: qwen2.5:7b-instruct
       timeout_seconds: 60
-  monthly_token_cap: 2000000     # hard stop for cloud tokens this calendar month
+  monthly_token_cap: 4000000     # hard stop for cloud tokens this calendar month
   max_tool_rounds: 5
   wait_for_result_seconds: 8
 
