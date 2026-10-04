@@ -248,7 +248,7 @@ async def task_done(app, task_id: str, tool: str, status: str, data: dict | None
             title, body = "That didn't work", (error or head or "")[:200]
         else:
             title, body = "Done", head or tool.split(".")[-1].replace("_", " ").capitalize()
-        await notify(app, title, body, "/view", f"task-{task_id[:8]}", devices=[device])
+        await notify(app, title, body, f"/view?task={task_id}", f"task-{task_id[:8]}", devices=[device])
     except Exception:
         log.exception("task-done notification")
 

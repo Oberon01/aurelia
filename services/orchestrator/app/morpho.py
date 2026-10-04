@@ -246,6 +246,9 @@ async def keep_plan(app, plan_id: str | None, user: str = "owner") -> dict:
     if exists:
         raise ValueError("That plan is already a skill (or waiting in your mailbox).")
     live = _effective(steps)
+    for sk in await active_skills():                     # the same steps as a skill he has: teach it how he said it
+        if _same_tools(sk["steps"], live):
+            return await _add_phrasing(app, sk, plan)
     cat = await admiral.catalog(app)
     draft, how = None, "generalized"
     try:
@@ -268,6 +271,50 @@ async def keep_plan(app, plan_id: str | None, user: str = "owner") -> dict:
                 [f"It ran on {plan['updated_at']:%b %d} and finished done."], user=user)
     return {"headline": f"Skill drafted: {draft['name']}",
             "did": {"node": "Morpho", "what": "It's in your mailbox. It's kept once you approve it."}}
+
+
+def _same_tools(skill_steps: list[dict], live: list[dict]) -> bool:
+    a = [x for x in skill_steps if x["tool"] != "admiral.ask"]
+    b = [x for x in live if x["tool"] != "admiral.ask"]
+    return len(a) == len(b) and all(x["tool"] == y["tool"] or (x["tool"] == CHOOSE and y["tool"] in
+                                    [o["tool"] for o in x["args"].get("options") or []]) for x, y in zip(a, b))
+
+
+PHRASE_SYSTEM = """He asked for something one of his saved skills already does, in words its phrases don't cover.
+Reply with JSON only: {"phrases": ["1-2 ways to say what he said, as a phrase using every one of the skill's slots
+in {braces}, e.g. find the best {product} within a {budget} budget"]}. Use exactly the skill's slot names."""
+
+
+async def _add_phrasing(app, sk: dict, plan: dict) -> dict:
+    """A plan that repeats a skill he has (planned from scratch because his words didn't match it): propose a new
+    version of that skill with how he said it, not a second skill."""
+    from . import admiral
+    names = {x["name"] for x in sk["slots"]}
+    new: list[str] = []
+    if not names:
+        new = [norm_phrase(plan["goal"].lower())[:120]]
+    else:
+        try:
+            raw = admiral._json_in(await admiral._model(
+                app, str(plan["id"]), PHRASE_SYSTEM, f"His request: {plan['goal']}\nSkill: {sk['name']}\nSlots: " +
+                ", ".join(f"{x['name']} (e.g. {x['example']})" for x in sk["slots"]) +
+                f"\nIts phrases now: {'; '.join(sk['phrases']) or '(none)'}", "chat"))
+            new = [norm_phrase(p)[:120] for p in (raw or {}).get("phrases") or [] if isinstance(p, str)]
+        except ValueError:
+            new = []
+    new = [p for p in new if phrase_ok(p) and set(SLOT.findall(p)) == names and p not in sk["phrases"]]
+    if not new:
+        raise ValueError(f"That's what your skill \"{sk['name']}\" already does. Say \"run the skill {sk['name']}\", "
+                         "or one of its phrases.")
+    if await db.pool().fetchval("SELECT 1 FROM skills WHERE parent_id=$1 AND status='proposed'", sk["id"]):
+        raise ValueError(f"A new version of \"{sk['name']}\" is already waiting in your mailbox.")
+    sid = await _insert({**sk, "phrases": (sk["phrases"] + new)[:6]}, "variation", from_plan=str(plan["id"]), parent=sk,
+                        note=f"Another way you said it: \"{plan['goal'][:150]}\"")
+    await _card(app, sid, f"Another way to say: {sk['name']}", "This plan did what your skill already does, so instead "
+                f"of a second skill, the skill learns how you said it.", ["New: " + "; ".join(f"\"{p}\"" for p in new)])
+    return {"headline": f"Your skill {sk['name']} can learn this phrasing",
+            "did": {"node": "Morpho", "what": "It's the same as your skill, so I've proposed adding how you said it "
+                                             "(it's in your mailbox) instead of a second skill."}}
 
 
 def _effective(steps: list[dict]) -> list[dict]:
@@ -645,7 +692,7 @@ async def used(app, grant: dict, task_id: str) -> None:
     from . import push
     await db.pool().execute("UPDATE trust_grants SET uses=uses+1, last_used_at=now() WHERE id=$1", grant["id"])
     try:
-        await push.notify(app, "Done without asking", f"{grant['title']} (you trusted me with this)", "/view",
+        await push.notify(app, "Done without asking", f"{grant['title']} (you trusted me with this)", f"/view?task={task_id}",
                           f"trust-{task_id[:8]}")
     except Exception:
         log.exception("trust notification")

@@ -178,6 +178,24 @@ async def cancel(app, job_id: int, why: str = "cancelled") -> dict:
     return dict(row)
 
 
+@router.get("/{job_id}/panel")
+async def job_panel(job_id: int):
+    """What a job's notification opens: its run's panel lives at /tasks; a reminder is rebuilt here."""
+    row = await db.pool().fetchrow("SELECT * FROM jobs WHERE id=$1", job_id)
+    if row is None:
+        raise HTTPException(404, "No such job.")
+    job = dict(row)
+    due = when.say((job.get("planned_at") or job["due_at"]).astimezone(ZoneInfo(job["tz"])), now())
+    if job["kind"] == "reminder":
+        text = _j(job["spec"]).get("text") or job["title"]
+        return {"task_id": f"job-{job_id}", "tool": "admiral.reminder",
+                "data": {"status": "completed", "partial": False, "headline": text,
+                         "reminder": {"text": text, "job": job_id, "when": due}}}
+    return {"task_id": f"job-{job_id}", "tool": "admiral.scheduled",
+            "data": {"status": "completed", "partial": False, "headline": f"{job['title']}: {job['last_outcome'] or job['status']}",
+                     "scheduled": {"job": view(job)}}}
+
+
 @router.post("/{job_id}/cancel")
 async def cancel_http(job_id: int, request: Request):
     dev = await auth.asker(request.headers)
@@ -370,11 +388,13 @@ async def _run_system(app, job: dict) -> None:
 # ---- what each kind of job does when it's due ------------------------------------------------------------
 
 async def _tell(app, job: dict, title: str, body: str, panel: dict | None = None) -> None:
-    """His phone (wherever it isn't on screen) and, with a panel, a panel on his displays."""
+    """His phone (wherever it isn't on screen) and, with a panel, a panel on his displays. The notification opens
+    what it's about: the run's own panel, or the reminder."""
     from . import push
     from .events import PanelEvent, publish
+    link = f"/view?task={job['task_id']}" if job.get("task_id") else f"/view?job={job['id']}"
     try:
-        await push.notify(app, title, body, "/view", f"job-{job['id']}")
+        await push.notify(app, title, body, link, f"job-{job['id']}")
     except Exception:
         log.exception("job notification")
     if panel is not None:
@@ -593,7 +613,8 @@ async def sweep(app, spec: dict) -> dict | None:
             "UPDATE plans SET reminded=true WHERE status='waiting' AND NOT reminded AND waiting_since < now() - "
             "make_interval(secs => $1) RETURNING id, goal, device", float(r["remind_waiting_hours"]) * 3600):
         try:
-            await push.notify(app, "A plan is still waiting for you", p["goal"][:150], "/view", f"plan-{str(p['id'])[:8]}",
+            await push.notify(app, "A plan is still waiting for you", p["goal"][:150], f"/view?plan={p['id']}",
+                              f"plan-{str(p['id'])[:8]}",
                               devices=[p["device"]] if p["device"] is not None else None)
         except Exception:
             log.exception("plan reminder")

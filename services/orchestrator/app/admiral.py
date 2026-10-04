@@ -770,7 +770,7 @@ async def finish(app, plan_id: str) -> None:
 async def _tell(app, plan: dict, title: str, body: str) -> None:
     try:
         from . import push
-        await push.notify(app, title, body, "/view", f"plan-{str(plan['id'])[:8]}",
+        await push.notify(app, title, body, f"/view?plan={plan['id']}", f"plan-{str(plan['id'])[:8]}",
                           devices=[plan["device"]] if plan.get("device") is not None else None)
     except Exception:
         log.exception("plan notification")
@@ -801,21 +801,27 @@ async def plan_tool(app, user: str, args: dict) -> dict:
     cat = await catalog(app)
     from . import morpho
     skills = await morpho.active_skills()
+    sk, slots = None, {}
+    if skills:                                        # his skills first: a question of its own, before any planning
+        try:
+            pick = _json_in(await _model(app, plan_id, PICK_SYSTEM, f"His request: {goal}\n\n{_skills_text(skills)}", "chat"))
+            sk = next((x for x in skills if isinstance(pick, dict) and pick.get("skill") and
+                       x["name"].lower() == str(pick["skill"]).lower()), None)
+            if sk is not None:
+                slots = {k: str(v) for k, v in (pick.get("slots") or {}).items() if str(v).strip()}
+                if any(not slots.get(x["name"]) for x in sk["slots"]):
+                    log.info("plan %s: skill %s picked without all its slots; planning instead", plan_id, sk["name"])
+                    sk, slots = None, {}
+        except ValueError as exc:
+            log.info("plan %s: no skill picked (%s)", plan_id, exc)
     try:
-        raw = _json_in(await _model(app, plan_id, PLAN_SYSTEM % (MAX_STEPS, MAX_ASKS) + (SKILLS_HINT if skills else ""),
-                                    f"His request: {goal}\n\n" + (_skills_text(skills) if skills else "")
-                                    + f"Tools:\n{_catalog_text(cat)}"))
-        sk = next((x for x in skills if isinstance(raw, dict) and raw.get("skill") and
-                   x["name"].lower() == str(raw["skill"]).lower()), None)
         if sk is not None:                            # one of his skills fits: its steps, his values
-            slots = {k: str(v) for k, v in (raw.get("slots") or {}).items()}
-            missing = [x["name"] for x in sk["slots"] if not slots.get(x["name"])]
-            if missing:
-                raise ValueError(f"the skill \"{sk['name']}\" needs " + ", ".join(missing))
             steps = validate({"steps": morpho.fill(sk["steps"], slots)}, cat)
             await db.pool().execute("UPDATE plans SET skill_id=$2, slots=$3::jsonb WHERE id=$1", uuid.UUID(plan_id),
                                     sk["id"], json.dumps(slots))
         else:
+            raw = _json_in(await _model(app, plan_id, PLAN_SYSTEM % (MAX_STEPS, MAX_ASKS),
+                                        f"His request: {goal}\n\nTools:\n{_catalog_text(cat)}"))
             steps = validate(raw, cat)
     except ValueError as exc:
         await _set_plan(plan_id, status="failed", error=f"I couldn't make a plan: {exc}"[:400])
@@ -829,9 +835,10 @@ async def plan_tool(app, user: str, args: dict) -> dict:
     return out
 
 
-SKILLS_HINT = """
-His skills come first: if one fits his request, reply instead with {"skill": "its name", "slots": {"slot": "value"}},
-filling every slot from his request. Plan from scratch only when none fits."""
+PICK_SYSTEM = """You decide whether one of his saved skills does what he's asking. Reply with JSON only:
+{"skill": "the skill's exact name, or null", "slots": {"slot": "value from his words"}}
+Pick a skill when it does what he asks, even in other words ("under $400" and "within a $400 budget" are the same
+thing). Fill every one of its slots from his request; if one can't be filled from what he said, reply null."""
 
 
 def _skills_text(skills: list[dict]) -> str:
@@ -915,6 +922,18 @@ async def _unschedule(app, user, args):
 
 HANDLERS = {"plan": plan_tool, "plans": plans_tool, "stop": stop_tool, "schedule": _schedule,
             "scheduled": _scheduled, "unschedule": _unschedule}
+
+
+@router.get("/plans/{plan_id}/panel")
+async def plan_panel(plan_id: str):
+    """The plan's panel as it is now: what a notification opens (panels are live, so a closed or never-seen
+    one is rebuilt from here)."""
+    try:
+        plan, steps = await load(plan_id)
+    except ValueError:
+        raise HTTPException(404, "No such plan.")
+    return {"task_id": str(plan["task_id"] or plan["id"]), "tool": f"{NAME}.plan",
+            "data": {"status": "completed", "partial": False, **view(plan, steps)}}
 
 
 # ---- his answers from the plan's panel (the mailbox card calls settle() too) -------------------------

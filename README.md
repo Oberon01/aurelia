@@ -1266,7 +1266,8 @@ each one a call to one of her tools, and runs it.
   their results against your request and writes the report: the answer, where
   it came from, and what it doesn't cover. Done with gaps is said as such.
 - **Panel and phone.** The plan's panel updates as it runs and stays until you
-  close it. Your phone hears once when a plan finishes or needs you (not for
+  close it. Tapping a notification opens what it's about (the plan, the
+  result, the reminder), even if the window was closed when it finished. Your phone hears once when a plan finishes or needs you (not for
   each step). "Show my plans" lists them; "stop the plan" stops it (running
   steps finish; nothing else starts).
 
@@ -1343,9 +1344,13 @@ Admiral. Policy: `config/governance/functions/morpho.yaml`. Code:
   and a few ways you'd say it become its phrases. It's a mailbox card showing
   every step; you can rename it and edit its phrases; it's kept only when you
   approve it. Without the model it's kept exactly as it ran.
-- **Using them.** The planner reaches for a skill first ("find the best monitor
-  under $400" fills the computer skill), and every step is governed and checked
-  like any plan. A skill's phrases are fast paths of their own, checked before
+- **Using them.** Before planning anything, the model is asked one question:
+  does one of your skills do this, in any words ("under $400" and "within a $400
+  budget" are the same)? If so, the plan is that skill with your values ("find
+  the best monitor under $400" fills the computer skill), and every step is
+  governed and checked like any plan. Keeping a plan that repeats a skill you
+  already have doesn't make a second skill: it proposes a new version of that
+  skill that knows how you said it. A skill's phrases are fast paths of their own, checked before
   the others (never when the request has a time in it: that's for later). A
   phrase needs at least two words of its own, so it can't catch everything. A
   skill with no step filled from earlier results, no choice and no written

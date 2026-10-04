@@ -30,6 +30,11 @@ class SkillModel(Model):
         if self.down:
             raise ProviderError("the model is down (test)")
         text = messages[-1].text
+        if system == morpho.PHRASE_SYSTEM:
+            self.calls.append(("phrase", text))
+            goal = re.search(r"His request: (.*?)\n", text).group(1)
+            return Completion(text=json.dumps(self.generalize[goal]), tool_calls=[], usage=Usage(10, 5),
+                              model="fake-plan", provider="fake")
         if system == morpho.GENERALIZE_SYSTEM:
             self.calls.append(("generalize", text))
             goal = re.search(r"His request: (.*?)\n", text).group(1)
@@ -125,17 +130,38 @@ def test_a_plan_that_worked_becomes_a_skill_he_approves_and_the_planner_reuses(s
                                                                       "get me a {product} under {budget}"]
     # the planner reaches for it first
     g2 = "find the best monitor under $400"
-    model.plans[g2] = {"skill": "Best gear", "slots": {"product": "monitor", "budget": "$400"}}
+    model.picks[g2] = {"skill": "Best gear", "slots": {"product": "monitor", "budget": "$400"}}
     _, res = make_plan(orch, g2)
     assert "from your skill Best gear" in res["headline"]
     p2, steps2 = until(res["plan"]["id"], {"done", "gaps", "failed"})
     assert p2["status"] == "done" and p2["skill_id"] == sk["id"]
     assert [json.loads(s["args"])["q"] for s in steps2] == ["best monitor under $400", "reviews of monitor"]
     assert "Skills:\n- Best gear" in next(t for _, t in model.calls if t.startswith(f"His request: {g2}"))
+    assert not any(t.startswith(f"His request: {g2}\n\nTools:") for _, t in model.calls)   # no planning from scratch
     deadline = time.time() + 5
     while sql("SELECT uses FROM skills WHERE id=$1", sk["id"])[0]["uses"] < 1 and time.time() < deadline:
         time.sleep(0.1)
     assert sql("SELECT uses FROM skills WHERE id=$1", sk["id"])[0]["uses"] == 1
+
+
+def test_the_same_plan_again_teaches_the_skill_a_phrasing_instead_of_making_a_second_skill(stack, model, planfn):
+    orch, goal = stack["orch"], "what's the top tablet within a $300 budget"
+    model.plans[goal] = {"steps": [step(1, "planfn.look", {"q": "best tablet under $300"}),
+                                   step(2, "planfn.look", {"q": "reviews of tablet"}, depends=[1])]}   # no skill picked
+    _, res = make_plan(orch, goal)
+    pid = res["plan"]["id"]
+    assert until(pid, {"done", "gaps", "failed"})[0]["status"] == "done"
+    n_active = len(sql("SELECT 1 FROM skills WHERE status='active'"))
+    model.generalize[goal] = {"phrases": ["what's the top {product} within a {budget} budget", "{product}"]}   # (PHRASE reply)
+    r = httpx.post(f"{orch}/morpho/keep/{pid}")
+    assert r.status_code == 200 and "instead of a second skill" in r.json()["done"]
+    item, prop = card("skill")
+    [v] = sql("SELECT * FROM skills WHERE id=$1", prop["skill_id"])
+    assert v["parent_id"] and json.loads(v["phrases"])[-1] == "what's the top {product} within a {budget} budget"
+    httpx.post(f"{orch}/mailbox/{item['id']}/decide", json={"action": "approve"}).raise_for_status()
+    assert len(sql("SELECT 1 FROM skills WHERE status='active'")) == n_active        # still one skill, a new version
+    out = httpx.post(f"{orch}/ask", json={"text": "what's the top phone within a $500 budget"}, timeout=30).json()
+    assert out["route"] == "fastpath" and out["reply"].startswith("Running your skill")
 
 
 def test_his_phrase_runs_the_skill_like_a_fast_path(stack, model, planfn):

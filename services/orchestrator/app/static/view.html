@@ -2962,6 +2962,37 @@ async function catchUpOnRelease() {
 // device for permission (it must be a tap) and gives the server this display's push subscription; the
 // server then tells it about urgent mailbox items, things it asked for that finished, and anything kept
 // for it, when it isn't on screen. The service worker only shows notifications; it caches nothing.
+// A notification opens what it's about: a plan, a task's result, or a reminder. Panels are live, so one
+// that finished while this window was closed (or that he closed) is rebuilt from the server.
+async function openLinked(href) {
+  let u; try { u = new URL(href, location.origin); } catch (e) { return; }
+  const q = u.searchParams;
+  let id, tool, data, closeData = { status: "completed", has_result: true };
+  try {
+    if (q.get("plan") || q.get("job")) {
+      const r = await fetch(q.get("plan") ? `/admiral/plans/${encodeURIComponent(q.get("plan"))}/panel`
+                                          : `/admiral/jobs/${encodeURIComponent(q.get("job"))}/panel`);
+      if (!r.ok) throw new Error();
+      ({ task_id: id, tool, data } = await r.json());
+    } else if (q.get("task")) {
+      const r = await fetch(`/tasks/${encodeURIComponent(q.get("task"))}`);
+      if (!r.ok) throw new Error();
+      const t = await r.json();
+      const res = typeof t.result === "string" ? JSON.parse(t.result) : (t.result || {});
+      id = t.id; tool = t.tool;
+      data = res && Object.keys(res).length ? { status: t.status, partial: !!t.partial, ...res } : null;
+      closeData = { status: t.status === "running" ? "completed" : t.status, has_result: !!data, error: t.error };
+    } else return;
+  } catch (e) { say("That isn't available anymore."); return; }
+  finally { if (!SCREEN) history.replaceState(null, "", location.pathname); }
+  closedPlans.delete(id); hidden.delete(id);
+  onEvent({ type: "panel.open", task_id: id, tool, data: { tier: "reference", args: {} } });
+  if (data) onEvent({ type: "panel.result", task_id: id, tool, data });
+  onEvent({ type: "panel.close", task_id: id, tool, data: closeData });
+}
+if (!SCREEN && /[?&](plan|task|job)=/.test(location.search)) setTimeout(() => openLinked(location.href), 300);
+if ("serviceWorker" in navigator) navigator.serviceWorker.addEventListener("message", e => { if (e.data && e.data.open) openLinked(e.data.open); });
+
 const notifyBtn = document.getElementById("notify");
 const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
 const iosBrowser = /iP(hone|ad|od)/.test(navigator.userAgent) && !standalone;

@@ -33,13 +33,17 @@ class Model:
     def __init__(self):
         self.plans, self.fills, self.reports, self.calls = {}, {}, {}, []
         self.replans = {}                                   # goal -> a list of replies, one per change of course
+        self.picks = {}                                     # goal -> {"skill": name, "slots": {...}} (else no skill)
 
     async def complete(self, route, system, messages, tools):
         from app import admiral
         from app.llm.base import Completion, Usage
         text = messages[-1].text
         self.calls.append((system[:20], text))
-        if system.startswith(admiral.PLAN_SYSTEM[:40]):
+        if system == admiral.PICK_SYSTEM:
+            goal = re.search(r"His request: (.*?)\n\n", text, re.S).group(1)
+            out = self.picks.get(goal) or {"skill": None, "slots": {}}
+        elif system.startswith(admiral.PLAN_SYSTEM[:40]):
             goal = re.search(r"His request: (.*?)\n\n", text, re.S).group(1)
             out = self.plans[goal]
         elif system.startswith(admiral.REPLAN_SYSTEM[:40]):
@@ -151,6 +155,7 @@ def step(n, tool, args=None, depends=(), fill=False, title=None):
 
 def test_a_plan_runs_in_parallel_fills_from_results_and_ends_in_a_checked_report(stack, model, planfn):
     orch, goal = stack["orch"], "compare two laptops"
+    sql("UPDATE skills SET status='retired' WHERE status='active'")         # no skills: plan, fill, check (3 calls)
     model.plans[goal] = "```json\n" + json.dumps({"steps": [
         step(1, "planfn.look", {"q": "laptop a", "delay": "0.8"}),
         step(2, "planfn.look", {"q": "laptop b", "delay": "0.8"}),

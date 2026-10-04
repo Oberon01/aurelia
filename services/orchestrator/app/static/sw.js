@@ -16,8 +16,8 @@ self.addEventListener("notificationclick", e => {
   e.notification.close();
   const url = new URL((e.notification.data && e.notification.data.url) || "/view", self.location.origin).href;
   e.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(wins => {
-    for (const w of wins) {
-      if (w.url.startsWith(self.location.origin + "/view")) return w.focus().then(f => (f && f.navigate ? f.navigate(url) : f));
+    for (const w of wins) {               // an open window: bring it up and open what the notification is about there
+      if (w.url.startsWith(self.location.origin + "/view")) { w.postMessage({ open: url }); return w.focus(); }
     }
     return self.clients.openWindow(url);
   }));
