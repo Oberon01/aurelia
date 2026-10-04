@@ -110,8 +110,12 @@ Builds: bookkeeping: services, subscriptions and renewals; suggestions in the di
 Done when: a renewal due soon appears in the digest as a suggested payment.
 
 ## 17. Nova — Not started
-Builds: a code sandbox; reading my own logs to write tested patches that Chrysalis deploys after your approval; node fixes (runbooks, and fix scripts you approve and sign); an eval set from your real requests, replayed before every release.
-Done when: an error found in the logs becomes a tested patch in the mailbox, deployed only after approval.
+Builds: a code sandbox; reading my own logs to write tested patches and deploy them (as decided below); node fixes (runbooks, and fix scripts you approve and sign); an eval set from your real requests, replayed before every release.
+Decided (Oct 3, your standing policy for when I change my own code; you're the watcher, the protector, the mediator):
+- Rules are yours alone: governance, the charter, the policy files. I can read them and suggest changes; I never write them.
+- Chrysalis and the code that enforces the rules (the tier check every task passes, the mailbox's decide, the engine's "OK when it's due", device keys and what a TV's screen may do): every change itemized line by line in plain words, with your strict confirmation. Nothing bundled; an approval covers exactly the change you saw, and any difference is a new confirmation.
+- Everything else (Orbit, Pulsar, Quasar, Kepler, Constellation, the rest of me): I deploy it myself once it passes the tests and the eval set from your real requests. You're told of each change as it ships, and it rolls back by itself if anything fails after deploy.
+Done when: an error found in the logs becomes a tested patch that I deploy myself (or, for Chrysalis and the enforcement code, one you confirm change by change), and rolls back on its own if it breaks something.
 
 ## 18. Orbit hardware — Not started
 Builds: ESP32 nodes over MQTT; presence (motion and occupancy sensors, your phone on Wi-Fi); things that move (smart plugs, blinds, a robot vacuum, later a small robot arm).

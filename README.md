@@ -627,8 +627,10 @@ approve or decline with `POST /ask/confirm {"action_id": "...", "approve": true}
 
 1. **Fast path.** Patterns in `config/aurelia.yaml` → `fastpath` match
    predictable commands and run the tool directly with a templated reply: no
-   model call, no cost. Add patterns as functions arrive (examples are there
-   for Constellation and Orbit).
+   model call, no cost. Every action has at least one (a test fails the build
+   when a governed tool has none, unless it's listed with a reason), so
+   nothing you can do is out of reach when the model isn't: down, out of
+   budget, or slow. A new tool ships with its fast path.
 2. **Language model.** Anything else goes to the model chosen by
    `llm.routes.chat`, an ordered list: the first provider that answers wins
    (e.g. `[claude, ollama]` falls back to a local model). The model sees only

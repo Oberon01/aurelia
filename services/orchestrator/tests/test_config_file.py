@@ -207,3 +207,113 @@ def test_later_phrases_go_to_the_engine_first(said, name):
         assert m is None or not m.pattern.name.startswith("schedule-"), said
     else:
         assert m and m.pattern.name == name, (said, m and m.pattern.name)
+
+
+# Every action has a fast path, so nothing's out of reach when the model isn't (and the common ones cost nothing).
+GOVERNANCE = CONFIG.parent / "governance" / "functions"
+NO_FAST_PATH = {
+    "nebula.youtube": "covered by quasar.youtube (\"youtube X\" searches through it)",
+    "orbit.tv_play": "covered by quasar.play, which plays a title on a Roku TV through it",
+    # Planned in governance, not built yet: when one is built, it needs a fast path (this test says so).
+    "constellation.search_files": "planned (Kuiper)", "constellation.browser_history": "planned",
+    "constellation.read_file": "planned (Kuiper)", "constellation.launch": "planned",
+    "constellation.move_file": "planned (Kuiper)", "constellation.delete_file": "planned (Kuiper)",
+    "nebula.submit": "planned", "nebula.upload": "planned",
+}
+
+
+@pytest.mark.skipif(not CONFIG.exists(), reason="the repo's config isn't in the test image")
+def test_every_governed_tool_has_a_fast_path():
+    from app.config import RuntimeConfig
+    cfg = RuntimeConfig.model_validate(yaml.safe_load(CONFIG.read_text()))
+    have = {p.tool for p in cfg.fastpath.patterns}
+    missing = []
+    for f in sorted(GOVERNANCE.glob("*.yaml")):
+        g = yaml.safe_load(f.read_text())
+        for tool, rule in (g.get("tools") or {}).items():
+            q = f"{g['function']}.{tool}"
+            if rule.get("tier") != "never" and q not in have and q not in NO_FAST_PATH:
+                missing.append(q)
+    assert not missing, f"no fast path for: {missing}"
+
+
+@pytest.mark.skipif(not CONFIG.exists(), reason="the repo's config isn't in the test image")
+@pytest.mark.parametrize("said,tool,args", [
+    # computers
+    ("turn off the screen on the desk", "constellation.power", {"action": "screen_off", "target": "desk"}),
+    ("turn the laptop's screen on", "constellation.power", {"action": "screen_on", "target": "laptop"}),
+    ("lock the laptop", "constellation.power", {"action": "lock", "target": "laptop"}),
+    ("lock the screen on the tv pc", "constellation.power", {"action": "lock", "target": "tv pc"}),
+    ("lock the desk's screen", "constellation.power", {"action": "lock", "target": "desk"}),
+    ("lock the front door", "orbit.lock", {"name": "front"}),
+    ("wake the desk", "constellation.wake", {"target": "desk"}),
+    ("wake up the tv pc", "constellation.wake", {"target": "tv pc"}),
+    ("turn on the desk computer", "constellation.wake", {"target": "desk computer"}),
+    ("turn on the living room light", "orbit.light", {"name": "living room", "on": "on"}),
+    ("put the laptop to sleep", "constellation.power", {"action": "sleep", "target": "laptop"}),
+    ("how long has the desk been idle", "constellation.power", {"action": "idle", "target": "desk"}),
+    ("restart the tv pc", "constellation.restart", {"action": "restart", "target": "tv pc"}),
+    ("reboot my laptop", "constellation.restart", {"action": "restart", "target": "laptop"}),
+    ("shut down the desk", "constellation.restart", {"action": "shutdown", "target": "desk"}),
+    ("restart the video", "constellation.media", {"action": "restart", "target": ""}),
+    ("what's wrong with the tv pc", "constellation.diagnose", {"target": "tv pc"}),
+    ("show me the TV PC screen", "constellation.watch", {"target": "TV PC"}),
+    ("let me see what you're doing", "constellation.watch", {"target": ""}),
+    ("what's on my screens", "constellation.screens", {}),
+    ("send panel 2 to the tv", "constellation.send", {"panel": "2", "to": "tv"}),
+    ("send this to my phone", "constellation.send", {"panel": "", "to": "phone"}),
+    ("send https://example.com/a to the desk", "constellation.send", {"url": "https://example.com/a", "to": "desk"}),
+    ("send a note to the tv saying dinner is ready", "constellation.send", {"text": "dinner is ready", "to": "tv"}),
+    ("put it on the TV PC", "constellation.paste", {"to": "TV PC"}),
+    ("set the sound on the desk to 30", "constellation.sound", {"action": "set", "level": "30", "target": "desk"}),
+    ("sound up on the laptop", "constellation.sound", {"action": "up", "target": "laptop"}),
+    ("mute the sound on the desk", "constellation.sound", {"action": "mute", "target": "desk"}),
+    ("how loud is the laptop", "constellation.sound", {"action": "get", "target": "laptop"}),
+    ("what speakers does the desk have", "constellation.sound", {"action": "outputs", "target": "desk"}),
+    ("play the sound through the headphones on the desk", "constellation.sound",
+     {"action": "output", "device": "headphones", "target": "desk"}),
+    ("submit the form on the tv pc", "constellation.submit", {"target": "tv pc"}),
+    ("what sites are saved on the tv pc", "constellation.logins", {"target": "tv pc"}),
+    ("kill the process python on the desk", "constellation.kill_process", {"name": "python", "target": "desk"}),
+    ("make the tv pc a spotify speaker", "quasar.speaker", {"target": "tv pc"}),
+    ("install librespot on the laptop", "quasar.speaker", {"target": "laptop"}),
+    ("install vlc on the tv pc", "constellation.install", {"app": "vlc", "target": "tv pc"}),
+    ("install the Ubuntu package vlc on the tv pc", "constellation.install_package",
+     {"name": "vlc", "source": "apt", "target": "tv pc"}),
+    ("install the snap spotify on the tv pc", "constellation.install_package",
+     {"name": "spotify", "source": "snap", "target": "tv pc"}),
+    ("remove the Ubuntu package vlc on the tv pc", "constellation.remove_package",
+     {"name": "vlc", "source": "apt", "target": "tv pc"}),
+    ("uninstall vlc from the laptop", "constellation.uninstall", {"app": "vlc", "target": "laptop"}),
+    ("remove panel 2 from the tv", "constellation.clear", {"target": "tv", "panels": "2"}),
+    # releases
+    ("roll back the last release", "chrysalis.rollback", {}),
+    ("approve release 42", "chrysalis.approve", {"release_id": "42"}),
+    # learning and the record
+    ("explain BGP route reflectors", "kepler.explain", {"subject": "BGP route reflectors"}),
+    ("read the pdf at https://example.com/a.pdf", "kepler.read_pdf", {"url": "https://example.com/a.pdf"}),
+    ("read the file az-104 notes.pdf", "kepler.read_pdf", {"file": "az-104 notes.pdf"}),
+    ("what did we decide about the thermostat", "mnemosyne.recall", {"query": "the thermostat"}),
+    ("what were we talking about yesterday", "mnemosyne.recall", {"date": "yesterday"}),
+    ("forget fact 12", "mnemosyne.forget", {"fact_id": "12"}),
+    ("forget conversation 7", "mnemosyne.forget", {"record_id": "7"}),
+    ("what changed in the last release", "mnemosyne.history", {"release": "latest"}),
+    ("what's new", "mnemosyne.history", {"since": "this week"}),
+    ("what's next", "mnemosyne.roadmap", {}),
+    ("show me the roadmap", "mnemosyne.roadmap", {}),
+    ("tell me about phase 10", "mnemosyne.roadmap", {"phase": "10"}),
+    # the home
+    ("show my nicknames", "orbit.aliases", {}),
+    ("forget the nickname big light", "orbit.forget_alias", {"alias": "big light"}),
+    ("is the tv on", "orbit.tv_status", {"name": "tv"}),
+    ("what roku apps are there", "orbit.tv_apps", {"name": ""}),
+    ("what inputs does the tv have", "orbit.tv_inputs", {"name": "tv"}),
+    ("find my tvs", "orbit.tv_discover", {}),
+])
+def test_every_action_phrase_reaches_its_tool(said, tool, args):
+    from app import fastpath
+    from app.config import RuntimeConfig
+    cfg = RuntimeConfig.model_validate(yaml.safe_load(CONFIG.read_text()))
+    m = fastpath.match(said, cfg.fastpath.patterns)
+    assert m and m.pattern.tool == tool, (said, m and (m.pattern.name, m.pattern.tool))
+    assert {k: v for k, v in m.args.items()} == args, (said, m.args)

@@ -123,6 +123,132 @@ fastpath:
       tool: admiral.unschedule
       args: { which: "{which}" }
       reply: "Cancelling that."
+    # Every action has a fast path (so nothing's out of reach when the model isn't). These come before the general patterns they'd fall into: computers, sending, sound, releases.
+    - name: node-screen-power
+      match: '^turn\s+(?P<state>off|on)\s+(?:the\s+)?(?:screen|monitor|display)\s+(?:on|of)\s+(?:the\s+|my\s+)?(?P<target>.+)$|^turn\s+(?:the\s+|my\s+)?(?P<target2>.+?)(?:''s|s'')\s+(?:screen|monitor|display)\s+(?P<state2>off|on)$'
+      tool: constellation.power
+      args: { action: "screen_{state}{state2}", target: "{target}{target2}" }
+      reply: "Turning that screen {state}{state2}."
+    - name: node-lock
+      match: '^lock\s+(?:the\s+|my\s+)?(?:screen\s+on\s+(?:the\s+|my\s+)?)?(?P<target>(?:.*?\s)?(?:pc|computer|laptop|desktop|workstation))(?:''s\s+screen|\s+screen)?$|^lock\s+(?:the\s+|my\s+)?(?P<target2>.+?)(?:''s|s'')?\s+screen$'
+      tool: constellation.power
+      args: { action: lock, target: "{target}{target2}" }
+      reply: "Locking it."
+    - name: node-wake
+      match: '^wake\s+(?:up\s+)?(?:the\s+|my\s+)?(?P<target>(?!me\b|us\b|up\b).+?)(?:\s+up)?$|^turn\s+on\s+(?:the\s+|my\s+)?(?P<target2>(?:.*?\s)?(?:pc|computer|laptop|desktop|workstation))$'
+      tool: constellation.wake
+      args: { target: "{target}{target2}" }
+      reply: "Waking it."
+    - name: node-sleep
+      match: '^put\s+(?:the\s+|my\s+)?(?P<target>.+?)\s+to\s+sleep$|^sleep\s+(?:the\s+|my\s+)?(?P<target2>(?!timer\b).+)$'
+      tool: constellation.power
+      args: { action: sleep, target: "{target}{target2}" }
+      reply: "Putting it to sleep."
+    - name: node-idle
+      match: '^how\s+long\s+has\s+(?:the\s+|my\s+)?(?P<target>.+?)\s+been\s+idle\??$|^is\s+(?:anyone|someone)\s+(?:using|on)\s+(?:the\s+|my\s+)?(?P<target2>.+?)\??$'
+      tool: constellation.power
+      args: { action: idle, target: "{target}{target2}" }
+      reply: "Checking."
+    - name: node-restart
+      match: '^(?:restart|reboot)\s+(?:the\s+|my\s+)?(?!(?:it|this|that|video|movie|song|episode|show|track|music|spotify|playback|the\s+(?:video|movie|song|episode|show|music|plan))\b)(?P<target>.+?)$'
+      tool: constellation.restart
+      args: { action: restart, target: "{target}" }
+      reply: 'Restarting it (I''ll ask you first).'
+    - name: node-shutdown
+      match: '^(?:shut\s*down|power\s+(?:off|down))\s+(?:the\s+|my\s+)?(?P<target>.+?)$'
+      tool: constellation.restart
+      args: { action: shutdown, target: "{target}" }
+      reply: 'Shutting it down (I''ll ask you first).'
+    - name: node-diagnose
+      match: '^(?:what(?:''s|s| is)\s+wrong\s+with|diagnose|troubleshoot)\s+(?:the\s+|my\s+)?(?P<target>.+?)\??$'
+      tool: constellation.diagnose
+      args: { target: "{target}" }
+      reply: 'Checking what''s wrong.'
+    - name: node-watch
+      match: '^(?:show\s+me|let\s+me\s+see|stream|watch)\s+(?:the\s+|my\s+)?(?P<target>.+?)(?:''s|s'')?\s+screen(?:\s+live)?$|^(?:watch|show\s+me)\s+(?:the\s+|my\s+)?(?P<target2>.+?)\s+live$|^let\s+me\s+see\s+what\s+you(?:''re|\s+are)\s+doing(?:\s+on\s+(?:the\s+|my\s+)?(?P<target3>.+?))?$'
+      tool: constellation.watch
+      args: { target: "{target}{target2}{target3}" }
+      reply: "Here it is, live."
+    - name: node-screens
+      match: '^what(?:''s|s| is)\s+on\s+(?:all\s+)?(?:my|the)\s+(?:screens|displays)\??$|^(?:show|list)\s+(?:me\s+)?(?:my\s+|the\s+)?(?:screens|displays)$'
+      tool: constellation.screens
+      args: {}
+      reply: 'Here''s what''s on your screens.'
+    - name: send-panel
+      match: '^(?:(?:send|move|show)\s+(?:panel\s+(?P<panel>\d{1,3})|(?:this|that)(?:\s+panel)?|it)|put\s+(?:panel\s+(?P<panel2>\d{1,3})|(?:this|that)\s+panel))\s+(?:to|on|onto|over\s+to)\s+(?:the\s+|my\s+)?(?P<to>.+?)$'
+      tool: constellation.send
+      args: { panel: "{panel}{panel2}", to: "{to}" }
+      reply: "Sending it."
+    - name: send-link
+      match: '^send\s+(?P<url>https?://\S+)\s+to\s+(?:the\s+|my\s+)?(?P<to>.+?)$'
+      tool: constellation.send
+      args: { url: "{url}", to: "{to}" }
+      reply: "Sending the link."
+    - name: send-note
+      match: '^send\s+(?:a\s+)?note\s+to\s+(?:the\s+|my\s+)?(?P<to>.+?)\s+(?:saying|that\s+says)\s+(?P<text>.+)$'
+      tool: constellation.send
+      args: { text: "{text}", to: "{to}" }
+      reply: "Sending the note."
+    - name: node-sound-level
+      match: '^(?:set\s+)?(?:the\s+)?(?:sound|system\s+volume|computer\s+volume|speaker\s+volume)\s+(?:on|of|for)\s+(?:the\s+|my\s+)?(?P<target>.+?)\s+to\s+(?P<level>\d{1,3})\s*(?:%|percent)?$'
+      tool: constellation.sound
+      args: { action: set, level: "{level}", target: "{target}" }
+      reply: "Setting the sound."
+    - name: node-sound-step
+      match: '^(?:turn\s+)?(?:the\s+)?(?:sound|system\s+volume|computer\s+volume)\s+(?P<action>up|down)\s+on\s+(?:the\s+|my\s+)?(?P<target>.+)$'
+      tool: constellation.sound
+      args: { action: "{action}", target: "{target}" }
+      reply: "Turning it {action}."
+    - name: node-sound-mute
+      match: '^(?P<action>mute|unmute)\s+(?:the\s+)?(?:sound|audio|speakers?)\s+on\s+(?:the\s+|my\s+)?(?P<target>.+)$'
+      tool: constellation.sound
+      args: { action: "{action}", target: "{target}" }
+      reply: "Done."
+    - name: node-sound-get
+      match: '^(?:what(?:''s|s| is)\s+the\s+sound\s+(?:level\s+)?(?:on|of)|how\s+loud\s+is)\s+(?:the\s+|my\s+)?(?P<target>.+?)\??$'
+      tool: constellation.sound
+      args: { action: get, target: "{target}" }
+      reply: "Checking the sound."
+    - name: node-sound-outputs
+      match: '^(?:what|which)\s+(?:speakers|outputs|audio\s+outputs|sound\s+outputs)\s+(?:does|has)\s+(?:the\s+|my\s+)?(?P<target>.+?)(?:\s+have)?\??$'
+      tool: constellation.sound
+      args: { action: outputs, target: "{target}" }
+      reply: "Here are its outputs."
+    - name: node-sound-output
+      match: '^(?:play|send|switch)\s+(?:the\s+)?(?:sound|audio)\s+(?:on\s+(?:the\s+|my\s+)?(?P<target>.+?)\s+)?(?:through|to|out\s+of)\s+(?:the\s+|my\s+)?(?P<device>.+?)(?:\s+on\s+(?:the\s+|my\s+)?(?P<target2>.+?))?$'
+      tool: constellation.sound
+      args: { action: output, device: "{device}", target: "{target}{target2}" }
+      reply: "Switching the sound."
+    - name: screen-submit
+      match: '^submit\s+(?:the\s+form|it|that|this)(?:\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?))?$'
+      tool: constellation.submit
+      args: { target: "{target}" }
+      reply: 'Submitting it (I''ll ask you first).'
+    - name: node-logins
+      match: '^(?:what|which)\s+(?:sites|logins|accounts)\s+(?:are|am\s+i)\s+(?:saved|signed\s+in|logged\s+in)\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?)\??$|^(?:show|list)\s+(?:me\s+)?(?:the\s+)?(?:saved\s+)?logins\s+on\s+(?:the\s+|my\s+)?(?P<target2>.+?)$'
+      tool: constellation.logins
+      args: { target: "{target}{target2}" }
+      reply: "Here are its saved logins."
+    - name: node-kill
+      match: '^kill\s+(?:the\s+)?process(?:es)?\s+(?P<name>.+?)\s+(?:on|from)\s+(?:the\s+|my\s+)?(?P<target>.+?)$'
+      tool: constellation.kill_process
+      args: { name: "{name}", target: "{target}" }
+      reply: 'Ending it (I''ll ask you first).'
+    - name: spotify-speaker
+      match: '^make\s+(?:the\s+|my\s+)?(?P<target>.+?)\s+a\s+spotify\s+speaker$|^(?:set\s+up|install)\s+(?:spotify(?:\s+connect)?|librespot)\s+on\s+(?:the\s+|my\s+)?(?P<target2>.+?)$'
+      tool: quasar.speaker
+      args: { target: "{target}{target2}" }
+      reply: 'Setting it up as a Spotify speaker (I''ll ask you first).'
+    - name: release-rollback
+      match: '^(?:roll\s*back|undo)\s+(?:the\s+|your\s+|my\s+)?(?:last\s+|latest\s+)?(?:release|update|deploy(?:ment)?)$|^roll\s*back(?:\s+(?:yourself|aurelia))?$'
+      tool: chrysalis.rollback
+      args: {}
+      reply: 'Rolling back to the last good release (I''ll ask you first).'
+    - name: release-approve
+      match: '^approve\s+(?:the\s+)?release\s+#?(?P<id>\d+)$'
+      tool: chrysalis.approve
+      args: { release_id: "{id}" }
+      reply: 'Approving release {id} (I''ll ask you first).'
     - name: echo
       match: '^(?:probe\s+)?echo\s+(?P<message>.+?)(?:\s+(?P<steps>\d+)\s+times)?$'
       tool: probe.echo
@@ -688,6 +814,122 @@ fastpath:
       tool: orbit.login
       args: { code: "{code}" }
       reply: "Code sent to SmartRent."
+    # Every action has a fast path: installs, learning, the record, the home's TVs and nicknames.
+    - name: install-apt
+      match: '^install\s+the\s+ubuntu\s+package\s+(?P<name>[\w.+-]+)\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?)$'
+      tool: constellation.install_package
+      args: { name: "{name}", source: apt, target: "{target}" }
+      reply: 'Installing {name} (I''ll ask you first).'
+    - name: install-snap
+      match: '^install\s+the\s+snap\s+(?P<name>[\w.+-]+)\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?)$'
+      tool: constellation.install_package
+      args: { name: "{name}", source: snap, target: "{target}" }
+      reply: 'Installing {name} (I''ll ask you first).'
+    - name: remove-apt
+      match: '^(?:remove|uninstall)\s+the\s+ubuntu\s+package\s+(?P<name>[\w.+-]+)\s+(?:on|from)\s+(?:the\s+|my\s+)?(?P<target>.+?)$'
+      tool: constellation.remove_package
+      args: { name: "{name}", source: apt, target: "{target}" }
+      reply: 'Removing {name} (I''ll ask you first).'
+    - name: remove-snap
+      match: '^(?:remove|uninstall)\s+the\s+snap\s+(?P<name>[\w.+-]+)\s+(?:on|from)\s+(?:the\s+|my\s+)?(?P<target>.+?)$'
+      tool: constellation.remove_package
+      args: { name: "{name}", source: snap, target: "{target}" }
+      reply: 'Removing {name} (I''ll ask you first).'
+    - name: install-app
+      match: '^install\s+(?P<app>.+?)\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?)$'
+      tool: constellation.install
+      args: { app: "{app}", target: "{target}" }
+      reply: "Finding {app} to install."
+    - name: uninstall-app
+      match: '^(?:uninstall|remove)\s+(?!(?:all\s+)?(?:the\s+|my\s+)?(?:panels?|everything|reminders?|timers?)\b)(?P<app>.+?)\s+(?:from|on)\s+(?:the\s+|my\s+)?(?P<target>.+?)$'
+      tool: constellation.uninstall
+      args: { app: "{app}", target: "{target}" }
+      reply: "Finding {app} to remove."
+    - name: explain
+      match: '^(?:explain|teach\s+me(?:\s+about)?)\s+(?!(?:why|how|what|that|this|it|yourself|your|you|the\s+(?:last\s+|latest\s+)?release)\b)(?P<subject>.+?)(?:\s+to\s+me)?(?:\s+like\s+.+)?\??$'
+      tool: kepler.explain
+      args: { subject: "{subject}" }
+      reply: "Explaining {subject}."
+    - name: read-pdf-url
+      match: '^read\s+(?:the\s+)?(?:pdf|document|paper)\s+(?:at\s+)?(?P<url>https?://\S+)$'
+      tool: kepler.read_pdf
+      args: { url: "{url}" }
+      reply: "Reading it."
+    - name: read-file
+      match: '^read\s+(?:the\s+|my\s+)?(?:pdf|document|file|doc)\s+(?:called\s+|named\s+)?(?P<file>[^/]+?\.(?:pdf|docx|txt|md))$'
+      tool: kepler.read_pdf
+      args: { file: "{file}" }
+      reply: "Reading it."
+    - name: recall-topic
+      match: '^what\s+did\s+(?:we|i)\s+(?:say|decide|discuss|talk\s+about)\s+(?:about\s+|on\s+)?(?P<query>.+?)\??$'
+      tool: mnemosyne.recall
+      args: { query: "{query}" }
+      reply: "Looking back."
+    - name: recall-when
+      match: '^what\s+were\s+we\s+(?:talking|chatting)\s+about\s+(?P<date>.+?)\??$'
+      tool: mnemosyne.recall
+      args: { date: "{date}" }
+      reply: "Looking back."
+    - name: forget-fact
+      match: '^forget\s+(?:the\s+)?fact\s+#?(?P<id>\d+)$'
+      tool: mnemosyne.forget
+      args: { fact_id: "{id}" }
+      reply: 'Forgetting it (I''ll ask you first).'
+    - name: forget-conversation
+      match: '^forget\s+(?:the\s+)?conversation\s+#?(?P<id>\d+)$'
+      tool: mnemosyne.forget
+      args: { record_id: "{id}" }
+      reply: 'Forgetting it (I''ll ask you first).'
+    - name: history-latest
+      match: '^what\s+changed\s+in\s+(?:the\s+|your\s+)?(?:last|latest)\s+release\??$|^what\s+did\s+(?:the\s+|your\s+)?(?:last|latest)\s+release\s+do\??$|^(?:show\s+me\s+)?(?:the\s+|your\s+)?release\s+notes$'
+      tool: mnemosyne.history
+      args: { release: latest }
+      reply: 'Here''s the latest release.'
+    - name: history-new
+      match: '^what(?:''s|s| is)\s+new(?:\s+with\s+you)?\??$|^what\s+(?:can|could)\s+you\s+do\s+now\s+that\s+you\s+couldn''?t\s+before\??$'
+      tool: mnemosyne.history
+      args: { since: "this week" }
+      reply: 'Here''s what''s new.'
+    - name: roadmap
+      match: '^(?:what(?:''s|s| is)\s+next(?:\s+on\s+the\s+roadmap)?|where\s+are\s+we(?:\s+on\s+the\s+roadmap)?|(?:show|open)\s+(?:me\s+)?(?:the\s+|your\s+|my\s+)?roadmap|what\s+phase\s+are\s+(?:we|you)\s+(?:in|on))\??$'
+      tool: mnemosyne.roadmap
+      args: {}
+      reply: 'Here''s the roadmap.'
+    - name: roadmap-phase
+      match: '^(?:tell\s+me\s+about|what(?:''s|s| is)\s+in)\s+phase\s+(?P<phase>\w+)\??$'
+      tool: mnemosyne.roadmap
+      args: { phase: "{phase}" }
+      reply: 'Here''s phase {phase}.'
+    - name: aliases
+      match: '^(?:what|which)\s+(?:nicknames|aliases)\s+(?:have\s+i\s+(?:saved|set)|do\s+you\s+know)\??$|^(?:show|list)\s+(?:me\s+)?(?:my\s+|the\s+)?(?:device\s+)?(?:nicknames|aliases)$'
+      tool: orbit.aliases
+      args: {}
+      reply: "Here are your nicknames."
+    - name: forget-alias
+      match: '^forget\s+(?:the\s+)?(?:nickname|alias)\s+(?P<alias>.+?)$'
+      tool: orbit.forget_alias
+      args: { alias: "{alias}" }
+      reply: "Forgetting {alias}."
+    - name: tv-status
+      match: '^is\s+(?:the\s+|my\s+)?(?P<name>(?:[\w ]+\s)?(?:tv|television|roku))\s+on\??$|^(?P<name2>(?:[\w ]+\s)?(?:tv|television|roku))\s+status$|^what(?:''s|s| is)\s+(?:the\s+|my\s+)?(?P<name3>(?:[\w ]+\s)?(?:tv|television|roku))\s+(?:doing|showing)\??$'
+      tool: orbit.tv_status
+      args: { name: "{name}{name2}{name3}" }
+      reply: "Checking the TV."
+    - name: tv-apps
+      match: '^(?:what|which)\s+(?:roku|tv)\s+apps\b.*$|^list\s+(?:the\s+)?(?:roku|tv)\s+apps$|^what\s+apps\s+(?:are\s+)?on\s+(?:the\s+|my\s+)?(?P<name>(?:[\w ]+\s)?roku)\??$'
+      tool: orbit.tv_apps
+      args: { name: "{name}" }
+      reply: 'Here are the TV''s apps.'
+    - name: tv-inputs
+      match: '^(?:what|which)\s+inputs\s+(?:does|has)\s+(?:the\s+|my\s+)?(?P<name>(?:[\w ]+\s)?(?:tv|television|roku))(?:\s+have)?\??$|^list\s+(?:the\s+)?(?P<name2>(?:[\w ]+\s)?(?:tv|television|roku))\s+inputs$'
+      tool: orbit.tv_inputs
+      args: { name: "{name}{name2}" }
+      reply: 'Here are the TV''s inputs.'
+    - name: tv-discover
+      match: '^(?:find|look\s+for|search\s+for|discover)\s+(?:my\s+|the\s+)?(?:roku\s+)?tvs(?:\s+again)?$'
+      tool: orbit.tv_discover
+      args: {}
+      reply: "Looking for TVs."
 
 registry:
   # A function (and its tools) is dropped if it misses heartbeats this long.
