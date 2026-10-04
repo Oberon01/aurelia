@@ -1195,7 +1195,7 @@ async def displays(app) -> list[dict]:
     for r in rows:
         info = json.loads(r["info"]) if isinstance(r["info"], str) else (r["info"] or {})
         d = {"id": r["id"], "kind": r["kind"], "name": r["name"], "role": await auth.role_of(r), "node": None,
-             "open": bool(await app.state.redis.exists(DISPLAY_SEEN.format(r["id"])))}
+             "open": bool(await app.state.redis.exists(DISPLAY_SEEN.format(r["id"]))), "os": str(info.get("os") or "")}
         if r["kind"] == "screen":
             node = nodes_by_id.get(int(info["node_id"])) if str(info.get("node_id") or "").isdigit() else None
             if node is None:
@@ -1219,6 +1219,9 @@ async def send_targets(app, to: str, asker: int | None) -> tuple[list[dict], str
                              "There's no other display to send it to.")
         return hits, label
     hits = [d for d in every if _match(to, d["name"], d.get("hostname"))]
+    if not hits and set(re.findall(r"[a-z]+", to.lower())) <= {"my", "the", "phone", "iphone", "android", "cell", "mobile"}:
+        hits = [d for d in every if d["kind"] == "browser" and (d["os"] in ("iOS", "Android") or d["role"] == "companion")]
+        hits = hits if len(hits) == 1 else [d for d in hits if d["open"]][:1] if hits else []   # "my phone": the phone
     if not hits:
         names = ", ".join(sorted({d["name"] for d in every})) or "none yet"
         raise ValueError(f"I don't know a display called \"{to}\". Yours: {names}.")
@@ -1355,6 +1358,10 @@ async def send(app, user: str, args: dict) -> dict:
     asker, sent_from = (me["device"], me["name"]) if me else (None, None)
     targets, label = await send_targets(app, to, asker)
     if task:
+        try:
+            uuid.UUID(task)
+        except ValueError:
+            raise ValueError("That panel updates as things happen, so it can't be sent. Ask for it on that display instead.")
         row = await db.pool().fetchrow("SELECT tool, args, status, result FROM task_runs WHERE id=$1", uuid.UUID(task))
         if row is None:
             raise ValueError("That panel is gone.")

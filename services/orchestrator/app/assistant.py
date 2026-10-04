@@ -116,8 +116,13 @@ async def ask(body: Ask, request: Request):
                                         reply=f"Running your skill: {sk['name']}."),
                 args={"skill": str(sk["id"]), "slots": slots}, groups={})
     resolved = await registry.resolve(app.state.redis, fp.pattern.tool) if fp else None
+    elsewhere = None
+    if chosen is None and cfg.fastpath.enabled and not later and not (fp and fp.pattern.name.startswith("skill-")):
+        elsewhere = await _lookup_elsewhere(app, body.text)   # "send the device list to my phone"
     if chosen is not None:              # "use Raphael style" / "normal style": how she speaks, nothing else
         outcome.update(route="style", reply=await style.choose(app.state.redis, body.user, chosen))
+    elif elsewhere:
+        outcome = await _run_elsewhere(app, body, *elsewhere)
     elif fp and resolved:
         outcome = await _run_fastpath(app, body, fp, resolved)
     else:
@@ -188,6 +193,54 @@ async def confirm(body: Confirm, request: Request):
 
 
 # ---- fast path ----------------------------------------------------------------
+
+import re as _re_send
+SEND_ELSEWHERE = _re_send.compile(
+    r"^send\s+(?!(?:panel\s+\d+|this|that|it|this\s+panel|that\s+panel|a\s+note|note|https?://)\b)"
+    r"(?P<what>.+?)\s+(?:to|over\s+to|onto|on)\s+(?:the\s+|my\s+)?(?P<to>[\w' -]+?)$", _re_send.I)
+NOT_ELSEWHERE = ("constellation.look", "constellation.watch", "constellation.screens", "constellation.send")
+
+
+async def _lookup_elsewhere(app, text: str) -> tuple[str, dict, str, str] | None:
+    """A look-up he wants on another display, by fast path: "send the device list to my phone". The part before
+    "to" must be a look-up I know by its own fast path (as said, or as "show …"); else it isn't one."""
+    t = " ".join(text.strip().rstrip(".!?").split())
+    t = fastpath._POLITE.match(t).group("rest") or t
+    m = SEND_ELSEWHERE.match(t)
+    if not m:
+        return None
+    what, to = m.group("what").strip(), m.group("to").strip()
+    pats = [p for p in app.state.config.current.fastpath.patterns
+            if not p.name.startswith(("schedule-", "send-")) and p.tool not in NOT_ELSEWHERE]
+    plural = _re_send.sub(r"\b(\w+?)\s+list\b", r"\1s", what)
+    for cand in dict.fromkeys([what, plural, f"show {what}", f"show {plural}", f"show me {what}", f"what's {what}",
+                               f"list {plural}"]):
+        hit = fastpath.match(cand, pats)
+        if hit is None:
+            continue
+        fn, _, tool = hit.pattern.tool.partition(".")
+        if app.state.governance.decide(fn, tool, "owner", False).tier not in ("reference", "read"):
+            return None                                 # an action ("put frieren on the tv"): not a look-up to send
+        resolved = await registry.resolve(app.state.redis, hit.pattern.tool)
+        if resolved is None:
+            return None
+        return hit.pattern.tool, fastpath.coerce(hit.args, resolved.tool.input_schema), to, what
+    return None
+
+
+async def _run_elsewhere(app, body, qualified: str, args: dict, to: str, what: str) -> dict[str, Any]:
+    out: dict[str, Any] = {"route": "fastpath", "reply": "", "task_ids": [], "needs_confirmation": []}
+    text, err = await _run_for_display(app, body.user, qualified, args, to, getattr(body, "device", None), out)
+    try:
+        r = json.loads(text)
+    except ValueError:
+        r = {}
+    if err:
+        out["reply"] = f"I couldn't: {r.get('error') or r.get('reason') or 'it failed'}"
+    else:
+        out["reply"] = r.get("note") or f"Sent {what} to {to}."
+        out["_ok"] = True
+    return out
 
 def _timed(app, text: str) -> bool:
     """A request with a time in it ("… tomorrow at 9", "… every morning") is never a skill's phrase now."""
@@ -546,9 +599,19 @@ def _takes_panel(schema: dict | None) -> bool:
     return bool(prop.get("x-panel"))
 
 
+def _sendable(task_id: str) -> bool:
+    """A panel backed by a task (a result that can go elsewhere), not a live one (now playing, a heads-up)."""
+    try:
+        uuid.UUID(str(task_id))
+        return True
+    except ValueError:
+        return False
+
+
 def with_panel_task(args: dict, screen: context.Screen | None) -> dict:
     """The panel he means, as the task behind it: the number he said, else the one he clicked,
-    else the newest on screen. Only this display's panels count, and the model never names tasks."""
+    else the newest on screen. Only this display's panels count, and the model never names tasks.
+    Live panels (now playing, a heads-up) aren't results, so "it" skips them and naming one says why."""
     args = {k: v for k, v in args.items() if k != PANEL_TASK}
     panels = [p for p in (screen.panels if screen else [])]
     n = args.get("panel")
@@ -560,10 +623,14 @@ def with_panel_task(args: dict, screen: context.Screen | None) -> dict:
         ref = next((p for p in panels if p.n == n), None)
         if ref is None:
             raise ValueError(f"There's no panel {n} on this screen.")
+        if not _sendable(ref.task_id):
+            raise ValueError(f"Panel {n} ({ref.title or 'a live one'}) updates as things happen, so it can't be sent. "
+                             "Ask for it on the other display instead.")
     else:
-        ref = next((p for p in panels if screen and p.n == screen.focus), None)
+        ref = next((p for p in panels if screen and p.n == screen.focus and _sendable(p.task_id)), None)
         if ref is None and not any(args.get(k) for k in ("url", "text")):
-            live = [p for p in panels if not p.queued] or panels
+            ok = [p for p in panels if _sendable(p.task_id)]
+            live = [p for p in ok if not p.queued] or ok
             ref = max(live, key=lambda p: p.n) if live else None
     if ref is not None:
         args[PANEL_TASK] = ref.task_id

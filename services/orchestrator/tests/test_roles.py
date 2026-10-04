@@ -44,14 +44,23 @@ def test_groups(words, want):
     assert roles.group(words) == want
 
 
-def scr(focus=None, *ns):
-    return Screen(panels=[PanelRef(n=n, task_id=f"t{n}", tool="x.y", queued=(n == 9)) for n in ns], focus=focus)
+def t(n):
+    return f"00000000-0000-0000-0000-{n:012d}"          # task ids are UUIDs; live panels (like now playing) aren't
+
+
+def scr(focus=None, *ns, live=()):
+    return Screen(panels=[PanelRef(n=n, task_id=("now-tv" if n in live else t(n)), tool="x.y", queued=(n == 9))
+                          for n in ns], focus=focus)
 
 
 def test_this_panel():
-    assert with_panel_task({"to": "tv", "panel": 2}, scr(None, 1, 2, 3))["_panel_task"] == "t2"
-    assert with_panel_task({"to": "tv"}, scr(1, 1, 2, 3))["_panel_task"] == "t1"           # the one he clicked
-    assert with_panel_task({"to": "tv"}, scr(None, 1, 3, 9))["_panel_task"] == "t3"        # the newest on screen
+    assert with_panel_task({"to": "tv", "panel": 2}, scr(None, 1, 2, 3))["_panel_task"] == t(2)
+    assert with_panel_task({"to": "tv"}, scr(1, 1, 2, 3))["_panel_task"] == t(1)           # the one he clicked
+    assert with_panel_task({"to": "tv"}, scr(None, 1, 3, 9))["_panel_task"] == t(3)        # the newest on screen
+    assert with_panel_task({"to": "tv"}, scr(None, 1, 2, 3, live=(3,)))["_panel_task"] == t(2)   # "it" skips live ones
+    assert with_panel_task({"to": "tv"}, scr(3, 1, 2, 3, live=(3,)))["_panel_task"] == t(2)
+    with pytest.raises(ValueError, match="can't be sent"):                                  # named, it's refused plainly
+        with_panel_task({"to": "tv", "panel": 3}, scr(None, 1, 3, live=(3,)))
     assert "_panel_task" not in with_panel_task({"to": "tv", "text": "hi"}, scr(None, 1))  # a note, not a panel
     assert "_panel_task" not in with_panel_task({"to": "tv"}, None)
     assert with_panel_task({"to": "tv", "_panel_task": "forged"}, None) == {"to": "tv"}  # never from the model

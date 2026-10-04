@@ -397,3 +397,47 @@ def test_send_by_fast_path_means_the_same_panel_the_model_would(stack):
         assert out["route"] == "fastpath" and not out["task_ids"] and out["reply"] == "There's no panel 5 on this screen."
     finally:
         cfg.patterns = old
+
+
+def test_a_look_up_and_a_live_panel_by_fast_path(stack):
+    """"send the device list to my phone" runs the look-up for the phone (by fast path); "my phone" finds the phone
+    whatever it's called; a live panel (now playing) is never what "it" means, and naming one says why."""
+    import yaml
+    from pathlib import Path
+    from app import auth
+    from app.config import FastPathPattern
+    from app.main import app
+    from .conftest import register_testfn
+    orch = stack["orch"]
+    register_testfn(orch, stack["fn"])
+    sql("UPDATE devices SET status='revoked' WHERE status='approved'")
+    auth._by_id.clear()
+    desk = device("browser", "Desk", {"os": "Windows", "browser": "Chrome"})
+    phone = device("browser", "Kentrell's 16 Pro", {"os": "iOS", "browser": "Safari", "app": True})
+    real = yaml.safe_load(Path(__file__).parents[4].joinpath("config", "aurelia.yaml").read_text())["fastpath"]["patterns"]
+    cfg = app.state.config.current.fastpath
+    old = cfg.patterns
+    cfg.patterns = [FastPathPattern(**p) for p in real if p["name"].startswith("send-") or p["name"] in ("devices", "computers")]
+    try:
+        out = httpx.post(f"{orch}/ask", headers={"X-Aurelia-Device": str(desk)}, timeout=30,
+                         json={"text": "send the device list to my phone", "session_id": uuid.uuid4().hex}).json()
+        assert out["route"] == "fastpath", out
+        [tid] = out["task_ids"]
+        t = httpx.get(f"{orch}/tasks/{tid}").json()
+        assert t["tool"] == "constellation.devices" and t["trigger"] == "send"
+        assert "Kentrell's 16 Pro" in out["reply"] or "phone" in out["reply"].lower(), out["reply"]
+        kept = sql("SELECT tool FROM task_runs WHERE trigger='send' AND device=$1", phone)
+        assert any(r["tool"] == "constellation.devices" for r in kept)          # its own panel, for the phone
+        live = {"panels": [{"n": 1, "task_id": "now-tv", "tool": "quasar.now", "title": "Now playing"}], "focus": 1}
+        out = httpx.post(f"{orch}/ask", headers={"X-Aurelia-Device": str(desk)}, timeout=30,
+                         json={"text": "send panel 1 to my phone", "session_id": uuid.uuid4().hex, "screen": live}).json()
+        assert not out["task_ids"] and "can't be sent" in out["reply"]
+        out = httpx.post(f"{orch}/ask", headers={"X-Aurelia-Device": str(desk)}, timeout=30,
+                         json={"text": "send it to my phone", "session_id": uuid.uuid4().hex, "screen": live}).json()
+        [tid] = out["task_ids"]
+        deadline = time.time() + 10
+        while (t := httpx.get(f"{orch}/tasks/{tid}").json())["status"] == "running" and time.time() < deadline:
+            time.sleep(0.2)
+        assert t["status"] == "failed" and "Send what?" in t["error"]           # nothing to send, said plainly
+    finally:
+        cfg.patterns = old
