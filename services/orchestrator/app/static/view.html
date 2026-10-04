@@ -883,7 +883,7 @@ const dismissed = new Set();                    // release panels you closed: do
 const closedPlans = new Set();               // plan panels he closed: their updates don't reopen them
 function remove(rec, delay) {
   if (rec.tool === "chrysalis.release") dismissed.add(rec.taskId);
-  if (rec.tool === "admiral.plan" && delay === undefined) closedPlans.add(rec.taskId);
+  if (rec.data && rec.data.plan && delay === undefined) closedPlans.add(rec.taskId);   // admiral.plan or morpho.run
   if (rec.tool === "quasar.now" && rec.nowKey && rec.nowTitle && delay === undefined) nowDismissed.set(rec.nowKey, rec.nowTitle);
   if (rec === focused) setFocus(null);
   setTimeout(() => {
@@ -1243,6 +1243,8 @@ function body(tool, d) {
   if (d.reminder && typeof d.reminder === "object") { wrap.append(el("div", "facts", d.reminder.late || (d.reminder.when ? `Your reminder for ${d.reminder.when}.` : "Your reminder.")));
                                                        used.add("reminder"); used.add("headline"); }
   if (d.budget && typeof d.budget === "object" && typeof d.budget.cap === "number") { wrap.append(budgetView(d.budget)); used.add("budget"); used.add("headline"); }
+  if (d.skills && Array.isArray(d.skills.items)) { wrap.append(skillsView(d.skills)); used.add("skills"); used.add("headline"); }
+  if (d.trusts && Array.isArray(d.trusts.items)) { wrap.append(trustsView(d.trusts)); used.add("trusts"); used.add("headline"); }
   if (d.plans && Array.isArray(d.plans.items)) { wrap.append(plansView(d.plans)); used.add("plans"); used.add("headline"); }
   if (d.packages && Array.isArray(d.packages.items)) { wrap.append(packagesView(d.packages)); used.add("packages"); used.add("headline"); }
   if (d.mode && typeof d.mode === "object" && d.mode.node) {
@@ -1810,6 +1812,16 @@ function planView(p) {
   }
   if (p.error) box.append(el("div", "error", p.error));
   (p.changes || []).forEach(c => box.append(el("div", "more", "Changed course: " + c)));
+  if (p.keepable) {                                   // Morpho: a plan that worked can become a skill (his tap)
+    const k = el("div"); k.style.cssText = "display:flex;gap:8px;align-items:center";
+    const b = el("button", "btn quiet", "Keep as a skill"); b.type = "button";
+    b.addEventListener("click", async () => {
+      b.disabled = true;
+      try { const out = await planPost(`/morpho/keep/${p.id}`, {}); k.replaceChildren(el("div", "more", out.done || "It's in your mailbox.")); }
+      catch (e) { b.disabled = false; say(e.message); }
+    });
+    k.append(b); box.append(k);
+  }
   const list = el("div", "procs");
   p.steps.forEach(st => {
     const row = el("div"); row.style.cssText = "display:flex;flex-direction:column;gap:2px;padding:6px 0;border-bottom:1px solid var(--cyan-soft)";
@@ -1934,6 +1946,40 @@ function budgetView(b) {
     box.append(m);
   }
   if (b.note) box.append(el("div", "more", b.note));
+  return box;
+}
+// Morpho: his skills (each with the phrases that run it), and what I do without asking.
+function skillsView(sk) {
+  const box = el("div", "procs");
+  if (!sk.items.length) box.append(el("div", "msg", "No skills yet. When a plan works, its panel offers to keep it."));
+  sk.items.forEach(x => {
+    const row = el("div"); row.style.cssText = "display:flex;flex-direction:column;gap:2px;padding:6px 0;border-bottom:1px solid var(--cyan-soft)";
+    const t = el("div", null, x.name + (x.version > 1 ? ` · v${x.version}` : "")); t.style.color = "var(--ink-strong)";
+    row.append(t, el("div", "facts", [x.status === "proposed" ? "waiting for you (mailbox)" : `used ${x.uses}×`, `${x.steps} steps`,
+                                      x.slots.length ? "needs: " + x.slots.join(", ") : null, x.model_free ? "works without the model" : null].filter(Boolean).join(" · ")));
+    (x.phrases || []).forEach(ph => row.append(el("div", "more", "“" + ph + "”")));
+    box.append(row);
+  });
+  return box;
+}
+function trustsView(tr) {
+  const box = el("div", "procs");
+  if (!tr.items.length) box.append(el("div", "msg", "I ask before every action that needs your OK."));
+  tr.items.forEach(x => {
+    const row = el("div"); row.style.cssText = "display:flex;flex-direction:column;gap:2px;padding:6px 0;border-bottom:1px solid var(--cyan-soft)";
+    const t = el("div", null, x.title); t.style.color = "var(--ink-strong)";
+    row.append(t, el("div", "facts", x.status === "proposed" ? "waiting for you (mailbox)" : `trusted since ${x.since} · used ${x.uses}×`));
+    if (x.status === "active") {
+      const b = el("button", "btn quiet", "Ask me again"); b.type = "button"; b.style.alignSelf = "flex-start";
+      b.addEventListener("click", async () => {
+        b.disabled = true;
+        try { const out = await planPost(`/morpho/trust/${x.id}/revoke`, {}); row.append(el("div", "more", out.done)); b.remove(); }
+        catch (e) { b.disabled = false; say(e.message); }
+      });
+      row.append(b);
+    }
+    box.append(row);
+  });
   return box;
 }
 function plansView(ps) {
@@ -2337,7 +2383,7 @@ function linkView(link) {
 // ---------------------------------------------------------------- mailbox
 // Deciding happens only here, from your click: there is no tool for it, so
 // Aurelia can show you her ideas but never approve them herself.
-const KIND_LABEL = { schedule_ok: "Scheduled, needs your OK", plan_question: "Questions from plans", plan_step: "Plan steps waiting for you", device: "Waiting to pair", node_update: "Computers", node_alert: "Computers", about_you: "About you", automation: "Automations", criticality: "What matters most", retention: "Keep longer" };
+const KIND_LABEL = { skill: "Skills to keep", trust: "Stop asking?", schedule_ok: "Scheduled, needs your OK", plan_question: "Questions from plans", plan_step: "Plan steps waiting for you", device: "Waiting to pair", node_update: "Computers", node_alert: "Computers", about_you: "About you", automation: "Automations", criticality: "What matters most", retention: "Keep longer" };
 const CATEGORY_LABEL = { communication: "How to talk to you", mood: "Mood patterns", interests: "Interests", goals: "Goals",
   life: "What's going on", people: "People", learning: "What you know and are learning", rhythms: "Rhythms",
   work: "Work", preferences: "Preferences", general: "Other" };
@@ -2360,7 +2406,7 @@ function mailboxView(items) {
   for (const [kind, list] of Object.entries(groups).sort((a, b) => order(a[0]) - order(b[0]))) {
     const g = el("div", "mb-group");
     const head = el("div", "mb-ghead"); head.append(el("span", null, `${KIND_LABEL[kind] || kind} · ${list.length}`));
-    if (list.length > 1 && !["device", "plan_question", "schedule_ok"].includes(kind)) {                // each device is approved on its own, code checked
+    if (list.length > 1 && !["device", "plan_question", "schedule_ok", "skill", "trust"].includes(kind)) {                // each device is approved on its own, code checked
       const all = el("button", "btn quiet", `Approve all ${list.length}`); all.type = "button";
       all.addEventListener("click", async () => {
         all.disabled = true;
@@ -2391,7 +2437,7 @@ function mailboxItem(item) {
   const c = el("div", "mb-item" + (item.urgent ? " urgent" : ""));
   const top = el("div", "mb-top");
   top.append(el("span", "mb-title", item.title),
-             el("span", "mb-conf", item.kind === "device" ? `asked ${item.age}` : ["node_update", "node_alert", "plan_step", "plan_question", "schedule_ok"].includes(item.kind) ? item.age
+             el("span", "mb-conf", item.kind === "device" ? `asked ${item.age}` : ["node_update", "node_alert", "plan_step", "plan_question", "schedule_ok", "skill", "trust"].includes(item.kind) ? item.age
                                  : `${Math.round(item.confidence * 100)}% sure · ${item.age}`));
   c.append(top);
   if (item.kind === "device") {
@@ -2400,6 +2446,15 @@ function mailboxItem(item) {
     const pp = item.proposal || {};
     c.append(el("div", "mb-sum", `${CATEGORY_LABEL[pp.category] || "Other"}${pp.core ? " · core profile" : ""} · ${item.summary}`));
   } else if (item.summary) c.append(el("div", "mb-sum", item.summary));
+  if (item.kind === "skill" && (item.proposal || {}).preview) {      // the skill, as it would be kept
+    const pv = item.proposal.preview, sk = el("div", "procs");
+    if ((item.proposal.diff || []).length) item.proposal.diff.forEach(d => sk.append(el("div", "more", d)));
+    else pv.steps.forEach(st => sk.append(el("div", "more", `${st.n}. ${st.title} · ${st.tool}${Object.keys(st.args || {}).length ? " · " + Object.entries(st.args).map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`).join(", ") : ""}`)));
+    if (pv.slots.length) sk.append(el("div", "facts", "Open parts: " + pv.slots.map(x => `${x.name} (e.g. ${x.example})`).join(", ")));
+    if (pv.phrases.length) sk.append(el("div", "facts", "Say: " + pv.phrases.map(x => "“" + x + "”").join("  ")));
+    if (pv.model_free) sk.append(el("div", "facts", "Works without the model."));
+    c.append(sk);
+  }
   if ((item.evidence || []).length) {
     const ev = el("details", "mb-ev"); ev.append(el("summary", null, `Evidence (${item.evidence.length})`));
     const ul = el("ul"); item.evidence.forEach(e => ul.append(el("li", null, e))); ev.append(ul);
@@ -2440,6 +2495,14 @@ function mailboxItem(item) {
     text.setAttribute("aria-label", "Name");
     form.append(el("label", null, "Name"), text);
     changes = () => ({ name: text.value });
+  } else if (item.kind === "skill") {
+    const pv = p.preview || {};
+    const name = el("input"); name.type = "text"; name.value = pv.name || ""; name.maxLength = 60; name.setAttribute("aria-label", "Name");
+    const ph = el("input"); ph.type = "text"; ph.value = (pv.phrases || []).join("; ");
+    ph.placeholder = (pv.slots || []).length ? "Phrases, using " + pv.slots.map(x => "{" + x.name + "}").join(" ") + " (separate with ;)" : "Phrases to say (separate with ;)";
+    ph.setAttribute("aria-label", "Phrases");
+    form.append(el("label", null, "Name"), name, el("label", null, "Say"), ph);
+    changes = () => ({ name: name.value, phrases: ph.value });
   } else if (item.kind === "retention") {
     const n = el("input"); n.type = "number"; n.min = "1"; n.max = "365"; n.value = p.hot_days || 30; n.style.width = "90px";
     n.setAttribute("aria-label", "Days");
@@ -2468,7 +2531,7 @@ function mailboxItem(item) {
   }
   if (item.kind === "node_update") { approve.textContent = "Retry"; no.textContent = "Leave it"; }
   if (item.kind === "node_alert") { approve.textContent = "Got it"; no.textContent = "Dismiss"; }
-  const noChange = ["node_update", "node_alert", "plan_step", "schedule_ok"].includes(item.kind);   // a plan step runs as shown, or not at all
+  const noChange = ["node_update", "node_alert", "plan_step", "schedule_ok", "trust"].includes(item.kind);   // a plan step runs as shown, or not at all
   if (item.kind !== "plan_question") btns.append(approve, ...(noChange ? [] : [change]), ...(["device", "schedule_ok"].includes(item.kind) ? [] : [later]), no);   // a pairing request expires; no "not now"
   c.append(btns);
 
@@ -2777,7 +2840,7 @@ function onEvent(ev) {
       rec = rec || makePanel(id, ev.tool);
       Object.assign(rec, { unit: d.unit || null, cancellable: d.cancellable !== false, closeAfter: d.close_after || null,
                            key: d.key, args: d.args || {}, refreshes: d.refreshes || [], tier: d.tier,
-                           subtitle: d.subtitle || (d.sent_from ? `Sent from ${d.sent_from}` : null), critical: d.critical || null });
+                           subtitle: d.subtitle || (d.sent_from ? `Sent from ${d.sent_from}` : null) || d.trusted || null, critical: d.critical || null });
       if (d.present) rec.node.classList.add("present");
       if (d.snapshot) {                              // memory: show the last panel now, refresh behind it
         const sn = d.snapshot;

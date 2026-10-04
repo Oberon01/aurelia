@@ -1,0 +1,32 @@
+# Morpho — synthesis, part of Aurelia's core (Phase 9, with Admiral). Plans that worked become skills, skills
+# learn their variations, tools he uses together are proposed as skills, and a low-impact action he keeps
+# approving can earn trust. Every skill and every grant of trust is his to approve in the mailbox; she can
+# never approve one herself.
+function: morpho
+enabled: true
+
+tools:
+  skills:   { tier: reference }   # his skills, and proposed ones waiting for him
+  run:      { tier: act }         # run a skill: a plan of its steps, each governed on its own
+  keep:     { tier: act }         # draft a plan as a skill (kept only when he approves the card)
+  retire:   { tier: act }
+  rollback: { tier: act }         # a skill's previous version
+  trusts:   { tier: reference }   # what she does without asking
+  revoke:   { tier: act }         # "ask me again before…"
+
+rate_limit_per_minute: 30
+
+rules:
+  trust:
+    approvals: 10                 # the same action, approved this many times…
+    days: 14                      # …over at least this long, never declined, before she proposes it
+    # Only these can ever earn trust (and only exactly as approved). Never, whatever this says: unlocking,
+    # paying, sending or posting as him, deleting, sign-ins, closing programs, installing, shutting down,
+    # her own code, rules or governance (a coded backstop).
+    eligible:
+      - { tool: constellation.restart, args: { action: restart } }
+  together:
+    repeats: 3                    # the same sequence of his requests this many times…
+    window_minutes: 10            # …each within this long, in the last lookback_days
+    lookback_days: 14
+    max_proposals: 3              # at most this many proposals a day

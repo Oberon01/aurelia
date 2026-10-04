@@ -164,7 +164,10 @@ def parse(text: str, now: datetime, tz: str = "America/Chicago") -> datetime:
     t = _clean(text)
     if not t:
         raise Unclear("When should I do it?")
-    rel = _relative(t)
+    try:
+        rel = _relative(t)
+    except (OverflowError, ValueError):
+        raise Unclear("That's more than a year away; give me a date.")
     if rel is not None:
         if rel > HORIZON:
             raise Unclear("That's more than a year away; give me a date.")

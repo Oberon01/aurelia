@@ -249,6 +249,42 @@ fastpath:
       tool: chrysalis.approve
       args: { release_id: "{id}" }
       reply: 'Approving release {id} (I''ll ask you first).'
+    # Morpho (Phase 9): skills and earned trust. (His skills' own phrases are fast paths too, checked first.)
+    - name: skills-list
+      match: '^(?:(?:show|list)\s+(?:me\s+)?(?:my|your|the)\s+skills|what\s+skills\s+do\s+(?:you|i)\s+have|my\s+skills)\??$'
+      tool: morpho.skills
+      args: {}
+      reply: "Here are your skills."
+    - name: skill-keep
+      match: '^(?:keep|save|remember)\s+(?:that|this|it|the\s+last\s+plan|that\s+plan|this\s+plan)\s+as\s+a\s+skill$'
+      tool: morpho.keep
+      args: {}
+      reply: "Drafting it as a skill."
+    - name: skill-run
+      match: '^(?:run|use|do)\s+(?:the\s+|my\s+)?skill\s+(?P<skill>.+?)$'
+      tool: morpho.run
+      args: { skill: "{skill}" }
+      reply: "Running {skill}."
+    - name: skill-retire
+      match: '^(?:retire|stop\s+using)\s+(?:the\s+|my\s+)?skill\s+(?P<skill>.+?)$'
+      tool: morpho.retire
+      args: { skill: "{skill}" }
+      reply: "Retiring {skill}."
+    - name: skill-rollback
+      match: '^(?:roll\s*back|undo\s+the\s+new\s+version\s+of)\s+(?:the\s+|my\s+)?skill\s+(?P<skill>.+?)$'
+      tool: morpho.rollback
+      args: { skill: "{skill}" }
+      reply: "Going back a version."
+    - name: trusts
+      match: '^(?:what\s+do\s+you\s+do\s+without\s+asking(?:\s+me)?|(?:show|list)\s+(?:me\s+)?(?:my\s+|the\s+)?trusted\s+actions|what\s+have\s+i\s+trusted\s+you\s+(?:with|to\s+do))\??$'
+      tool: morpho.trusts
+      args: {}
+      reply: "Here's what I do without asking."
+    - name: trust-revoke
+      match: '^(?:always\s+)?ask\s+me\s+(?:again\s+|first\s+)?before\s+(?P<which>.+?)$'
+      tool: morpho.revoke
+      args: { which: "{which}" }
+      reply: "I'll ask first again."
     - name: echo
       match: '^(?:probe\s+)?echo\s+(?P<message>.+?)(?:\s+(?P<steps>\d+)\s+times)?$'
       tool: probe.echo

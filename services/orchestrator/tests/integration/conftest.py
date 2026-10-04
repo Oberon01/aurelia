@@ -73,6 +73,12 @@ def stack(tmp_path_factory):
         "  schedule: {tier: act}\n  scheduled: {tier: reference}\n  unschedule: {tier: act}\n"
         "rules:\n  schedule:\n    grace_minutes: {action: 0.1, plan: 1, reminder: 0.1}\n    heads_up_seconds: 2\n"
         "    heads_up_for: [enginefn.act]\n    retry_after_seconds: 1\n")
+    (tmp / "gov" / "functions" / "morpho.yaml").write_text(
+        "function: morpho\nrate_limit_per_minute: 1000\ntools:\n  skills: {tier: reference}\n  run: {tier: act}\n"
+        "  keep: {tier: act}\n  retire: {tier: act}\n  rollback: {tier: act}\n  trusts: {tier: reference}\n"
+        "  revoke: {tier: act}\nrules:\n  trust:\n    approvals: 3\n    days: 0\n"
+        "    eligible: [{tool: enginefn.confirm, args: {what: trusted thing}}]\n"
+        "  together:\n    repeats: 3\n    window_minutes: 10\n    lookback_days: 14\n    max_proposals: 3\n")
     (tmp / "gov" / "functions" / "enginefn.yaml").write_text(          # the engine's tests' stand-in function
         "function: enginefn\nrate_limit_per_minute: 1000\ntools:\n  act: {tier: act}\n  look: {tier: reference}\n"
         "  confirm: {tier: change}\n")

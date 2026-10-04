@@ -40,7 +40,7 @@ class Model:
         text = messages[-1].text
         self.calls.append((system[:20], text))
         if system.startswith(admiral.PLAN_SYSTEM[:40]):
-            goal = re.search(r"His request: (.*?)\n\nTools:", text, re.S).group(1)
+            goal = re.search(r"His request: (.*?)\n\n", text, re.S).group(1)
             out = self.plans[goal]
         elif system.startswith(admiral.REPLAN_SYSTEM[:40]):
             goal = re.search(r"His request: (.*?)\n\n", text, re.S).group(1)

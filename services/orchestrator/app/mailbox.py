@@ -89,6 +89,20 @@ def validate(kind: str, proposal: dict[str, Any]) -> dict[str, Any]:
             raise HTTPException(400, "The request doesn't say which device.")
         p["name"] = " ".join(str(p.get("name") or "").split())[:60]
         return p
+    if kind == "skill":                          # a skill to keep, or a new version of one (Morpho)
+        try:
+            p["skill_id"] = int(p.get("skill_id"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "The card doesn't say which skill.")
+        if p.get("name") is not None and not " ".join(str(p["name"]).split()):
+            raise HTTPException(400, "Give it a name.")
+        return p
+    if kind == "trust":                          # an action that could stop asking (Morpho)
+        try:
+            p["grant_id"] = int(p.get("grant_id"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "The card doesn't say which action.")
+        return p
     if kind == "schedule_ok":                    # a scheduled change-tier action, due now (engine.py)
         try:
             p["job_id"] = int(p.get("job_id"))
@@ -159,6 +173,8 @@ async def apply(conn, item_id: int, kind: str, p: dict[str, Any]) -> str:
         return await _plan(p, approve=True)
     if kind == "schedule_ok":
         return await _job(p, ok=True)
+    if kind in ("skill", "trust"):
+        return await _morpho(kind, p, ok=True)
     if kind == "about_you":
         from . import profile
         user = "owner"
@@ -202,6 +218,19 @@ async def _plan(p: dict[str, Any], approve: bool) -> str:
         raise HTTPException(409, "That plan isn't waiting for this anymore.")
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+
+
+async def _morpho(kind: str, p: dict[str, Any], ok: bool) -> str:
+    """His answer on a skill or trust card. A skill card may carry his name and phrases; nothing else changes."""
+    from . import morpho
+    try:
+        if kind == "skill":
+            if not ok:
+                return await morpho.decline_skill(p["skill_id"])
+            return await morpho.approve_skill(p["skill_id"], {k: p[k] for k in ("name", "phrases") if p.get(k) is not None})
+        return await morpho.grant(p["grant_id"], ok)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
 
 
 async def _job(p: dict[str, Any], ok: bool) -> str:
@@ -278,6 +307,11 @@ async def get_item(item_id: int):
 async def propose(p: Proposal, request: Request):
     """Functions propose here. The same idea (fingerprint) is updated, not duplicated;
     a decided idea isn't proposed again unless its evidence has grown a lot."""
+    return await propose_internal(request.app.state.redis, p)
+
+
+async def propose_internal(redis, p: Proposal) -> dict[str, Any]:
+    """The same, from inside the orchestrator (Morpho)."""
     validate(p.kind, p.proposal)
     pool = db.pool()
     await _wake_and_expire()
@@ -304,7 +338,7 @@ async def propose(p: Proposal, request: Request):
         "effect, urgent) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11) RETURNING id",
         p.kind, p.fingerprint, p.source, p.title, summary, *fields[2:])
     log.info("mailbox: new %s proposal %s from %s", p.kind, item_id, p.source)
-    await notify(request.app.state.redis)
+    await notify(redis)
     return {"id": item_id, "result": "created"}
 
 
@@ -320,8 +354,8 @@ async def _decide(item_id: int, d: Decision, batch: bool = False) -> dict[str, A
                 raise HTTPException(400, "Approve devices one at a time, after checking the code on each.")
         if row["kind"] == "plan_question" and batch:
             raise HTTPException(400, "Answer a plan's questions one at a time.")
-        if row["kind"] == "schedule_ok" and batch and d.action == "approve":
-            raise HTTPException(400, "Approve scheduled actions one at a time.")
+        if row["kind"] in ("schedule_ok", "trust", "skill") and batch and d.action == "approve":
+            raise HTTPException(400, "Approve these one at a time.")
     row = await pool.fetchrow("SELECT * FROM mailbox_items WHERE id=$1", item_id)
     if row is None:
         raise HTTPException(404, "No such mailbox item.")
@@ -330,8 +364,10 @@ async def _decide(item_id: int, d: Decision, batch: bool = False) -> dict[str, A
     proposal = json.loads(row["proposal"]) if isinstance(row["proposal"], str) else row["proposal"]
     if d.action in ("approve", "modify"):
         changes = d.changes if d.action == "modify" else {}
-        if row["kind"] in ("schedule_ok", "plan_step"):           # the card can't change what it's about
+        if row["kind"] in ("schedule_ok", "plan_step", "trust"):   # the card can't change what it's about
             changes = {}
+        elif row["kind"] == "skill":
+            changes = {k: v for k, v in changes.items() if k in ("name", "phrases")}
         elif row["kind"] == "plan_question":
             changes = {k: v for k, v in changes.items() if k == "answer"}
         final = validate(row["kind"], {**proposal, **changes})
@@ -345,6 +381,11 @@ async def _decide(item_id: int, d: Decision, batch: bool = False) -> dict[str, A
         if row["kind"] == "device":
             from . import auth
             await auth.decline(pool, proposal["device_id"])
+        if row["kind"] in ("skill", "trust"):
+            done_ = await _morpho(row["kind"], validate(row["kind"], proposal), ok=False)
+            await pool.execute("UPDATE mailbox_items SET status='rejected', reason=$2, decided_at=now(), decided_by=$3, "
+                               "updated_at=now() WHERE id=$1", item_id, (d.reason or "").strip() or None, d.user)
+            return {"id": item_id, "status": "rejected", "done": done_}
         if row["kind"] == "schedule_ok":
             done_ = await _job(validate(row["kind"], proposal), ok=False)
             await pool.execute("UPDATE mailbox_items SET status='rejected', reason=$2, decided_at=now(), decided_by=$3, "

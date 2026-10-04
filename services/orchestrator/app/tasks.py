@@ -63,6 +63,13 @@ async def start_task(body: StartTask, request: Request):
     # Governance: the charter and the function's policy decide, not the function itself.
     gov = request.app.state.governance
     decision = gov.decide(resolved.function, resolved.tool.name, body.user, body.confirmed)
+    grant = None
+    if decision.needs_confirmation and not body.confirmed:
+        from . import morpho                       # earned trust (Morpho): exactly this action, on his allow-list
+        grant = await morpho.trusted(request.app, name, body.args, body.user)
+        if grant:
+            decision = decision.model_copy(update={"allowed": True, "needs_confirmation": False,
+                                                   "reason": f"trusted since {grant['granted_at']:%b %d}"})
     if decision.allowed and not await _within_rate_limit(request, resolved.function, gov.rate_limit(resolved.function)):
         decision = decision.model_copy(update={"allowed": False, "reason": f"rate limit reached for '{resolved.function}'"})
     if not decision.allowed:
@@ -77,10 +84,10 @@ async def start_task(body: StartTask, request: Request):
 
     task_id = getattr(request, "task_id", None) or str(uuid.uuid4())     # the engine picks its id first
     await db.pool().execute(
-        "INSERT INTO task_runs (id, tool, args, trigger, progress_unit, user_id, tier, confirmed, device) "
-        "VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9)",
+        "INSERT INTO task_runs (id, tool, args, trigger, progress_unit, user_id, tier, confirmed, device, trusted_grant) "
+        "VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9, $10)",
         uuid.UUID(task_id), name, _json(body.args), body.trigger, resolved.tool.progress_unit,
-        body.user, decision.tier, body.confirmed, body.device,
+        body.user, decision.tier, body.confirmed, body.device, grant["id"] if grant else None,
     )
     open_data: dict[str, Any] = {"args": body.args, "user": body.user, "trigger": body.trigger,
                                  "cancellable": resolved.tool.cancellable, "unit": resolved.tool.progress_unit,
@@ -90,6 +97,8 @@ async def start_task(body: StartTask, request: Request):
                                  "refreshes": resolved.tool.refreshes}
     if body.display == "brief":
         open_data["display"] = "brief"
+    if grant:
+        open_data["trusted"] = f"Done without asking: you trusted me with this on {grant['granted_at']:%b %d}."
     level = await mailbox.criticality(name)
     if level != "normal":
         open_data["critical"] = level          # its failures stand out on the display
@@ -116,6 +125,10 @@ async def start_task(body: StartTask, request: Request):
     except httpx.HTTPError as exc:
         await _finish(request, task_id, name, Result(status="failed", error=str(exc)))
         raise HTTPException(502, f"function '{resolved.function}' did not accept the task: {exc}")
+    if grant:                                    # he's told every time trust is used (once it really started)
+        import asyncio
+        from . import morpho
+        asyncio.create_task(morpho.used(request.app, grant, task_id))
     return {"task_id": task_id}
 
 
@@ -234,6 +247,12 @@ async def _finish(request: Request, task_id: str, tool: str, body: Result) -> No
     )
     redis = _redis(request)
     device = await db.pool().fetchval("SELECT device FROM task_runs WHERE id=$1", uuid.UUID(task_id))
+    if body.status == "failed":                  # a trusted action that went wrong goes back to asking
+        row = await db.pool().fetchrow("SELECT tool, args, trusted_grant FROM task_runs WHERE id=$1", uuid.UUID(task_id))
+        if row and row["trusted_grant"]:
+            await db.pool().execute("UPDATE trust_grants SET status='revoked', revoked_at=now(), why_revoked=$2 "
+                                    "WHERE id=$1 AND status='active'", row["trusted_grant"],
+                                    f"it failed: {body.error or 'no reason'}"[:300])
     if body.data and body.status != "failed":
         try:
             row = await db.pool().fetchrow("SELECT args, user_id FROM task_runs WHERE id=$1", uuid.UUID(task_id))

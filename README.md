@@ -1331,9 +1331,49 @@ time zone) and its rules. Jobs live in Postgres (`jobs`, `job_runs`).
 Recurring routines in your words, Parallax's automations and a panel to pause
 and edit them are Pulsar (Phase 10), built on this engine.
 
+### Morpho: skills and earned trust
+
+Morpho (synthesis, for the blue morpho) is part of Aurelia's core, built with
+Admiral. Policy: `config/governance/functions/morpho.yaml`. Code:
+`services/orchestrator/app/morpho.py`.
+
+- **Skills from what worked.** A plan that ends done offers **Keep as a skill**
+  on its panel (or say "keep that as a skill"). The model generalizes it: the
+  parts that change become slots ("find the best {product} under {budget}"),
+  and a few ways you'd say it become its phrases. It's a mailbox card showing
+  every step; you can rename it and edit its phrases; it's kept only when you
+  approve it. Without the model it's kept exactly as it ran.
+- **Using them.** The planner reaches for a skill first ("find the best monitor
+  under $400" fills the computer skill), and every step is governed and checked
+  like any plan. A skill's phrases are fast paths of their own, checked before
+  the others (never when the request has a time in it: that's for later). A
+  phrase needs at least two words of its own, so it can't catch everything. A
+  skill with no step filled from earlier results, no choice and no written
+  report runs with the model down ("movie night"), and its report is each
+  step's own result.
+- **Versions.** A run that had to change course, or a plan that matches a skill
+  in every step but one, becomes a proposed new version (that step becomes a
+  choice, picked when it runs). It shows as a diff; old versions are kept, and
+  "roll back the skill X" restores the previous one. Replaying past runs before
+  a version replaces the old one comes with Nova's eval set (Phase 17).
+- **Tools you use together.** Once a day, a sequence of your own requests that
+  repeats (3 times, each within 10 minutes, over 14 days) is proposed as a
+  skill, built from what you did: what changed between times is a slot. You
+  name it and give it a phrase.
+- **Earned trust.** An action that asks for your OK, approved exactly the same
+  way 10 times over 2 weeks and never declined, can be proposed to stop asking:
+  only if `morpho.yaml`'s allow-list names it (by default: restarting a
+  computer), and never anything on the coded never-list (unlocking, paying,
+  sending or posting as you, deleting, sign-ins, closing programs, installing,
+  shutting down, her own code or rules). You approve the grant; she can't.
+  You're told every time it's used. One no, or a run that fails, takes it back
+  (and only approvals after that count toward earning it again); "ask me again
+  before restarting the desk" or the button on "what do you do without asking"
+  takes it back too.
+
 Planning, filling, changing course and checking are model calls, counted toward
 `llm.monthly_token_cap`; when that's spent, a new plan says so instead of
-starting. Next: Morpho (plans kept as skills). Policy:
+starting. Policy:
 `config/governance/functions/admiral.yaml`. Code:
 `services/orchestrator/app/admiral.py`.
 

@@ -45,6 +45,7 @@ log = logging.getLogger("aurelia.admiral")
 router = APIRouter(prefix="/admiral", tags=["admiral"])
 NAME = "admiral"
 ASK = f"{NAME}.ask"             # a question for him: a step that only his answer completes
+CHOOSE = f"{NAME}.choose"       # a skill's step that's a choice between options (Morpho), picked when it runs
 MAX_STEPS = 12                  # in one plan (or one change of course)
 MAX_TOTAL = 24                  # in a plan, counting the steps replans add
 MAX_ASKS = 3                    # questions in one plan, ever
@@ -188,7 +189,7 @@ async def catalog(app) -> dict[str, dict]:
     """Every tool a plan may use (not Admiral's own), with its schema and governance tier."""
     out = {}
     for fn in await registry.list_all(app.state.redis):
-        if fn.name == NAME:
+        if fn.name in (NAME, "morpho"):              # plans never plan plans, or run skills inside skills
             continue
         for t in fn.tools:
             q = f"{fn.name}.{t.name}"
@@ -236,12 +237,24 @@ def validate(raw: Any, cat: dict[str, dict], start: int = 1, prior: frozenset = 
                         "args": _question(s if s.get("ask") else {**s, **(s.get("args") or {})}), "depends": deps,
                         "fill": bool(s.get("fill")) and bool(deps)})
             continue
+        if s.get("tool") == CHOOSE or s.get("options"):    # a skill's step that's a choice, picked when it runs
+            opts = s.get("options") or (s.get("args") or {}).get("options") or []
+            checked = validate({"steps": [{**o, "depends": []} for o in opts if isinstance(o, dict)]}, cat)
+            if len(checked) < 2:
+                raise ValueError(f"step {i} is a choice with fewer than two options")
+            out.append({"n": i, "title": str(s.get("title") or "A choice")[:120], "tool": CHOOSE,
+                        "args": {"options": [{"tool": c["tool"], "args": c["args"]} for c in checked]},
+                        "depends": deps, "fill": True})
+            continue
         tool = str(s.get("tool") or "")
         if tool not in cat:
             raise ValueError(f"step {i} uses {tool or 'no tool'}, which I don't have")
         args = s.get("args") if isinstance(s.get("args"), dict) else {}
         known = set((cat[tool]["schema"].get("properties") or {}).keys())
         args = {k: v for k, v in args.items() if not known or k in known}
+        from .fastpath import coerce                  # "40" from a skill's slot becomes 40 where the tool wants a number
+        args = {**args, **{k: v for k, v in coerce({k: v for k, v in args.items() if isinstance(v, str) and v},
+                                                   cat[tool]["schema"]).items()}}
         out.append({"n": i, "title": str(s.get("title") or tool)[:120], "tool": tool, "args": args, "depends": deps,
                     "fill": bool(s.get("fill")) and bool(deps)})
     return out
@@ -320,6 +333,8 @@ def view(plan: dict, steps: list[dict]) -> dict:
         return out
     return {"headline": head, "plan": {
         "id": str(plan["id"]), "goal": plan["goal"], "status": st, "error": plan.get("error"),
+        **({"keepable": True} if st == "done" and not plan.get("skill_id") else {}),
+        **({"from_skill": True} if plan.get("skill_id") else {}),
         "steps": [one(s) for s in steps],
         **({"changes": [c.get("why") for c in plan["changes"] if c.get("why")]} if plan.get("changes") else {}),
         **({"report": plan["report"]} if plan.get("report") else {})}}
@@ -429,10 +444,14 @@ async def settle(app, plan_id: str, n: int, approve: bool, answer: str | None = 
         out = "Thanks. The plan carries on with that."
         card = ("modified" if approve else "rejected", {**step["args"], "answer": said})
     elif approve:
+        from . import morpho
+        await morpho.record(app, step["tool"], step["args"], plan["user_id"], True, "plan")
         await _set_step(plan_id, n, status="pending", approved=True, note=None)
         out = "Approved. I'm running that step now."
         card = ("approved", {"tool": step["tool"], "args": step["args"]})
     else:
+        from . import morpho
+        await morpho.record(app, step["tool"], step["args"], plan["user_id"], False, "plan")
         await _set_step(plan_id, n, status="skipped", note="you said no", finished_at=_now())
         out = "Skipped. The plan carries on without it."
         card = ("rejected", None)
@@ -480,13 +499,38 @@ async def _fill(app, plan: dict, step: dict, steps: list[dict]) -> dict:
     return {k: v for k, v in got.items() if not known or k in known}
 
 
+CHOOSE_SYSTEM = """One step of a plan is a choice between options. Given his request and the results so far, pick the
+option that fits. Reply with JSON only: {"option": the option's number (1-based), "why": "a few words"}. """ + DATA_NOT_ORDERS
+
+
+async def _choose(app, plan: dict, step: dict, steps: list[dict]) -> dict:
+    opts = step["args"].get("options") or []
+    pick, why = 0, "the first option (I couldn't ask the model)"
+    try:
+        text = (f"Goal: {plan['goal']}\n\nOptions:\n" + "\n".join(f"{i}. {o['tool']} {json.dumps(o['args'])}"
+                                                               for i, o in enumerate(opts, 1))
+                + "\n\n" + _results_text(steps, set(step["depends"])))
+        got = _json_in(await _model(app, str(plan["id"]), CHOOSE_SYSTEM, text, "chat"))
+        k = int(got.get("option")) - 1
+        if 0 <= k < len(opts):
+            pick, why = k, str(got.get("why") or "")[:100]
+    except (ValueError, TypeError):
+        pass
+    o = opts[pick]
+    return {"tool": o["tool"], "args": o["args"], "title": f"{step['title'].split(' (or ')[0]} ({o['tool']}: {why})"[:120]}
+
+
 async def _run_step(app, plan: dict, step: dict, steps: list[dict]) -> None:
     from fastapi import HTTPException as HTTPExc
     from .tasks import StartTask, launch
     pid, n = str(plan["id"]), step["n"]
     args = step["args"]
     try:
-        if step["fill"] and step["attempts"] == 0 and not step.get("approved"):   # an approved step runs as he saw it
+        if step["tool"] == CHOOSE:                  # pick an option (the model, given what came before; else the first)
+            step = {**step, **await _choose(app, plan, step, steps)}
+            await _set_step(pid, n, tool=step["tool"], args=step["args"], title=step["title"])
+            args = step["args"]
+        elif step["fill"] and step["attempts"] == 0 and not step.get("approved"):   # an approved step runs as he saw it
             args = await _fill(app, plan, step, steps)
             await _set_step(pid, n, args=args)
         if step["tool"] == ASK:                     # a question: only his answer completes it
@@ -686,14 +730,24 @@ async def finish(app, plan_id: str) -> None:
         await _tell(app, plan, "A plan stopped", plan["goal"][:120])
         return
     changes = "\n".join(f"Changed course: {c.get('why')}" for c in plan.get("changes") or [] if c.get("why"))
-    text = f"What he asked: {plan['goal']}\n\n" + _results_text(live, room=RESULT_KEEP // 3) \
-        + (f"\n\n{changes}" if changes else "")
-    try:
-        rep = _json_in(await _model(app, plan_id, CHECK_SYSTEM, text))
-    except ValueError as exc:
-        await _set_plan(plan_id, status="failed", error=f"The steps ran, but I couldn't check them: {exc}"[:400])
-        await publish(app, plan_id)
-        return
+    skill = await db.pool().fetchrow("SELECT name, report FROM skills WHERE id=$1", plan["skill_id"]) \
+        if plan.get("skill_id") else None
+    if skill is not None and not skill["report"]:    # a skill with nothing to write up: each step's own result is it
+        counted = [s for s in live if s["tool"] != ASK and not s["superseded"]]   # a step another route replaced isn't owed
+        rep = {"headline": f"{skill['name']}: {len(ok)} of {len(counted)} steps done",
+               "summary": "\n".join(f"{s['n']}. {s['title']}: " + (str((s.get('result') or {}).get('headline') or 'done')
+                                                                  if s["status"] == "done" else s["status"])
+                                    for s in counted),
+               "meets_goal": not any(s["status"] in (*BAD, "skipped") for s in counted), "gaps": []}
+    else:
+        text = f"What he asked: {plan['goal']}\n\n" + _results_text(live, room=RESULT_KEEP // 3) \
+            + (f"\n\n{changes}" if changes else "")
+        try:
+            rep = _json_in(await _model(app, plan_id, CHECK_SYSTEM, text))
+        except ValueError as exc:
+            await _set_plan(plan_id, status="failed", error=f"The steps ran, but I couldn't check them: {exc}"[:400])
+            await publish(app, plan_id)
+            return
     report = {"headline": str(rep.get("headline") or "")[:200], "summary": str(rep.get("summary") or "")[:6000],
               "meets_goal": bool(rep.get("meets_goal")),
               "gaps": [str(g)[:300] for g in (rep.get("gaps") or []) if g][:8]}
@@ -705,6 +759,12 @@ async def finish(app, plan_id: str) -> None:
     await _set_plan(plan_id, status=status, report=report)
     await publish(app, plan_id)
     await _tell(app, plan, "Plan done" if status == "done" else "Plan done, with gaps", report["headline"] or plan["goal"][:120])
+    if status == "done":
+        try:
+            from . import morpho
+            await morpho.after_plan(app, plan_id)       # a skill's new version, or one step that differs
+        except Exception:
+            log.exception("morpho after plan %s", plan_id)
 
 
 async def _tell(app, plan: dict, title: str, body: str) -> None:
@@ -739,10 +799,24 @@ async def plan_tool(app, user: str, args: dict) -> dict:
     await db.pool().execute("INSERT INTO plans (id, user_id, goal, device, task_id) VALUES ($1, $2, $3, $4, $5)",
                             uuid.UUID(plan_id), user, goal, device, uuid.UUID(task_id) if task_id else None)
     cat = await catalog(app)
+    from . import morpho
+    skills = await morpho.active_skills()
     try:
-        raw = _json_in(await _model(app, plan_id, PLAN_SYSTEM % (MAX_STEPS, MAX_ASKS),
-                                    f"His request: {goal}\n\nTools:\n{_catalog_text(cat)}"))
-        steps = validate(raw, cat)
+        raw = _json_in(await _model(app, plan_id, PLAN_SYSTEM % (MAX_STEPS, MAX_ASKS) + (SKILLS_HINT if skills else ""),
+                                    f"His request: {goal}\n\n" + (_skills_text(skills) if skills else "")
+                                    + f"Tools:\n{_catalog_text(cat)}"))
+        sk = next((x for x in skills if isinstance(raw, dict) and raw.get("skill") and
+                   x["name"].lower() == str(raw["skill"]).lower()), None)
+        if sk is not None:                            # one of his skills fits: its steps, his values
+            slots = {k: str(v) for k, v in (raw.get("slots") or {}).items()}
+            missing = [x["name"] for x in sk["slots"] if not slots.get(x["name"])]
+            if missing:
+                raise ValueError(f"the skill \"{sk['name']}\" needs " + ", ".join(missing))
+            steps = validate({"steps": morpho.fill(sk["steps"], slots)}, cat)
+            await db.pool().execute("UPDATE plans SET skill_id=$2, slots=$3::jsonb WHERE id=$1", uuid.UUID(plan_id),
+                                    sk["id"], json.dumps(slots))
+        else:
+            steps = validate(raw, cat)
     except ValueError as exc:
         await _set_plan(plan_id, status="failed", error=f"I couldn't make a plan: {exc}"[:400])
         raise ValueError(f"I couldn't make a plan for that: {exc}")
@@ -751,7 +825,45 @@ async def plan_tool(app, user: str, args: dict) -> dict:
     plan, rows = await load(plan_id)
     start(app, plan_id)
     out = view(plan, rows)
-    out["headline"] = f"Plan · {len(rows)} steps"
+    out["headline"] = f"Plan · {len(rows)} steps" + (f" · from your skill {sk['name']}" if sk else "")
+    return out
+
+
+SKILLS_HINT = """
+His skills come first: if one fits his request, reply instead with {"skill": "its name", "slots": {"slot": "value"}},
+filling every slot from his request. Plan from scratch only when none fits."""
+
+
+def _skills_text(skills: list[dict]) -> str:
+    lines = []
+    for sk in skills:
+        slots = ", ".join(f"{x['name']} (e.g. {x['example']})" for x in sk["slots"]) or "none"
+        steps = "; ".join(s["tool"] if s["tool"] != CHOOSE else "choose: " + "/".join(o["tool"] for o in s["args"]["options"])
+                          for s in sk["steps"])
+        lines.append(f"- {sk['name']} · slots: {slots} · e.g. {'; '.join(sk['phrases'][:2]) or '-'} · steps: {steps}")
+    return "Skills:\n" + "\n".join(lines) + "\n\n"
+
+
+async def run_skill(app, user: str, sk: dict, slots: dict, task_id: str) -> dict:
+    """One of his skills, with his values: a plan of its steps, checked like any other (Morpho's run)."""
+    from . import morpho
+    cat = await catalog(app)
+    device = await db.pool().fetchval("SELECT device FROM task_runs WHERE id=$1", uuid.UUID(task_id)) if task_id else None
+    goal = sk["name"] + (": " + ", ".join(f"{k} {v}" for k, v in slots.items()) if slots else "")
+    try:
+        steps = validate({"steps": morpho.fill(sk["steps"], slots)}, {**cat})
+    except ValueError as exc:
+        raise ValueError(f"\"{sk['name']}\" can't run as it is: {exc}")
+    plan_id = str(uuid.uuid4())
+    await db.pool().execute("INSERT INTO plans (id, user_id, goal, device, task_id, skill_id, slots) "
+                            "VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)", uuid.UUID(plan_id), user, goal[:2000], device,
+                            uuid.UUID(task_id) if task_id else None, sk["id"], json.dumps(slots))
+    await _insert_steps(plan_id, steps)
+    await _set_plan(plan_id, status="running")
+    plan, rows = await load(plan_id)
+    start(app, plan_id)
+    out = view(plan, rows)
+    out["headline"] = f"{sk['name']} · {len(rows)} steps"
     return out
 
 

@@ -317,3 +317,22 @@ def test_every_action_phrase_reaches_its_tool(said, tool, args):
     m = fastpath.match(said, cfg.fastpath.patterns)
     assert m and m.pattern.tool == tool, (said, m and (m.pattern.name, m.pattern.tool))
     assert {k: v for k, v in m.args.items()} == args, (said, m.args)
+
+
+@pytest.mark.skipif(not CONFIG.exists(), reason="the repo's config isn't in the test image")
+@pytest.mark.parametrize("said,tool,args", [
+    ("show my skills", "morpho.skills", {}), ("what skills do you have", "morpho.skills", {}),
+    ("keep that as a skill", "morpho.keep", {}),
+    ("run the skill movie night", "morpho.run", {"skill": "movie night"}),
+    ("retire the skill movie night", "morpho.retire", {"skill": "movie night"}),
+    ("roll back the skill best computer", "morpho.rollback", {"skill": "best computer"}),
+    ("roll back the last release", "chrysalis.rollback", {}),
+    ("what do you do without asking", "morpho.trusts", {}),
+    ("ask me again before restarting the desk", "morpho.revoke", {"which": "restarting the desk"}),
+])
+def test_morpho_phrases(said, tool, args):
+    from app import fastpath
+    from app.config import RuntimeConfig
+    cfg = RuntimeConfig.model_validate(yaml.safe_load(CONFIG.read_text()))
+    m = fastpath.match(said, cfg.fastpath.patterns)
+    assert m and m.pattern.tool == tool and m.args == args, (said, m and (m.pattern.name, m.args))

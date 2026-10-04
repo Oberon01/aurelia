@@ -444,11 +444,14 @@ async def _card(app, job: dict, reason: str) -> int:
 async def approve(app, job_id: int, ok: bool) -> str:
     """His answer on a scheduled change-tier job's card. Too late (past its grace) means it doesn't run. One
     guarded update each way, so a cancel or the sweep in between always wins."""
+    from . import morpho
     if not ok:
         row = await db.pool().fetchrow("UPDATE jobs SET status='cancelled', last_outcome='skipped', updated_at=now() "
                                        "WHERE id=$1 AND status='waiting' RETURNING *", job_id)
         if row is None:
             raise ValueError("That isn't waiting for you anymore.")
+        sp = _j(row["spec"])
+        await morpho.record(app, sp.get("tool") or "", sp.get("args") or {}, row["user_id"], False, "schedule")
         await _log(job_id, _planned(dict(row)), "skipped", None, "you said no")
         return "Skipped. It won't run."
     row = await db.pool().fetchrow(
@@ -456,6 +459,9 @@ async def approve(app, job_id: int, ok: bool) -> str:
         "updated_at=now() WHERE id=$1 AND status='waiting' AND (grace_seconds IS NULL OR "
         "now() <= COALESCE(planned_at, due_at) + make_interval(secs => grace_seconds)) RETURNING id", job_id)
     if row is not None:
+        j = await db.pool().fetchrow("SELECT spec, user_id FROM jobs WHERE id=$1", job_id)
+        sp = _j(j["spec"])
+        await morpho.record(app, sp.get("tool") or "", sp.get("args") or {}, j["user_id"], True, "schedule")
         poke()
         return "Approved. Running it now."
     late = await db.pool().fetchrow(

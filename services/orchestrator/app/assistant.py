@@ -21,6 +21,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from .config import FastPathPattern
 from . import auth, context, db, fastpath, mnemosyne, profile, registry, style
 from .llm.base import Message, ProviderError, ToolDef
 from .settings import settings
@@ -96,10 +97,24 @@ async def ask(body: Ask, request: Request):
 
     chosen = style.switch(body.text)
     fp = fastpath.match(body.text, cfg.fastpath.patterns) if cfg.fastpath.enabled and chosen is None else None
-    if fp and fp.pattern.tool == "admiral.schedule":
+    later = bool(fp and fp.pattern.tool == "admiral.schedule")
+    if later:
         from . import engine                # "tomorrow I have a meeting" isn't a command for later: the model hears it
         if not engine.fast_ok(app, fp.args.get("say") or ""):
             fp = None
+    if chosen is None and cfg.fastpath.enabled and not later and not _timed(app, body.text):
+        from . import morpho                # his skills' phrases (Morpho): a skill runs like a fast path
+        try:
+            hit = await morpho.match_phrase(app, body.text)
+        except Exception:
+            log.exception("skill phrases")
+            hit = None
+        if hit is not None:
+            sk, slots = hit
+            fp = fastpath.FastPathMatch(
+                pattern=FastPathPattern(name=f"skill-{sk['id']}", match="", tool="morpho.run", args={},
+                                        reply=f"Running your skill: {sk['name']}."),
+                args={"skill": str(sk["id"]), "slots": slots}, groups={})
     resolved = await registry.resolve(app.state.redis, fp.pattern.tool) if fp else None
     if chosen is not None:              # "use Raphael style" / "normal style": how she speaks, nothing else
         outcome.update(route="style", reply=await style.choose(app.state.redis, body.user, chosen))
@@ -155,6 +170,8 @@ async def confirm(body: Confirm, request: Request):
         raise HTTPException(403, "that action belongs to someone else")
     await app.state.redis.delete(key)
     st = await style.current(app.state.redis, body.user)
+    from . import morpho
+    await morpho.record(app, pending["tool"], pending["args"], body.user, bool(body.approve), "reply")
     if not body.approve:
         return {"reply": style.line(st, "declined", "Okay, I won't."), "task_ids": []}
     try:
@@ -171,6 +188,22 @@ async def confirm(body: Confirm, request: Request):
 
 
 # ---- fast path ----------------------------------------------------------------
+
+def _timed(app, text: str) -> bool:
+    """A request with a time in it ("… tomorrow at 9", "… every morning") is never a skill's phrase now."""
+    import re as _re
+    from . import engine, when
+    if _re.search(r"\b(?:every|each)\s+(?:\d+\s+)?(?:day|morning|night|evening|week|weekday|weekend|hour|minute|month|"
+                  r"monday|tuesday|wednesday|thursday|friday|saturday|sunday)s?\b", text, _re.I):
+        return True
+    if _re.search(r"\b(?:tomorrow|tonight|today|later|soon|(?:on\s+|next\s+|this\s+)?(?:mon|tues|wednes|thurs|fri|satur|"
+                  r"sun)days?|(?:this|tomorrow)\s+(?:morning|afternoon|evening|night))\s*[.!?]*$", text.strip(), _re.I):
+        return True
+    try:
+        when.split(text, engine.now(), engine.tz_name(app))
+        return True
+    except Exception:                      # not a time (or nonsense like "in 99999999999999 days"): no time in it
+        return False
 
 async def _run_fastpath(app, body: Ask, fp, resolved) -> dict[str, Any]:
     out = await _fastpath_plain(app, body, fp, resolved)
