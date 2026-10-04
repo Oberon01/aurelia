@@ -222,6 +222,12 @@ async def _run_fastpath(app, body: Ask, fp, resolved) -> dict[str, Any]:
 async def _fastpath_plain(app, body: Ask, fp, resolved) -> dict[str, Any]:
     args = fastpath.coerce(fp.args, resolved.tool.input_schema)
     out: dict[str, Any] = {"route": "fastpath", "reply": "", "task_ids": [], "needs_confirmation": []}
+    if _takes_panel(resolved.tool.input_schema):    # "send panel 2" / "send it": the same panel the model would mean
+        try:
+            args = with_panel_task(args, getattr(body, "screen", None))
+        except ValueError as exc:
+            out["reply"] = str(exc)
+            return out
     try:
         task_id = await launch(app, StartTask(tool=resolved.qualified_name, args=args, user=body.user,
                                               device=getattr(body, "device", None)))

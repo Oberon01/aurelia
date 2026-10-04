@@ -345,3 +345,55 @@ def test_closing_panels_on_a_display_is_checked_from_its_report(stack):
     res = json.loads(frozen["result"]) if isinstance(frozen["result"], str) else frozen["result"]
     assert res["headline"] == "Couldn't clear iPhone" and "didn't answer" in res["note"]
     assert len([e for e in got["phone"] if e.get("type") == "panels.clear"]) == 3        # three tries
+
+
+def test_send_by_fast_path_means_the_same_panel_the_model_would(stack):
+    """"send panel 2 to my phone" and "send it to my phone" (no model): the number on this display, or the panel
+    he clicked, or the newest one, exactly as when the model sends it."""
+    import yaml
+    from pathlib import Path
+    from app import auth
+    from app.config import FastPathPattern
+    from app.main import app
+    from .conftest import register_testfn
+    orch = stack["orch"]
+    register_testfn(orch, stack["fn"])                                        # (its registration lapses in a long run)
+    sql("UPDATE devices SET status='revoked' WHERE status='approved'")
+    auth._by_id.clear()
+    desk = device("browser", "Desk", {"os": "Windows", "browser": "Chrome"})
+    device("browser", "iPhone", {"os": "iOS", "browser": "Safari", "app": True})
+    tasks = []
+    for _ in range(2):
+        t = httpx.post(f"{orch}/tasks", json={"tool": "testfn.status", "args": {}},
+                       headers={"X-Aurelia-Device": str(desk)}).json()["task_id"]
+        tasks.append(t)
+    time.sleep(1.5)
+    screen = {"panels": [{"n": 1, "task_id": tasks[0], "tool": "testfn.status", "title": "Home"},
+                         {"n": 2, "task_id": tasks[1], "tool": "testfn.status", "title": "Home again"}], "focus": None}
+    real = yaml.safe_load(Path(__file__).parents[4].joinpath("config", "aurelia.yaml").read_text())["fastpath"]["patterns"]
+    cfg = app.state.config.current.fastpath
+    old = cfg.patterns
+    cfg.patterns = [FastPathPattern(**p) for p in real if p["name"].startswith("send-")]
+    try:
+        def ask(text, scr):
+            return httpx.post(f"{orch}/ask", headers={"X-Aurelia-Device": str(desk)}, timeout=30,
+                              json={"text": text, "session_id": uuid.uuid4().hex, "screen": scr}).json()
+
+        def sent_panel(out):
+            [tid] = out["task_ids"]
+            deadline = time.time() + 15
+            while (t := httpx.get(f"{orch}/tasks/{tid}").json())["status"] == "running" and time.time() < deadline:
+                time.sleep(0.2)
+            assert t["status"] == "completed", t["error"]
+            return json.loads(t["args"])["_panel_task"]
+
+        out = ask("send panel 1 to my iPhone", screen)
+        assert out["route"] == "fastpath" and sent_panel(out) == tasks[0]
+        out = ask("send it to my iPhone", screen)                              # the newest one on this screen
+        assert sent_panel(out) == tasks[1]
+        out = ask("send it to my iPhone", {**screen, "focus": 1})               # the one he clicked
+        assert sent_panel(out) == tasks[0]
+        out = ask("send panel 5 to my iPhone", screen)
+        assert out["route"] == "fastpath" and not out["task_ids"] and out["reply"] == "There's no panel 5 on this screen."
+    finally:
+        cfg.patterns = old
