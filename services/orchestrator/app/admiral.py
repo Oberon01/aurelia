@@ -83,8 +83,8 @@ TOOLS = [
                     "('tomorrow at 8, make a plan to…'). Prefer say: his words in full; the time is read by code in his "
                     "time zone and the command is settled now, exactly as it will run. Otherwise when (his words for the "
                     "time) plus one of: reminder (text), goal (a plan), tool+args, or what (his words for the command). "
-                    "Only when he asks; never on your own. Tell him the exact time the result shows. Recurring routines "
-                    "come with Pulsar.",
+                    "Only when he asks; never on your own. Tell him the exact time the result shows. For something that "
+                    "repeats, use pulsar.automate.",
         input_schema={"type": "object", "properties": {
             "say": {"type": "string"}, "when": {"type": "string"}, "what": {"type": "string"},
             "reminder": {"type": "string"}, "goal": {"type": "string"}, "tool": {"type": "string"},
@@ -189,7 +189,7 @@ async def catalog(app) -> dict[str, dict]:
     """Every tool a plan may use (not Admiral's own), with its schema and governance tier."""
     out = {}
     for fn in await registry.list_all(app.state.redis):
-        if fn.name in (NAME, "morpho"):              # plans never plan plans, or run skills inside skills
+        if fn.name in (NAME, "morpho", "pulsar"):    # plans never plan plans, run skills inside skills, or automate
             continue
         for t in fn.tools:
             q = f"{fn.name}.{t.name}"
@@ -429,6 +429,18 @@ class NotWaiting(ValueError):
     pass
 
 
+async def _settle_step(plan_id: str, n: int, **kw) -> None:
+    """His answer lands only on a step that's still waiting, in a plan that's still going (one guarded update,
+    so a stop at the same moment wins)."""
+    sets = ", ".join(f"{k}=${i}" + ("::jsonb" if k in JSONB_STEP else "") for i, k in enumerate(kw, 3))
+    vals = [json.dumps(v) if k in JSONB_STEP else v for k, v in kw.items()]
+    got = await db.pool().fetchval(
+        f"UPDATE plan_steps SET {sets} WHERE plan_id=$1 AND n=$2 AND status='waiting' AND EXISTS "
+        f"(SELECT 1 FROM plans WHERE id=$1 AND status IN ('waiting','running')) RETURNING n", uuid.UUID(plan_id), n, *vals)
+    if got is None:
+        raise NotWaiting("That step isn't waiting for you.")
+
+
 async def settle(app, plan_id: str, n: int, approve: bool, answer: str | None = None, from_card: bool = False) -> str:
     """His answer to a waiting step, from the plan's panel or its mailbox card. Returns what happens next."""
     plan, steps = await load(plan_id)
@@ -439,25 +451,29 @@ async def settle(app, plan_id: str, n: int, approve: bool, answer: str | None = 
         said = " ".join(str(answer or "").split())[:500] if approve else YOUR_CALL
         if not said:
             raise ValueError("Pick or type an answer.")
-        await _set_step(plan_id, n, status="done", result={"question": step["args"]["question"], "answer": said},
-                        finished_at=_now(), note=None)
+        await _settle_step(plan_id, n, status="done", result={"question": step["args"]["question"], "answer": said},
+                           finished_at=_now(), note=None)
         out = "Thanks. The plan carries on with that."
         card = ("modified" if approve else "rejected", {**step["args"], "answer": said})
     elif approve:
         from . import morpho
+        await _settle_step(plan_id, n, status="pending", approved=True, note=None)
         await morpho.record(app, step["tool"], step["args"], plan["user_id"], True, "plan")
-        await _set_step(plan_id, n, status="pending", approved=True, note=None)
         out = "Approved. I'm running that step now."
         card = ("approved", {"tool": step["tool"], "args": step["args"]})
     else:
         from . import morpho
+        await _settle_step(plan_id, n, status="skipped", note="you said no", finished_at=_now())
         await morpho.record(app, step["tool"], step["args"], plan["user_id"], False, "plan")
-        await _set_step(plan_id, n, status="skipped", note="you said no", finished_at=_now())
         out = "Skipped. The plan carries on without it."
         card = ("rejected", None)
     if not from_card:
         await _close_card(app, step, *card)
-    await _set_plan(plan_id, status="running", waiting_since=None, reminded=False)
+    # Only a plan that's still going carries on: one stopped meanwhile (his word, or a routine whose time passed)
+    # stays stopped, and the step it was waiting on never runs.
+    if await db.pool().fetchval("UPDATE plans SET status='running', waiting_since=NULL, reminded=false, updated_at=now() "
+                                "WHERE id=$1 AND status IN ('waiting','running') RETURNING id", uuid.UUID(plan_id)) is None:
+        raise NotWaiting("That plan was stopped, so that step won't run.")
     await publish(app, plan_id)
     start(app, plan_id)
     return out
@@ -758,7 +774,10 @@ async def finish(app, plan_id: str) -> None:
         report["gaps"] = [f"Step {s['n']} ({s['title']}) {s['status']}" for s in open_]
     await _set_plan(plan_id, status=status, report=report)
     await publish(app, plan_id)
-    await _tell(app, plan, "Plan done" if status == "done" else "Plan done, with gaps", report["headline"] or plan["goal"][:120])
+    trig = await db.pool().fetchval("SELECT trigger FROM task_runs WHERE id=$1", plan["task_id"]) if plan.get("task_id") else None
+    if not (status == "done" and trig == "automation"):   # an automation's routine that worked: the digest, not his phone
+        await _tell(app, plan, "Plan done" if status == "done" else "Plan done, with gaps",
+                    report["headline"] or plan["goal"][:120])
     if status == "done":
         try:
             from . import morpho
@@ -893,16 +912,27 @@ async def stop_tool(app, user: str, args: dict) -> dict:
         *([user, pid + "%"] if pid else [user]))
     if row is None:
         raise ValueError("No plan is running.")
-    await _set_plan(str(row["id"]), status="stopped", error="Stopped at your word.")
+    await stop_plan(app, str(row["id"]), "Stopped at your word.")
+    return {"headline": "Plan stopped", "did": {"node": "Admiral", "what": f"Stopped: {row['goal'][:120]}"}}
+
+
+async def stop_plan(app, plan_id: str, why: str) -> bool:
+    """Stop a plan that's still going (his word, or a routine whose OK came too late): nothing new starts, and
+    the cards it was waiting on are taken back."""
+    from . import mailbox
+    got = await db.pool().fetchval("UPDATE plans SET status='stopped', error=$2, updated_at=now() WHERE id=$1 "
+                                   "AND status IN ('running','waiting','planning') RETURNING id", uuid.UUID(plan_id), why)
+    if got is None:
+        return False
     cards = await db.pool().fetch(
         "UPDATE mailbox_items SET status='expired', updated_at=now() WHERE status IN ('waiting','deferred') AND id IN "
-        "(SELECT mailbox_id FROM plan_steps WHERE plan_id=$1 AND status='waiting') RETURNING id", row["id"])
+        "(SELECT mailbox_id FROM plan_steps WHERE plan_id=$1 AND status='waiting') RETURNING id", got)
     await db.pool().execute("UPDATE plan_steps SET status='skipped', note='the plan was stopped' "
-                            "WHERE plan_id=$1 AND status IN ('pending','waiting')", row["id"])
+                            "WHERE plan_id=$1 AND status IN ('pending','waiting')", got)
     if cards:
         await mailbox.notify(app.state.redis)
-    await publish(app, str(row["id"]))
-    return {"headline": "Plan stopped", "did": {"node": "Admiral", "what": f"Stopped: {row['goal'][:120]}"}}
+    await publish(app, plan_id)
+    return True
 
 
 async def _schedule(app, user, args):

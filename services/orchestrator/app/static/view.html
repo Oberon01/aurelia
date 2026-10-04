@@ -609,6 +609,10 @@ const TITLES = { "aurelia.reply": "Aurelia", "quasar.now": "Now playing",
   "constellation.back": "Back", "constellation.media": "Playing", "constellation.sound": "Sound", "constellation.watch": "Live", "quasar.find": "Library", "quasar.play": "Playing", "constellation.install": "Install", "constellation.clipboard": "Clipboard", "constellation.mode": "Mode", "constellation.copy": "Copied", "constellation.paste": "Paste", "constellation.install_package": "Install", "constellation.uninstall": "Remove", "constellation.remove_package": "Remove", "constellation.submit": "Press",
   "constellation.health": "Computer health", "constellation.list_processes": "Processes",
   "constellation.close_process": "Close a program", "constellation.kill_process": "Close a program",
+  "pulsar.automate": "New automation", "pulsar.routine": "New routine", "pulsar.save": "Saved",
+  "pulsar.automations": "Automations", "pulsar.notices": "What I'm watching", "pulsar.notice": "Worth knowing",
+  "pulsar.pause": "Automation", "pulsar.resume": "Automation", "pulsar.skip": "Automation", "pulsar.delete": "Automation",
+  "pulsar.forget_routine": "Routine",
 };
 function titleFor(tool) {
   if (TITLES[tool]) return TITLES[tool];
@@ -1245,6 +1249,12 @@ function body(tool, d) {
   if (d.budget && typeof d.budget === "object" && typeof d.budget.cap === "number") { wrap.append(budgetView(d.budget)); used.add("budget"); used.add("headline"); }
   if (d.skills && Array.isArray(d.skills.items)) { wrap.append(skillsView(d.skills)); used.add("skills"); used.add("headline"); }
   if (d.trusts && Array.isArray(d.trusts.items)) { wrap.append(trustsView(d.trusts)); used.add("trusts"); used.add("headline"); }
+  if (d.automation_draft && typeof d.automation_draft === "object") { wrap.append(draftView(d.automation_draft)); used.add("automation_draft"); used.add("confirm"); }
+  if (d.routine_draft && typeof d.routine_draft === "object") { wrap.append(routineDraftView(d.routine_draft)); used.add("routine_draft"); used.add("confirm"); }
+  if (d.automation && typeof d.automation === "object" && d.automation.job) { wrap.append(scheduledView({ job: d.automation.job, note: d.automation.note })); used.add("automation"); used.add("headline"); }
+  if (d.automations && Array.isArray(d.automations.items)) { wrap.append(automationsView(d.automations)); used.add("automations"); used.add("headline"); }
+  if (d.notices && Array.isArray(d.notices.open)) { wrap.append(noticesView(d.notices)); used.add("notices"); used.add("headline"); }
+  if (d.notice && typeof d.notice === "object") { wrap.append(noticeView(d.notice)); used.add("notice"); }
   if (d.plans && Array.isArray(d.plans.items)) { wrap.append(plansView(d.plans)); used.add("plans"); used.add("headline"); }
   if (d.packages && Array.isArray(d.packages.items)) { wrap.append(packagesView(d.packages)); used.add("packages"); used.add("headline"); }
   if (d.mode && typeof d.mode === "object" && d.mode.node) {
@@ -1982,6 +1992,97 @@ function trustsView(tr) {
   });
   return box;
 }
+// Pulsar: automations (each repeats until he deletes it), routines, and what I'm watching for him.
+function draftView(d) {
+  const box = el("div"); box.style.cssText = "display:flex;flex-direction:column;gap:6px";
+  const t = el("div", null, d.readback); t.style.color = "var(--ink-strong)";
+  box.append(t);
+  if (d.first) box.append(el("div", "facts", `First run: ${d.first}`));
+  (d.notes || []).forEach(n => box.append(el("div", "more", n)));
+  box.append(el("div", "lib-note", "Nothing is saved until you confirm."));
+  return box;
+}
+function routineDraftView(d) {
+  const box = el("div"); box.style.cssText = "display:flex;flex-direction:column;gap:6px";
+  (d.steps || []).forEach(st => box.append(el("div", null, `${st.n}. ${st.title}${st.after ? " (after the one before)" : ""}`)));
+  if ((d.phrases || []).length) box.append(el("div", "facts", "Say " + d.phrases.map(p => "“" + p + "”").join(" or ")));
+  (d.notes || []).forEach(n => box.append(el("div", "more", n)));
+  box.append(el("div", "lib-note", "Nothing is saved until you confirm."));
+  return box;
+}
+async function automationAct(id, action, row) {
+  row.querySelectorAll("button").forEach(x => x.disabled = true);
+  try { const out = await planPost(`/pulsar/automations/${id}/${action}`, {}); row.append(el("div", "more", out.done || "Done."));
+        row.querySelectorAll("button").forEach(x => x.remove()); }
+  catch (e) { row.querySelectorAll("button").forEach(x => x.disabled = false); say(e.message); }
+}
+function automationsView(a) {
+  const box = el("div"); box.style.cssText = "display:flex;flex-direction:column;gap:12px";
+  const list = el("div", "procs");
+  if (!a.items.length) list.append(el("div", "msg", "No automations yet. Say something like “every weekday at 7 am, lock the front door”."));
+  a.items.forEach(j => {
+    const row = el("div"); row.style.cssText = "display:flex;flex-direction:column;gap:2px;padding:6px 0;border-bottom:1px solid var(--cyan-soft)";
+    const t = el("div", null, j.title); t.style.color = "var(--ink-strong)";
+    const next = j.status === "paused" ? "paused" : j.status === "armed" ? "waiting for that to happen" : j.status === "waiting" ? "waiting for your OK" : `next ${j.when}`;
+    row.append(t, el("div", "facts", `${j.repeats || ""} · ${next}${j.heads_up ? " · heads-up first" : ""}`));
+    const last = (j.last || [])[0];
+    if (last) row.append(el("div", "more", `Last: ${last.outcome} ${last.when}${last.note ? " · " + last.note : ""}`));
+    if (j.fails_in_row) row.append(el("div", "error", `${j.fails_in_row} failed in a row`));
+    const btns = el("div"); btns.style.cssText = "display:flex;gap:8px;margin-top:4px;flex-wrap:wrap";
+    const add = (label, action) => { const b = el("button", "btn quiet", label); b.type = "button";
+      b.addEventListener("click", () => automationAct(j.id, action, row)); btns.append(b); };
+    if (j.status === "paused") add("Resume", "resume"); else add("Pause", "pause");
+    if (["scheduled", "waiting"].includes(j.status)) add("Skip next", "skip");
+    add("Delete", "delete");
+    row.append(btns);
+    list.append(row);
+  });
+  box.append(list);
+  if ((a.routines || []).length) {
+    const r = el("div", "procs"); r.append(el("h4", null, "Routines"));
+    a.routines.forEach(x => {
+      const row = el("div"); row.style.cssText = "display:flex;flex-direction:column;gap:2px;padding:6px 0;border-bottom:1px solid var(--cyan-soft)";
+      const t = el("div", null, x.name); t.style.color = "var(--ink-strong)";
+      row.append(t, el("div", "facts", x.steps.join(" · ")));
+      if ((x.phrases || []).length) row.append(el("div", "more", "Say " + x.phrases.map(p => "“" + p + "”").join(" or ")));
+      r.append(row);
+    });
+    box.append(r);
+  }
+  return box;
+}
+const SEV_TONE = { critical: "offline", high: "offline", normal: "disabled", low: "disabled" };
+function noticeView(n) {
+  const box = el("div"); box.style.cssText = "display:flex;flex-direction:column;gap:6px";
+  if (n.text) box.append(el("div", null, n.text));
+  const line = el("div", "facts"); line.append(statusPill(SEV_TONE[n.severity] || "disabled", n.severity || "notice"));
+  if (n.since) line.append(document.createTextNode(` since ${n.since}`));
+  box.append(line);
+  return box;
+}
+function noticesView(ns) {
+  const box = el("div"); box.style.cssText = "display:flex;flex-direction:column;gap:12px";
+  const list = el("div", "procs");
+  if (!ns.open.length) list.append(el("div", "msg", "Nothing needs you right now."));
+  ns.open.forEach(n => {
+    const row = el("div"); row.style.cssText = "display:flex;flex-direction:column;gap:2px;padding:6px 0;border-bottom:1px solid var(--cyan-soft)";
+    const t = el("div", null, n.title); t.style.color = "var(--ink-strong)";
+    row.append(t, noticeView(n));
+    if (n.held) row.append(el("div", "more", "Held for the end of quiet hours"));
+    if (n.seen) row.append(el("div", "more", "You've seen it"));
+    list.append(row);
+  });
+  box.append(list);
+  if ((ns.recent || []).length) {
+    const r = el("div"); r.append(el("h4", null, "Cleared lately"));
+    ns.recent.forEach(n => r.append(el("div", "more", `${n.title} · cleared ${n.cleared}`)));
+    box.append(r);
+  }
+  const w = el("details", "mb-ev"); w.append(el("summary", null, `What I watch for (quiet hours: ${ns.quiet_hours})`));
+  (ns.watching || []).forEach(x => w.append(el("div", "more", `${x.what} · ${x.level} · ${x.check}`)));
+  box.append(w);
+  return box;
+}
 function plansView(ps) {
   const box = el("div", "procs");
   if (!ps.items.length) box.append(el("div", "msg", "No plans yet."));
@@ -2383,7 +2484,7 @@ function linkView(link) {
 // ---------------------------------------------------------------- mailbox
 // Deciding happens only here, from your click: there is no tool for it, so
 // Aurelia can show you her ideas but never approve them herself.
-const KIND_LABEL = { skill: "Skills to keep", trust: "Stop asking?", schedule_ok: "Scheduled, needs your OK", plan_question: "Questions from plans", plan_step: "Plan steps waiting for you", device: "Waiting to pair", node_update: "Computers", node_alert: "Computers", about_you: "About you", automation: "Automations", criticality: "What matters most", retention: "Keep longer" };
+const KIND_LABEL = { skill: "Skills to keep", trust: "Stop asking?", schedule_ok: "Scheduled, needs your OK", plan_question: "Questions from plans", plan_step: "Plan steps waiting for you", device: "Waiting to pair", node_update: "Computers", node_alert: "Computers", about_you: "About you", automation: "Automations", criticality: "What matters most", retention: "Keep longer", notice: "Worth knowing" };
 const CATEGORY_LABEL = { communication: "How to talk to you", mood: "Mood patterns", interests: "Interests", goals: "Goals",
   life: "What's going on", people: "People", learning: "What you know and are learning", rhythms: "Rhythms",
   work: "Work", preferences: "Preferences", general: "Other" };
@@ -2406,7 +2507,7 @@ function mailboxView(items) {
   for (const [kind, list] of Object.entries(groups).sort((a, b) => order(a[0]) - order(b[0]))) {
     const g = el("div", "mb-group");
     const head = el("div", "mb-ghead"); head.append(el("span", null, `${KIND_LABEL[kind] || kind} · ${list.length}`));
-    if (list.length > 1 && !["device", "plan_question", "schedule_ok", "skill", "trust"].includes(kind)) {                // each device is approved on its own, code checked
+    if (list.length > 1 && !["device", "plan_question", "schedule_ok", "skill", "trust", "notice"].includes(kind)) {                // each device is approved on its own, code checked
       const all = el("button", "btn quiet", `Approve all ${list.length}`); all.type = "button";
       all.addEventListener("click", async () => {
         all.disabled = true;
@@ -2437,7 +2538,7 @@ function mailboxItem(item) {
   const c = el("div", "mb-item" + (item.urgent ? " urgent" : ""));
   const top = el("div", "mb-top");
   top.append(el("span", "mb-title", item.title),
-             el("span", "mb-conf", item.kind === "device" ? `asked ${item.age}` : ["node_update", "node_alert", "plan_step", "plan_question", "schedule_ok", "skill", "trust"].includes(item.kind) ? item.age
+             el("span", "mb-conf", item.kind === "device" ? `asked ${item.age}` : ["node_update", "node_alert", "notice", "plan_step", "plan_question", "schedule_ok", "skill", "trust"].includes(item.kind) ? item.age
                                  : `${Math.round(item.confidence * 100)}% sure · ${item.age}`));
   c.append(top);
   if (item.kind === "device") {
@@ -2530,8 +2631,8 @@ function mailboxItem(item) {
     btns.style.flexWrap = "wrap";
   }
   if (item.kind === "node_update") { approve.textContent = "Retry"; no.textContent = "Leave it"; }
-  if (item.kind === "node_alert") { approve.textContent = "Got it"; no.textContent = "Dismiss"; }
-  const noChange = ["node_update", "node_alert", "plan_step", "schedule_ok", "trust"].includes(item.kind);   // a plan step runs as shown, or not at all
+  if (item.kind === "node_alert" || item.kind === "notice") { approve.textContent = "Got it"; no.textContent = "Dismiss"; }
+  const noChange = ["node_update", "node_alert", "notice", "plan_step", "schedule_ok", "trust"].includes(item.kind);   // a plan step runs as shown, or not at all
   if (item.kind !== "plan_question") btns.append(approve, ...(noChange ? [] : [change]), ...(["device", "schedule_ok"].includes(item.kind) ? [] : [later]), no);   // a pairing request expires; no "not now"
   c.append(btns);
 
@@ -2571,6 +2672,8 @@ function digestView(d) {
   section("Failed", (d.failures || []).map(f => el("div", "dg-line", `${f.what}: ${f.count} time${f.count === 1 ? "" : "s"}${f.last_error ? ` (last: ${f.last_error})` : ""}`)));
   section("Unusual", (d.anomalies || []).map(a => el("div", "dg-line", a)));
   section("Computers", (d.computers || []).map(c => el("div", "dg-line", c)));
+  section("Worth knowing", (d.notices || []).map(n => { const line = el("div", "dg-line");
+    line.append(statusPill(SEV_TONE[n.severity] || "disabled", n.severity), document.createTextNode(n.title + (n.cleared ? " (cleared)" : ""))); return line; }));
   if (d.pattern) section("Noticed", [el("div", "dg-line", d.pattern)]);
   return box;
 }
@@ -2969,9 +3072,10 @@ async function openLinked(href) {
   const q = u.searchParams;
   let id, tool, data, closeData = { status: "completed", has_result: true };
   try {
-    if (q.get("plan") || q.get("job")) {
+    if (q.get("plan") || q.get("job") || q.get("notice")) {
       const r = await fetch(q.get("plan") ? `/admiral/plans/${encodeURIComponent(q.get("plan"))}/panel`
-                                          : `/admiral/jobs/${encodeURIComponent(q.get("job"))}/panel`);
+                          : q.get("job") ? `/admiral/jobs/${encodeURIComponent(q.get("job"))}/panel`
+                          : `/pulsar/notices/${encodeURIComponent(q.get("notice"))}/panel`);
       if (!r.ok) throw new Error();
       ({ task_id: id, tool, data } = await r.json());
     } else if (q.get("task")) {
@@ -2990,7 +3094,7 @@ async function openLinked(href) {
   if (data) onEvent({ type: "panel.result", task_id: id, tool, data });
   onEvent({ type: "panel.close", task_id: id, tool, data: closeData });
 }
-if (!SCREEN && /[?&](plan|task|job)=/.test(location.search)) setTimeout(() => openLinked(location.href), 300);
+if (!SCREEN && /[?&](plan|task|job|notice)=/.test(location.search)) setTimeout(() => openLinked(location.href), 300);
 if ("serviceWorker" in navigator) navigator.serviceWorker.addEventListener("message", e => { if (e.data && e.data.open) openLinked(e.data.open); });
 
 const notifyBtn = document.getElementById("notify");

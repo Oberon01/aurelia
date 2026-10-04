@@ -69,7 +69,7 @@ def test_weekday_morning_status_check_becomes_an_automation(month):
     hh, mm = map(int, s["proposal"]["schedule"]["time"].split(":"))
     assert (hh, 25) <= (7, mm) <= (7, 35)                      # a little before the usual 7:30-7:45
     assert s["confidence"] >= 0.7 and len(s["evidence"]) == 7
-    assert "ready when you ask" in s["summary"] and "Pulsar" in s["effect"]
+    assert "ready when you ask" in s["summary"] and "runs on schedule from now on" in s["effect"]
 
 
 def test_nightly_lock_is_proposed_with_a_heads_up(month):
@@ -144,3 +144,17 @@ def test_a_computer_with_a_problem_is_worth_a_digest(month):
                                    {"name": "Laptop", "issues": []}])
     assert d["quiet"] is False and d["computers"] == ["TV PC: Disk / is 92% full (8 GB free)"]
     assert analysis.digest(quiet_rows, NOW, RULES, waiting=[], releases=[], anomalies=[])["computers"] == []
+
+
+def test_what_pulsar_noticed_and_his_automations_are_in_the_digest(month):
+    quiet_rows = [r for r in month if r["status"] == "completed"]
+    d = analysis.digest(quiet_rows, NOW, RULES, waiting=[], releases=[], anomalies=[],
+                        notices=[{"title": "Front Door is unlocked", "severity": "critical", "status": "open"},
+                                 {"title": "TV PC is down", "severity": "high", "status": "cleared"}])
+    assert d["quiet"] is False
+    assert d["notices"] == [{"title": "Front Door is unlocked", "severity": "critical"},
+                            {"title": "TV PC is down", "severity": "high", "cleared": True}]
+    ran = analysis.digest(quiet_rows + [task(NOW - timedelta(hours=1), "orbit.lock", "act", trigger="automation"),
+                                        task(NOW - timedelta(hours=3), "orbit.light", "act", trigger="schedule")],
+                          NOW, RULES, waiting=[], releases=[], anomalies=[])
+    assert ran["quiet"] is False and len(ran["automatic"]) == 2

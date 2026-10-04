@@ -55,7 +55,7 @@ def stack(tmp_path_factory):
     # config + governance
     (tmp / "gov" / "functions").mkdir(parents=True)
     (tmp / "gov" / "charter.yaml").write_text(
-        "users:\n  owner: {role: owner}\n  chrysalis: {role: system}\n")
+        "users:\n  owner: {role: owner}\n  chrysalis: {role: system}\n  pulsar: {role: system}\n")
     (tmp / "gov" / "functions" / "testfn.yaml").write_text(
         "function: testfn\nrate_limit_per_minute: 1000\ntools:\n  status: {tier: reference}\n  switch: {tier: act}\n  look: {tier: reference}\n")
     (tmp / "gov" / "functions" / "parallax.yaml").write_text(
@@ -79,6 +79,15 @@ def stack(tmp_path_factory):
         "  revoke: {tier: act}\nrules:\n  trust:\n    approvals: 3\n    days: 0\n"
         "    eligible: [{tool: enginefn.confirm, args: {what: trusted thing}}]\n"
         "  together:\n    repeats: 3\n    window_minutes: 10\n    lookback_days: 14\n    max_proposals: 3\n")
+    (tmp / "gov" / "functions" / "pulsar.yaml").write_text(           # Pulsar: quick, and quiet unless a test says
+        "function: pulsar\nrate_limit_per_minute: 1000\ntools:\n  automate: {tier: act}\n  routine: {tier: act}\n"
+        "  save: {tier: change}\n  automations: {tier: reference}\n  notices: {tier: reference}\n  pause: {tier: act}\n"
+        "  resume: {tier: act}\n  skip: {tier: act}\n  delete: {tier: act}\n  forget_routine: {tier: act}\n"
+        "rules:\n  min_every_minutes: 0.01\n  pause_after_failures: 2\n  event_cooldown_minutes: 0\n  quiet_hours: ''\n"
+        "  severity: {door_unlocked_at_night: low, water_leak: low, server_disk_low: low, computer_down: low,\n"
+        "             update_failed: low, automation_paused: low, budget_ahead: low, mailbox_waiting: low,\n"
+        "             automations_ready: low, battery_low: low}\n"
+        "  watch: {server_disk_free_percent: 0, computer_down_minutes: 100000, mailbox_waiting_hours: 100000}\n")
     (tmp / "gov" / "functions" / "enginefn.yaml").write_text(          # the engine's tests' stand-in function
         "function: enginefn\nrate_limit_per_minute: 1000\ntools:\n  act: {tier: act}\n  look: {tier: reference}\n"
         "  confirm: {tier: change}\n")
@@ -156,15 +165,31 @@ def stack(tmp_path_factory):
         except httpx.HTTPError:
             time.sleep(0.2)
     register_testfn(orch, f"http://127.0.0.1:{fn_port}")
-    httpx.post(f"{orch}/registry/functions", json={
-        "name": "parallax", "description": "test", "url": f"http://127.0.0.1:{fn_port}",
-        "tools": [{"name": "digest", "description": "d", "input_schema": {"type": "object"}},
-                  {"name": "mailbox", "description": "m", "input_schema": {"type": "object"}}]}).raise_for_status()
+    register_parallax(orch, f"http://127.0.0.1:{fn_port}")
 
     yield {"orch": orch, "db": DB, "redis": REDIS, "fn": f"http://127.0.0.1:{fn_port}"}
     for s in servers:
         s.should_exit = True
 
+
+
+def register_parallax(orch: str, fn: str) -> None:
+    import httpx
+    httpx.post(f"{orch}/registry/functions", json={
+        "name": "parallax", "description": "test", "url": fn,
+        "tools": [{"name": "digest", "description": "d", "input_schema": {"type": "object"}},
+                  {"name": "mailbox", "description": "m", "input_schema": {"type": "object"}}]}).raise_for_status()
+
+
+@pytest.fixture(autouse=True)
+def _functions_registered(request):
+    """Registrations last 30 seconds; a slow test before this one (Pulsar's, Mnemosyne's) lets them lapse.
+    Every test that uses the stack starts with the stand-in functions registered, as they would be in life."""
+    if "stack" in request.fixturenames:
+        st = request.getfixturevalue("stack")
+        register_testfn(st["orch"], st["fn"])
+        register_parallax(st["orch"], st["fn"])
+    yield
 
 
 def pytest_configure(config):

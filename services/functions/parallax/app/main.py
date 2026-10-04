@@ -156,7 +156,15 @@ async def build_digest() -> dict:
             computers.append({"name": c["name"], "issues": json.loads(c["issues"]) if isinstance(c["issues"], str) else c["issues"]})
     except Exception as exc:               # an older database without devices: no section
         log.info("no computer health for the digest: %s", exc)
-    return analysis.digest(rows, now, r, waiting, releases, analysis.drift(rows, now, r), computers)
+    notices = []
+    try:                                   # what Pulsar noticed: open now, or raised in the last day
+        rank = {"critical": 0, "high": 1, "normal": 2, "low": 3}
+        notices = sorted([dict(x) for x in await app.state.db.fetch(
+            "SELECT title, severity, status FROM notices WHERE status='open' OR first_at > now() - interval '24 hours' "
+            "ORDER BY first_at DESC LIMIT 20")], key=lambda n: (n["status"] != "open", rank.get(n["severity"], 9)))
+    except Exception as exc:               # an older database without notices: no section
+        log.info("no notices for the digest: %s", exc)
+    return analysis.digest(rows, now, r, waiting, releases, analysis.drift(rows, now, r), computers, notices)
 
 
 async def analysis_loop() -> None:

@@ -47,3 +47,10 @@ users:
     # Runs post-deploy smoke tests only.
     deny:
       chrysalis: [rollback]
+  pulsar:
+    display_name: Pulsar (watching the home)
+    role: system
+    # Only looks: reads the home's state (locks, leak sensors, batteries) for the checks in pulsar.yaml.
+    # An allow-list: Orbit's status and nothing else, including any tool added later.
+    allow:
+      orbit: [status]

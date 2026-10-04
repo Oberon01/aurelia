@@ -45,7 +45,7 @@ RULES = {
 NEVER = [re.compile(p) for p in (
     r"^orbit\.unlock$", r"\.(?:install|install_package|uninstall|remove_package|speaker)$", r"\.(?:kill|close)_process$",
     r"sign_in$", r"\.submit$", r"\.(?:upload|purchase|download)$", r"\.(?:forget|forget_alias|delete_file|move_file)$",
-    r"^chrysalis\.", r"^admiral\.", r"^morpho\.", r"\.(?:send|copy|paste|notify)$", r"read_secrets$")]
+    r"^chrysalis\.", r"^admiral\.", r"^morpho\.", r"^pulsar\.", r"\.(?:send|copy|paste|notify)$", r"read_secrets$")]
 
 
 def rules(app) -> dict:
@@ -121,14 +121,14 @@ async def active_skills() -> list[dict]:
     return [_skill(r) for r in await db.pool().fetch("SELECT * FROM skills WHERE status='active' ORDER BY name")]
 
 
-async def find_skill(name_or_id: Any) -> dict:
-    """An active skill, by name (or id)."""
+async def find_skill(name_or_id: Any, exact: bool = False) -> dict:
+    """An active skill, by name (or id). exact: its whole name only (running one never guesses from part of it)."""
     s = str(name_or_id or "").strip()
     if s.isdigit():
         row = await db.pool().fetchrow("SELECT * FROM skills WHERE id=$1 AND status='active'", int(s))
     else:
         row = await db.pool().fetchrow("SELECT * FROM skills WHERE status='active' AND lower(name)=lower($1)", s)
-        if row is None:
+        if row is None and not exact:
             rows = await db.pool().fetch("SELECT * FROM skills WHERE status='active' AND lower(name) LIKE '%' || lower($1) || '%'", s)
             row = rows[0] if len(rows) == 1 else None
             if len(rows) > 1:
@@ -173,12 +173,15 @@ def norm_phrase(p: Any) -> str:
     return re.sub(r"\{([A-Za-z][A-Za-z0-9_]*)\}", lambda m: "{" + m.group(1).lower() + "}", " ".join(str(p).split()))
 
 
-def phrase_ok(p: str) -> bool:
+def phrase_ok(p: str, short_ok: bool = False) -> bool:
     """A phrase that can't catch everything: at least two words of its own, no slots side by side, and it
-    doesn't start with a slot."""
+    doesn't start with a slot. A routine's name may be one word (short_ok): it has no slots, so it only ever
+    matches exactly that word (Pulsar checked it isn't one of my commands when it was made)."""
     if not isinstance(p, str) or not phrase_regex(p):
         return False
     literal = re.findall(r"[a-z0-9']+", SLOT.sub(" ", p.lower()))
+    if short_ok and not SLOT.search(p) and literal:
+        return True
     return len(literal) >= 2 and not re.search(r"\}\s*\{", p) and not p.strip().startswith("{")
 
 
@@ -207,7 +210,7 @@ async def match_phrase(app, text: str) -> tuple[dict, dict] | None:
     for sk in await active_skills():
         names = {s["name"] for s in sk["slots"]}
         for ph in sk["phrases"]:
-            if not phrase_ok(ph):
+            if not phrase_ok(ph, short_ok=sk.get("source") == "routine"):
                 continue
             rx = phrase_regex(ph)
             m = rx.fullmatch(t) if rx else None
@@ -438,7 +441,7 @@ async def decline_skill(skill_id: int) -> str:
 
 async def run_tool(app, user: str, args: dict) -> dict:
     from . import admiral
-    sk = await find_skill(args.get("skill"))
+    sk = await find_skill(args.get("skill"), exact=True)
     if sk["status"] != "active":
         raise ValueError(f"\"{sk['name']}\" isn't active.")
     slots = {k: str(v) for k, v in (args.get("slots") or {}).items() if isinstance(k, str)}

@@ -219,6 +219,7 @@ NO_FAST_PATH = {
     "constellation.read_file": "planned (Kuiper)", "constellation.launch": "planned",
     "constellation.move_file": "planned (Kuiper)", "constellation.delete_file": "planned (Kuiper)",
     "nebula.submit": "planned", "nebula.upload": "planned",
+    "pulsar.save": "only his confirmation of a read-back runs it (never a phrase, never the model)",
 }
 
 
@@ -336,3 +337,38 @@ def test_morpho_phrases(said, tool, args):
     cfg = RuntimeConfig.model_validate(yaml.safe_load(CONFIG.read_text()))
     m = fastpath.match(said, cfg.fastpath.patterns)
     assert m and m.pattern.tool == tool and m.args == args, (said, m and (m.pattern.name, m.args))
+
+
+@pytest.mark.skipif(not CONFIG.exists(), reason="the repo's config isn't in the test image")
+@pytest.mark.parametrize("said,tool", [
+    ("every weekday at 7 am lock the front door", "pulsar.automate"),
+    ("lock the front door every night at 11 pm", "pulsar.automate"),
+    ("turn off the living room light every night at 11", "pulsar.automate"),
+    ("remind me every sunday at 6 pm to take the trash out", "pulsar.automate"),
+    ("remind me to take the trash out every sunday at 6 pm", "pulsar.automate"),
+    ("on weekdays at 7 am turn on the living room light", "pulsar.automate"),
+    ("lock the door nightly", "pulsar.automate"),
+    ("on the 1st of every month at 9 am remind me to pay rent", "pulsar.automate"),
+    ("when the tv pc comes online open youtube on the tv pc", "pulsar.automate"),
+    ("open youtube on the tv pc when the tv pc comes online", "pulsar.automate"),
+    ("make a routine called goodnight: lock the front door and turn off the tv", "pulsar.routine"),
+    ("show my automations", "pulsar.automations"), ("my routines", "pulsar.automations"),
+    ("pause the lock automation", "pulsar.pause"), ("resume the lock automation", "pulsar.resume"),
+    ("skip tomorrow's lock automation", "pulsar.skip"), ("delete the lock automation", "pulsar.delete"),
+    ("delete the goodnight routine", "pulsar.forget_routine"), ("run the goodnight routine", "morpho.run"),
+    ("any alerts", "pulsar.notices"), ("what are you watching for", "pulsar.notices"),
+    # Not automations: they keep their own fast paths (or go to the model).
+    ("remind me at 5 to call the pharmacy", "admiral.schedule"), ("at 11 PM, lock the front door", "admiral.schedule"),
+    ("check my monthly cap", "mnemosyne.budget"), ("when does my cap reset", "mnemosyne.budget"),
+    ("what happens every day", None), ("show the daily digest", None),
+])
+def test_automations_have_fast_paths_and_take_nothing_else(said, tool):
+    from app import fastpath
+    from app.config import RuntimeConfig
+    cfg = RuntimeConfig.model_validate(yaml.safe_load(CONFIG.read_text()))
+    m = fastpath.match(said, cfg.fastpath.patterns)
+    got = m.pattern.tool if m else None
+    if tool is None:
+        assert got is None or not got.startswith("pulsar."), (said, got)
+    else:
+        assert got == tool, (said, got)

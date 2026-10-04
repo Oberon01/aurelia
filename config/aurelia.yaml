@@ -96,6 +96,64 @@ session:
 fastpath:
   enabled: true
   patterns:
+    # Pulsar (Phase 10): automations and routines. Before everything else, so "lock the front door every night at
+    # 11" is never taken as "lock the front door" now (or as "at 11", once). Each one is only a draft that's read
+    # back for his OK; if code can't read the time and the command, the model hears it instead.
+    - name: automate-every
+      match: '^(?P<say>(?:(?:every|each)\s+(?:\d+(?:\.\d+)?\s+|other\s+|single\s+|half\s+(?:an\s+)?|(?:two|three|four|five|six|ten|fifteen|twenty|thirty|forty-five)\s+)?(?:day|morning|afternoon|evening|night|weekday|weeknight|weekend|hour|minute|min|hr|month|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday)s?(?:(?:\s*,\s*(?:and\s+)?|\s+and\s+|\s*&\s*|\s+)(?:mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday)s?)*|(?:daily|nightly|hourly|monthly\s+on\s+the\s+\w+|(?:on\s+)?(?:the\s+)?week(?:day|night)s|(?:on\s+)?(?:the\s+)?weekends|(?:on\s+)?(?:mon|tues|wednes|thurs|fri|satur|sun)days(?:\s+and\s+(?:mon|tues|wednes|thurs|fri|satur|sun)days)*|(?:on\s+)?the\s+(?:\d{1,2}(?:st|nd|rd|th)?|first|last)(?:\s+day)?\s+of\s+(?:every|each)\s+month))(?:\s+(?:morning|afternoon|evening|night)s?)?(?:\s+(?:at|@)\s+(?:\d{1,2}(?::\d{2})?(?:\s*[ap]\.?m\.?|\s*o''?\s?clock)?|noon|midnight))?\b.*)$|^(?!(?:what|when|where|who|why|how|is|are|was|were|do|does|did|can|could|will|would|should|which|tell|check|show)\b)(?P<say2>.+\s+(?:(?:every|each)\s+(?:\d+(?:\.\d+)?\s+|other\s+|single\s+|half\s+(?:an\s+)?|(?:two|three|four|five|six|ten|fifteen|twenty|thirty|forty-five)\s+)?(?:day|morning|afternoon|evening|night|weekday|weeknight|weekend|hour|minute|min|hr|month|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday)s?(?:(?:\s*,\s*(?:and\s+)?|\s+and\s+|\s*&\s*|\s+)(?:mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday)s?)*|(?:daily|nightly|hourly|monthly\s+on\s+the\s+\w+|(?:on\s+)?(?:the\s+)?week(?:day|night)s|(?:on\s+)?(?:the\s+)?weekends|(?:on\s+)?(?:mon|tues|wednes|thurs|fri|satur|sun)days(?:\s+and\s+(?:mon|tues|wednes|thurs|fri|satur|sun)days)*|(?:on\s+)?the\s+(?:\d{1,2}(?:st|nd|rd|th)?|first|last)(?:\s+day)?\s+of\s+(?:every|each)\s+month))(?:\s+(?:morning|afternoon|evening|night)s?)?(?:\s+(?:at|@)\s+(?:\d{1,2}(?::\d{2})?(?:\s*[ap]\.?m\.?|\s*o''?\s?clock)?|noon|midnight))?)$|^(?P<say3>remind\s+me\s+(?:(?:every|each)\s+(?:\d+(?:\.\d+)?\s+|other\s+|single\s+|half\s+(?:an\s+)?|(?:two|three|four|five|six|ten|fifteen|twenty|thirty|forty-five)\s+)?(?:day|morning|afternoon|evening|night|weekday|weeknight|weekend|hour|minute|min|hr|month|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday)s?(?:(?:\s*,\s*(?:and\s+)?|\s+and\s+|\s*&\s*|\s+)(?:mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday)s?)*|(?:daily|nightly|hourly|monthly\s+on\s+the\s+\w+|(?:on\s+)?(?:the\s+)?week(?:day|night)s|(?:on\s+)?(?:the\s+)?weekends|(?:on\s+)?(?:mon|tues|wednes|thurs|fri|satur|sun)days(?:\s+and\s+(?:mon|tues|wednes|thurs|fri|satur|sun)days)*|(?:on\s+)?the\s+(?:\d{1,2}(?:st|nd|rd|th)?|first|last)(?:\s+day)?\s+of\s+(?:every|each)\s+month))\b.+)$'
+      tool: pulsar.automate
+      args: { say: "{say|}{say2|}{say3|}" }
+      reply: "Here's the automation."
+    - name: automate-when
+      match: '^(?P<say>(?:when(?:ever)?|each\s+time|every\s+time|any\s+time)\s+(?:i\s+open\s+(?:the\s+|my\s+)?[\w'' -]+?|(?:the\s+|my\s+)?[\w'' -]+?\s+(?:comes?\s+(?:back\s+)?(?:online|on)|is\s+(?:back\s+)?(?:online|on)|turns?\s+on|wakes?(?:\s+up)?|boots?(?:\s+up)?|starts?(?:\s+up)?|goes\s+(?:offline|off|to\s+sleep)|turns?\s+off|shuts?\s+down|is\s+(?:offline|off)|opens|is\s+opened|gets\s+opened))\s*,?\s+.+)$|^(?!(?:what|when|where|who|why|how|is|are|was|were|do|does|did|can|could|will|would|should|which|tell|check|show)\b)(?P<say2>.+\s+(?:when(?:ever)?|each\s+time|every\s+time|any\s+time)\s+(?:i\s+open\s+(?:the\s+|my\s+)?[\w'' -]+?|(?:the\s+|my\s+)?[\w'' -]+?\s+(?:comes?\s+(?:back\s+)?(?:online|on)|is\s+(?:back\s+)?(?:online|on)|turns?\s+on|wakes?(?:\s+up)?|boots?(?:\s+up)?|starts?(?:\s+up)?|goes\s+(?:offline|off|to\s+sleep)|turns?\s+off|shuts?\s+down|is\s+(?:offline|off)|opens|is\s+opened|gets\s+opened)))$'
+      tool: pulsar.automate
+      args: { say: "{say|}{say2|}" }
+      reply: "Here''s the automation."
+    - name: routine-make
+      match: '^(?P<say>(?:make|create|add|set\s+up|save|build)\s+(?:me\s+)?(?:a\s+|an\s+|the\s+|my\s+)?(?:new\s+)?(?:[\w''" -]+?\s+)?routine\b.+)$'
+      tool: pulsar.routine
+      args: { say: "{say}" }
+      reply: "Here's the routine."
+    - name: automations-list
+      match: '^(?:(?:show|list|open)\s+(?:me\s+)?)?(?:my|the|your|all)\s+(?:automations|routines|automations\s+and\s+routines)\??$|^what\s+(?:automations|routines)\s+do\s+(?:i|you)\s+have\??$|^what(?:''s|s| is)\s+automated\??$|^(?:automations|routines)$'
+      tool: pulsar.automations
+      args: {}
+      reply: "Here are your automations."
+    - name: automation-pause
+      match: '^(?:pause|disable|turn\s+off|switch\s+off|stop)\s+(?:the\s+|my\s+)?(?P<which>.*?)\s*automation$'
+      tool: pulsar.pause
+      args: { which: "{which}" }
+      reply: "Paused."
+    - name: automation-resume
+      match: '^(?:resume|unpause|re-?enable|enable|turn\s+(?:back\s+)?on|switch\s+(?:back\s+)?on|restart|start)\s+(?:the\s+|my\s+)?(?P<which>.*?)\s*automation(?:\s+again)?$'
+      tool: pulsar.resume
+      args: { which: "{which}" }
+      reply: "Resumed."
+    - name: automation-delete
+      match: '^(?:delete|remove|cancel|get\s+rid\s+of)\s+(?:the\s+|my\s+)?(?P<which>.*?)\s*automation$'
+      tool: pulsar.delete
+      args: { which: "{which}" }
+      reply: "Deleted."
+    - name: automation-skip
+      match: '^skip\s+(?:the\s+next\s+(?:run\s+of\s+(?:the\s+|my\s+)?)?|tomorrow''?s\s+|today''?s\s+|tonight''?s\s+|the\s+|my\s+)?(?P<which>.*?)\s*(?:automation|routine\s+run|run)(?:\s+(?:tomorrow|today|tonight|this\s+time|once|next\s+time))?$'
+      tool: pulsar.skip
+      args: { which: "{which}" }
+      reply: "Skipping the next one."
+    - name: routine-forget
+      match: '^(?:delete|remove|forget|get\s+rid\s+of)\s+(?:the\s+|my\s+)?(?P<which>.+?)\s+routine$'
+      tool: pulsar.forget_routine
+      args: { which: "{which}" }
+      reply: "Deleted the routine."
+    - name: routine-run
+      match: '^(?:run|start|do)\s+(?:the\s+|my\s+)?(?P<skill>.+?)\s+routine$'
+      tool: morpho.run
+      args: { skill: "{skill}" }
+      reply: "Running {skill}."
+    - name: notices
+      match: '^(?:(?:show|list|open)\s+(?:me\s+)?)?(?:my\s+|the\s+|your\s+|any\s+)?(?:notices|alerts|warnings)\??$|^(?:is\s+there\s+)?any(?:thing)?\s+(?:i\s+should\s+know(?:\s+about)?|worth\s+knowing|wrong\s+at\s+home|to\s+worry\s+about)\??$|^what\s+(?:are\s+you|do\s+you)\s+watch(?:ing)?(?:\s+for)?\??$|^any\s+(?:alerts|notices|warnings)\??$'
+      tool: pulsar.notices
+      args: {}
+      reply: "Here's what I'm watching."
     # Admiral's engine (Phase 9): once, later. First in the list, so "turn off the lights in 20 minutes" is never
     # taken as "turn off the lights" now. The time is read by code and the command settled when he asks.
     - name: schedule-remind

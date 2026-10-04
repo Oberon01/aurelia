@@ -26,7 +26,7 @@ space-themed name. Tools are addressed as `<function>.<tool>`.
 | `beacon` | Communication: messages, calls, calendar | | Planned |
 | `libra` | Bookkeeping: services and subscriptions | | Planned |
 | `kuiper` | Files and storage | | Planned |
-| `pulsar` | Scheduling and automations | | Planned |
+| `pulsar` | Automations and routines in your words, and what's worth interrupting you for (part of Aurelia, served by the orchestrator) | `pulsar.automate`, `pulsar.routine`, `pulsar.automations`, `pulsar.pause`, `pulsar.resume`, `pulsar.skip`, `pulsar.delete`, `pulsar.forget_routine`, `pulsar.notices` | Built |
 | `parallax` | Analytics on task history: habits, what matters most, timing; proposes to the mailbox | `parallax.analyze`, `parallax.mailbox`, `parallax.digest` | Built |
 | `quasar` | Media and entertainment | | Planned |
 
@@ -905,7 +905,7 @@ hourly and proposes ideas to the **review mailbox**:
 
 | Idea | When | If you approve |
 | --- | --- | --- |
-| Automation | You do the same thing at about the same time on at least 5 of the last 14 days (weekdays, or every day), at least half the days it could have happened | Saved; runs once Pulsar (Phase 10) exists. Look-ups run a few minutes early; physical actions keep their cancellable heads-up. Anything that needs confirmation (unlock) is never proposed |
+| Automation | You do the same thing at about the same time on at least 5 of the last 14 days (weekdays, or every day), at least half the days it could have happened | Becomes one of your automations right away (Pulsar), with your changes to the days or time. Look-ups run a few minutes early; physical actions keep their cancellable heads-up. Anything that needs confirmation (unlock) is never proposed |
 | What matters most | A tool you use often, wait on, chase when it fails, or that acts on the home | "High": its failures stand out. "Critical": also keeps full panels 30 days |
 | Keep longer | A look-up you use about 3+ times a day | Full panels kept 30 days instead of 7 |
 
@@ -919,7 +919,8 @@ has no tool for it, so she can show you her ideas but never approve them.
 
 The **morning digest** appears once a day on your first interaction after 6 AM
 (opening the display or asking anything): what's waiting, what ran without you
-(releases, later automations), failures, anything unusual (e.g. "home status
+(releases, your automations and scheduled commands), what Pulsar noticed (open,
+or in the last day), failures, anything unusual (e.g. "home status
 checks took 3× longer this week"), and one thing noticed. Quiet days produce
 none. Hour and timezone: `digest` in `config/aurelia.yaml`; Parallax's
 thresholds: `config/governance/functions/parallax.yaml`. Say "any new ideas" to
@@ -1329,8 +1330,7 @@ time zone) and its rules. Jobs live in Postgres (`jobs`, `job_runs`).
   waits two minutes on the engine. They're listed under "My own timers" in the
   schedule panel.
 
-Recurring routines in your words, Parallax's automations and a panel to pause
-and edit them are Pulsar (Phase 10), built on this engine.
+Anything that repeats is Pulsar's (below), built on this engine.
 
 ### Morpho: skills and earned trust
 
@@ -1381,6 +1381,68 @@ Planning, filling, changing course and checking are model calls, counted toward
 starting. Policy:
 `config/governance/functions/admiral.yaml`. Code:
 `services/orchestrator/app/admiral.py`.
+
+## Pulsar: automations, routines and initiative (Phase 10)
+
+Pulsar is part of Aurelia's core (served by the orchestrator), built on
+Admiral's engine. Policy: `config/governance/functions/pulsar.yaml`. Code:
+`services/orchestrator/app/pulsar.py`.
+
+- **Automations in your words.** "Every weekday at 7 am, lock the front door",
+  "turn off the living room light every night at 11", "every 2 hours, …", "on
+  the 1st of every month at 9 am, remind me to pay rent", "remind me every
+  Sunday at 6 pm to take the trash out". Code reads the time (in your time
+  zone, daylight saving included; "every day at 7" asks morning or night) and
+  settles the command by its own fast path. She reads it back ("Every weekday
+  at 7:00 AM: Lock the front door. You'll get a heads-up 1 minute before each
+  run, with a Cancel. First run: tomorrow at 7:00 AM. Save it?") and it's
+  saved only when you confirm. Saving is change-tier, never earned by trust,
+  never offered to the model, and can't be scheduled. "Every weeknight",
+  "Monday, Wednesday and Friday", "11 o'clock" and "half past 7" are read too.
+  Anything that repeats never runs now or as a one-off: what code can't read
+  goes to the model, which asks.
+- **Each run** is an engine job, governed when it runs: a change-tier action
+  (unlock, say) asks you each time, and your OK is for that run only (a retry
+  of it, yes; a skipped, paused or later run asks again), physical actions get the heads-up with
+  Cancel, and the run is checked by its own result. A run that worked goes in
+  the digest rather than your phone; a failure tells you; three in a row
+  (`pause_after_failures`) and it's paused, and you're told. What it missed
+  while the server was down is never run late.
+- **Managing them.** "Show my automations" (each with how it repeats, the next
+  run and the last ones, and Pause/Resume, Skip next, Delete), or say "pause the
+  lock automation", "skip tomorrow's lock automation", "resume…", "delete…".
+  Cancel on a heads-up, and No on an OK card, skip that run only. "Cancel the …
+  reminder" is still for one-off schedules.
+- **Routines.** "Make a routine called goodnight: lock the front door, turn off
+  the living room light and turn off the TV" ("then" makes a step wait for the
+  one before). Confirmed like an automation, kept as a skill that needs no
+  model: "goodnight" (or "run goodnight") runs it, even with the model down,
+  and "run goodnight every night at 11" makes it an automation. "Delete the
+  goodnight routine" deletes it and the automations that ran it (one running
+  right then finishes that run and stops). A routine runs by its whole name,
+  never a guess from part of it, and never takes words that already mean
+  something else. A step waiting for your OK waits only as long as that run
+  may still happen (`grace_minutes.action`); after that the routine is stopped
+  and the run counted as missed, never run late.
+- **Events.** "When the TV PC comes online, open YouTube on the TV PC", "lock
+  the front door when the desk goes offline", "when I open my phone, show the
+  weather": at most once per `event_cooldown_minutes`. Doors, lights and
+  arrivals as triggers come with the Home Assistant bridge (Lagrange).
+- **What she watches for you** ("any alerts", "what are you watching for"): a
+  door unlocked during quiet hours, a water leak, low batteries, the server's
+  disk, a server-role computer (or one in `watch.always_on`) down, a failed
+  update, an automation paused, the model budget running ahead, mailbox items
+  waiting over a day. Each kind's severity is yours in `pulsar.yaml`:
+  **critical** reaches your phone and every open display at once, even in quiet
+  hours; **high** your phone now, or when quiet hours end; **normal** a mailbox
+  card, no phone; **low** the digest only. You hear about a thing once while it
+  lasts (again only after your `repeat_hours`, never after "Got it"), and its
+  card is taken back when it clears. The home checks read Orbit's status as
+  Pulsar's own user (`charter.yaml`): an allow-list of Orbit's status and
+  nothing else, so a tool added later can't slip past it.
+- **Suggestions.** Approving one of Parallax's habit cards makes the automation
+  at once; any you approved before Pulsar existed start running, and you're
+  told which, once. She never creates, approves or schedules one on her own.
 
 ## Known gaps (by design, for later phases)
 

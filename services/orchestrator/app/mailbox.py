@@ -103,6 +103,12 @@ def validate(kind: str, proposal: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             raise HTTPException(400, "The card doesn't say which action.")
         return p
+    if kind == "notice":                         # something worth knowing (Pulsar): "got it" only
+        try:
+            p["notice_id"] = int(p.get("notice_id"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "The card doesn't say which notice.")
+        return p
     if kind == "schedule_ok":                    # a scheduled change-tier action, due now (engine.py)
         try:
             p["job_id"] = int(p.get("job_id"))
@@ -199,11 +205,13 @@ async def apply(conn, item_id: int, kind: str, p: dict[str, Any]) -> str:
             "ON CONFLICT (tool) DO UPDATE SET hot_days=EXCLUDED.hot_days, from_item=EXCLUDED.from_item, set_at=now()",
             p["tool"], p["hot_days"], item_id)
         return f"Full {p['tool']} panels are now kept for {p['hot_days']} days."
-    if kind == "automation":
-        await conn.execute(
-            "INSERT INTO automations (tool, args, schedule, from_item) VALUES ($1, $2::jsonb, $3::jsonb, $4)",
-            p["tool"], json.dumps(p.get("args") or {}), json.dumps(p["schedule"]), item_id)
-        return "Saved. It will run on schedule once Pulsar (Phase 10) is built."
+    if kind == "automation":                     # one of Parallax's habits: Pulsar makes it an automation now
+        from . import pulsar
+        from .main import app as _app
+        return await pulsar.from_suggestion(_app, conn, item_id, p)
+    if kind == "notice":
+        from . import pulsar
+        return await pulsar.seen(p["notice_id"])
     raise HTTPException(400, f"I don't know how to apply a '{kind}' proposal.")
 
 
@@ -364,7 +372,7 @@ async def _decide(item_id: int, d: Decision, batch: bool = False) -> dict[str, A
     proposal = json.loads(row["proposal"]) if isinstance(row["proposal"], str) else row["proposal"]
     if d.action in ("approve", "modify"):
         changes = d.changes if d.action == "modify" else {}
-        if row["kind"] in ("schedule_ok", "plan_step", "trust"):   # the card can't change what it's about
+        if row["kind"] in ("schedule_ok", "plan_step", "trust", "notice"):   # the card can't change what it's about
             changes = {}
         elif row["kind"] == "skill":
             changes = {k: v for k, v in changes.items() if k in ("name", "phrases")}
@@ -381,6 +389,9 @@ async def _decide(item_id: int, d: Decision, batch: bool = False) -> dict[str, A
         if row["kind"] == "device":
             from . import auth
             await auth.decline(pool, proposal["device_id"])
+        if row["kind"] == "notice":                              # dismissed is seen, too
+            from . import pulsar
+            await pulsar.seen(validate("notice", proposal)["notice_id"])
         if row["kind"] in ("skill", "trust"):
             done_ = await _morpho(row["kind"], validate(row["kind"], proposal), ok=False)
             await pool.execute("UPDATE mailbox_items SET status='rejected', reason=$2, decided_at=now(), decided_by=$3, "
@@ -400,7 +411,7 @@ async def _decide(item_id: int, d: Decision, batch: bool = False) -> dict[str, A
                            "updated_at=now() WHERE id=$1", item_id, (d.reason or "").strip() or None, d.user)
         done = ("Declined. That device isn't paired." if row["kind"] == "device" else
                 "Left as is. It keeps its current version until the next release." if row["kind"] == "node_update" else
-                "Dismissed." if row["kind"] == "node_alert" else
+                "Dismissed." if row["kind"] in ("node_alert", "notice") else
                 "Declined. I won't suggest it again unless things change a lot.")
         return {"id": item_id, "status": "rejected", "done": done}
     if d.action == "defer":

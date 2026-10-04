@@ -97,12 +97,20 @@ async def ask(body: Ask, request: Request):
 
     chosen = style.switch(body.text)
     fp = fastpath.match(body.text, cfg.fastpath.patterns) if cfg.fastpath.enabled and chosen is None else None
-    later = bool(fp and fp.pattern.tool == "admiral.schedule")
+    from . import when as _when
+    repeats = _when.mentions_repeat(body.text)
+    if repeats and fp and not fp.pattern.tool.startswith("pulsar."):
+        fp = None                           # "lock the door every night at 11": an automation, never a command now
+    later = bool(fp and fp.pattern.tool in ("admiral.schedule", "pulsar.automate", "pulsar.routine"))
     if later:
-        from . import engine                # "tomorrow I have a meeting" isn't a command for later: the model hears it
-        if not engine.fast_ok(app, fp.args.get("say") or ""):
+        from . import engine, pulsar        # "tomorrow I have a meeting" isn't a command for later: the model hears it
+        say_ = fp.args.get("say") or ""
+        ok = (engine.fast_ok(app, say_) if fp.pattern.tool == "admiral.schedule" else
+              await pulsar.fast_ok(app, say_) if fp.pattern.tool == "pulsar.automate" else
+              await pulsar.routine_fast_ok(app, say_))
+        if not ok:
             fp = None
-    if chosen is None and cfg.fastpath.enabled and not later and not _timed(app, body.text):
+    if chosen is None and cfg.fastpath.enabled and not later and not repeats and not _timed(app, body.text):
         from . import morpho                # his skills' phrases (Morpho): a skill runs like a fast path
         try:
             hit = await morpho.match_phrase(app, body.text)
@@ -117,7 +125,7 @@ async def ask(body: Ask, request: Request):
                 args={"skill": str(sk["id"]), "slots": slots}, groups={})
     resolved = await registry.resolve(app.state.redis, fp.pattern.tool) if fp else None
     elsewhere = None
-    if chosen is None and cfg.fastpath.enabled and not later and not (fp and fp.pattern.name.startswith("skill-")):
+    if chosen is None and cfg.fastpath.enabled and not later and not repeats and not (fp and fp.pattern.name.startswith("skill-")):
         elsewhere = await _lookup_elsewhere(app, body.text)   # "send the device list to my phone"
     if chosen is not None:              # "use Raphael style" / "normal style": how she speaks, nothing else
         outcome.update(route="style", reply=await style.choose(app.state.redis, body.user, chosen))
@@ -187,6 +195,9 @@ async def confirm(body: Confirm, request: Request):
     result = await wait_for_result(task_id, app.state.config.current.llm.wait_for_result_seconds)
     if result and result["status"] == "completed" and pending.get("reply"):
         return {"reply": style.report(st, pending["reply"]), "task_ids": [task_id]}
+    said = (result or {}).get("result") if result and result["status"] == "completed" else None
+    if isinstance(said, dict) and isinstance(said.get("did"), dict) and said["did"].get("what"):
+        return {"reply": style.report(st, str(said["did"]["what"])[:300]), "task_ids": [task_id]}   # what it did, as it did it
     if result and result["status"] == "completed":
         return {"reply": style.line(st, "done", "Done."), "task_ids": [task_id]}
     return {"reply": style.notice(st, _summarize(pending["tool"], result)), "task_ids": [task_id]}
@@ -344,7 +355,8 @@ async def _follow_up(app, user: str, tool: str, result: dict | None, out: dict) 
         return None
     if c["tool"].split(".", 1)[0] != tool.split(".", 1)[0] and c["tool"] not in HANDOFFS.get(tool.split(".", 1)[0], ()):
         return None                                                 # only its own function's tools (or a named handoff)
-    reason = str(c.get("reason") or "That needs your confirmation.")[:300]
+    # A read-back he confirms (an automation, a routine's steps) is shown whole; it's kept short where it's made.
+    reason = str(c.get("reason") or "That needs your confirmation.")[:900 if c["tool"] == "pulsar.save" else 300]
     action = await _hold(app, c["tool"], dict(c.get("args") or {}), user, reason,
                          reply=str(c["reply"])[:200] if c.get("reply") else None)
     out["needs_confirmation"].append(action)
@@ -541,7 +553,8 @@ async def _run_for_display(app, user: str, qualified: str, args: dict, on: str, 
 # ---- long replies open as a panel --------------------------------------------------------------
 
 REPLY_TOOL = "aurelia.reply"
-QUIET_TOOLS = {"constellation.send"}           # tools whose panel isn't something to read
+QUIET_TOOLS = {"constellation.send"}
+NOT_FOR_MODEL = {"pulsar.save"}               # only his confirmation of a read-back runs it           # tools whose panel isn't something to read
 _SENTENCE = __import__("re").compile(r"(?<=[.!?])[\"')\]]*\s+(?=[A-Z0-9\"'(])")
 
 
@@ -660,6 +673,8 @@ async def _tool_defs(app, user: str) -> tuple[list[ToolDef], dict[str, str], lis
             if not decision.allowed:
                 continue
             q = f"{fn.name}.{tool.name}"
+            if q in NOT_FOR_MODEL:
+                continue
             note = " Requires the user's confirmation." if gov.decide(fn.name, tool.name, user, False).needs_confirmation else ""
             defs.append(ToolDef(name=api_name(q), description=f"[{fn.name.capitalize()}] {tool.description}{note}",
                                 input_schema=_plain(tool.input_schema) if tool.display == "panel" else _with_display(tool.input_schema)))

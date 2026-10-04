@@ -154,8 +154,9 @@ def recurrences(rows: list[dict], now: datetime, rules: Rules) -> list[dict]:
                    f"usually between {clock(minutes[0])} and {clock(minutes[-1])}.")
         summary += (" Running it a few minutes early would have it ready when you ask." if lookup
                     else " Automating it means it happens even on days you forget.")
-        effect = "Saved as an automation. It runs once Pulsar (Phase 10) is built"
-        effect += "." if lookup else ", and it will still show a heads-up you can cancel every time."
+        effect = "Saved as an automation: it runs on schedule from now on"
+        effect += " (\"show my automations\" to pause or delete it)." if lookup else \
+            ", with a heads-up you can cancel before physical actions (\"show my automations\" to pause or delete it)."
         out.append({
             "kind": "automation", "fingerprint": f"automation:{tool}:{key}:{kind}",
             "title": f"{_cap(what)} {'every weekday' if kind == 'weekdays' else 'every day'} at {clock(at)}",
@@ -278,22 +279,23 @@ def _secs(ms: float) -> str:
 # ---- morning digest --------------------------------------------------------------------------
 
 def digest(rows: list[dict], now: datetime, rules: Rules, waiting: list[dict], releases: list[dict],
-           anomalies: list[dict], computers: list[dict] | None = None) -> dict:
-    """Waiting items, what ran without you since yesterday, failures, anomalies, his
-    computers' health problems, one notable pattern. Quiet (nothing to show) when none
-    of the first five has anything. `computers`: [{name, issues: [{level, text}]}]."""
+           anomalies: list[dict], computers: list[dict] | None = None, notices: list[dict] | None = None) -> dict:
+    """Waiting items, what ran without you since yesterday (his automations and scheduled commands too),
+    failures, anomalies, his computers' health problems, what Pulsar noticed, one notable pattern. Quiet
+    (nothing to show) when none of the first six has anything. `computers`: [{name, issues: [{level, text}]}];
+    `notices`: [{title, severity, status}] (open, or raised in the last day)."""
     tz = ZoneInfo(rules.timezone)
     since = now - timedelta(hours=24)
     failed: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
-        if r["started_at"] >= since and r["status"] == "failed" and r["trigger"] in ("user", "automation"):
+        if r["started_at"] >= since and r["status"] == "failed" and r["trigger"] in ("user", "automation", "schedule"):
             failed[r["tool"]].append(r)
     failures = [{"what": _cap(noun(t)), "count": len(fs), "last_error": fs[-1].get("error")}
                 for t, fs in sorted(failed.items(), key=lambda kv: -len(kv[1]))]
     automatic = [{"what": f"Release {r['sha'][:8]}: {(r.get('message') or '').splitlines()[0] if r.get('message') else ''}".strip(),
                   "outcome": r["status"]} for r in releases if r["status"] not in ("dry_run",)]
     automatic += [{"what": _cap(action(r["tool"], r["args"])), "outcome": r["status"]}
-                  for r in rows if r["started_at"] >= since and r["trigger"] == "automation"]
+                  for r in rows if r["started_at"] >= since and r["trigger"] in ("automation", "schedule")]
 
     week = [r for r in rows if r["trigger"] == "user" and r["started_at"] >= now - timedelta(days=7)]
     pattern = None
@@ -304,7 +306,9 @@ def digest(rows: list[dict], now: datetime, rules: Rules, waiting: list[dict], r
             pattern = f"Most used this week: {noun(top)}, {n} times."
     health = [f"{c['name']}: {i['text']}" for c in (computers or []) for i in (c.get("issues") or [])
               if isinstance(i, dict) and i.get("text")]
-    quiet = not (waiting or failures or automatic or anomalies or health)
+    notes = [{"title": n["title"], "severity": n["severity"], **({"cleared": True} if n.get("status") == "cleared" else {})}
+             for n in (notices or [])]
+    quiet = not (waiting or failures or automatic or anomalies or health or notes)
     return {
         "date": f"{now.astimezone(tz):%A, %B %-d}",
         "quiet": quiet,
@@ -314,5 +318,6 @@ def digest(rows: list[dict], now: datetime, rules: Rules, waiting: list[dict], r
         "failures": failures[:6],
         "anomalies": [a["text"] for a in anomalies],
         "computers": health[:8],
+        "notices": notes[:8],
         "pattern": pattern,
     }

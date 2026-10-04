@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
-from . import (admiral, ambient, engine, morpho, assistant, auth, constellation, push, quasar, db, digest, glance, learning, llm_api, mailbox, memory, mnemosyne,
+from . import (admiral, ambient, engine, morpho, pulsar, assistant, auth, constellation, push, quasar, db, digest, glance, learning, llm_api, mailbox, memory, mnemosyne,
                nodes, registry, releases, tasks)
 from .config import ConfigStore
 from .events import CHANNEL
@@ -42,6 +42,7 @@ async def lifespan(app: FastAPI):
     pushes = asyncio.create_task(push.mailbox_loop(app))
     plans = asyncio.create_task(admiral.register_loop(app))
     skills = asyncio.create_task(morpho.register_loop(app))
+    watcher_p = asyncio.create_task(pulsar.register_loop(app))   # Pulsar: automations, routines, notices
     log.info("orchestrator ready")
     try:
         yield
@@ -58,6 +59,7 @@ async def lifespan(app: FastAPI):
         pushes.cancel()
         plans.cancel()
         skills.cancel()
+        watcher_p.cancel()
         await db.close()
         await app.state.redis.aclose()
         log.info("orchestrator stopped")
@@ -84,6 +86,7 @@ app.include_router(quasar.node_router)
 app.include_router(admiral.router)
 app.include_router(engine.router)
 app.include_router(morpho.router)
+app.include_router(pulsar.router)
 
 
 VIEW = Path(__file__).parent / "static" / "view.html"

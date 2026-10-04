@@ -121,18 +121,31 @@ def poke() -> None:
 
 # ---- his jobs ---------------------------------------------------------------------------------------------
 
+def heads_for(app, kind: str, spec: dict) -> bool:
+    """Physical actions get a heads-up with a Cancel first: a command on the list, or a routine with one in it."""
+    listed = set(rules(app)["heads_up_for"])
+    if kind == "tool":
+        return spec.get("tool") in listed
+    if kind == "routine":
+        return any(t in listed for t in spec.get("tools") or [])
+    return False
+
+
 async def add(app, kind: str, title: str, spec: dict, at: datetime, user: str = "owner",
-              device: int | None = None, rule: dict | None = None) -> dict:
-    """Schedule something he asked for. Physical actions get a heads-up first."""
+              device: int | None = None, rule: dict | None = None, conn=None) -> dict:
+    """Schedule something he asked for (once, or one of his automations). Physical actions get a heads-up first.
+    An automation that waits for an event (rule "on") is 'armed': it runs only when its event happens."""
     r = rules(app)
-    heads = kind == "tool" and spec.get("tool") in set(r["heads_up_for"])
-    grace = int(float(r["grace_minutes"]["action" if kind == "tool" else kind]) * 60)
+    heads = heads_for(app, kind, spec)
+    grace = int(float(r["grace_minutes"]["action" if kind in ("tool", "routine") else kind]) * 60)
     first = max(now(), at - timedelta(seconds=int(r["heads_up_seconds"]))) if heads else at
-    row = await db.pool().fetchrow(
+    armed = bool((rule or {}).get("on"))
+    row = await (conn or db.pool()).fetchrow(
         "INSERT INTO jobs (kind, title, user_id, spec, rule, tz, planned_at, due_at, next_at, phase, heads_up, "
-        "grace_seconds, device) VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $7, $8, $9, $10, $11, $12) RETURNING *",
+        "grace_seconds, device, status) VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $7, $8, $9, $10, $11, $12, $13) "
+        "RETURNING *",
         kind, title[:200], user, json.dumps(spec), json.dumps(rule or {"once": True}), tz_name(app), at, first,
-        "heads_up" if heads else "run", heads, grace, device)
+        "heads_up" if heads else "run", heads, grace, device, "armed" if armed else "scheduled")
     poke()
     return dict(row)
 
@@ -155,12 +168,23 @@ def view(job: dict, at: datetime | None = None) -> dict:
     if job["kind"] == "tool":
         out["tool"] = spec.get("tool")
         out["args"] = spec.get("args") or {}
+    if job["kind"] == "routine":
+        out["routine"] = spec.get("name")
+    rep = repeats(job)
+    if rep:
+        out["repeats"] = rep
+        if job["status"] in ("armed", "paused"):          # no next time by the clock
+            out["when"], out["in"] = ("waiting for that" if job["status"] == "armed" else "paused"), ""
     return out
 
 
 async def cancel(app, job_id: int, why: str = "cancelled") -> dict:
-    """Cancel one of his jobs (before it runs; during its heads-up too)."""
+    """Cancel one of his jobs (before it runs; during its heads-up too). An automation's Cancel skips this time
+    only (deleting it is Pulsar's 'delete'): the result says so with "skipped" and the next time."""
     from . import mailbox
+    j = await db.pool().fetchrow("SELECT * FROM jobs WHERE id=$1 AND created_by='owner'", job_id)
+    if j is not None and recurring(dict(j)):
+        return await skip(app, job_id, why)
     row = await db.pool().fetchrow(
         "UPDATE jobs SET status='cancelled', last_outcome=$2, updated_at=now() WHERE id=$1 AND created_by='owner' "
         "AND status IN ('scheduled','waiting') RETURNING *", job_id, why)
@@ -205,7 +229,110 @@ async def cancel_http(job_id: int, request: Request):
         row = await cancel(request.app, job_id, "you cancelled it")
     except ValueError as exc:
         raise HTTPException(409, str(exc))
+    if row.get("skipped"):
+        return {"ok": True, "done": f"Skipped this time: {row['title']}. {row['skipped']}"}
     return {"ok": True, "done": f"Cancelled: {row['title']}."}
+
+
+# ---- automations: the next time, skipping one, pausing (Pulsar) ------------------------------------------
+
+def slot(app, job: dict, after: datetime) -> tuple[str, datetime, datetime, str]:
+    """An automation's next occurrence after `after`: (status, planned, next look, phase). An event's automation
+    goes back to waiting for its event ('armed')."""
+    rule = _j(job["rule"])
+    if rule.get("on"):
+        return "armed", now(), now(), "run"
+    nxt = next_time(rule, after, job["tz"])
+    if nxt is None:
+        raise ValueError("That automation has no next time.")
+    hs = int(rules(app)["heads_up_seconds"]) if job.get("heads_up") else 0
+    return "scheduled", nxt, nxt - timedelta(seconds=hs), "heads_up" if hs else "run"
+
+
+def next_said(app, job: dict, status: str, planned: datetime) -> str:
+    if status == "armed":
+        return f"It runs again {repeats(job)}."
+    return f"Next: {when.say(planned.astimezone(ZoneInfo(job['tz'])), now())}."
+
+
+async def skip(app, job_id: int, why: str = "you skipped it", only: tuple[str, ...] = ("scheduled", "waiting")) -> dict:
+    """Skip an automation's next run (also its Cancel during a heads-up, and his 'no' on its card): it carries on
+    from the occurrence after."""
+    from . import mailbox
+    async with db.pool().acquire() as conn, conn.transaction():
+        row = await conn.fetchrow("SELECT * FROM jobs WHERE id=$1 AND created_by='owner' FOR UPDATE", job_id)
+        if row is None:
+            raise ValueError("Nothing like that is scheduled.")
+        job = dict(row)
+        if job["status"] not in only:
+            if job["status"] in ("scheduled", "waiting"):
+                raise ValueError("That isn't waiting for you anymore.")
+            raise ValueError("It's running right now." if job["status"] == "running" else
+                             f"That one is {job['status']}, so there's no next run to skip.")
+        status, planned, nxt, phase = slot(app, job, max(_planned(job), now()))
+        await conn.execute(
+            "UPDATE jobs SET status=$2, planned_at=$3, due_at=$3, next_at=$4, phase=$5, task_id=NULL, tries=0, "
+            "mailbox_id=NULL, last_outcome='skipped', lease_until=NULL, spec = spec - 'approved', updated_at=now() "
+            "WHERE id=$1",
+            job_id, status, planned, nxt, phase)
+    if job["mailbox_id"]:
+        if await db.pool().fetchval("UPDATE mailbox_items SET status='expired', updated_at=now() WHERE id=$1 "
+                                    "AND status IN ('waiting','deferred') RETURNING id", job["mailbox_id"]):
+            await mailbox.notify(app.state.redis)
+    await _close_heads_up(app, job_id)
+    await _log(job_id, _planned(job), "skipped", None, why)
+    poke()
+    return {**job, "skipped": next_said(app, job, status, planned)}
+
+
+async def pause(app, job_id: int, why: str) -> dict | None:
+    """Stop an automation until he resumes it (his word, or too many failures in a row)."""
+    from . import mailbox
+    row = await db.pool().fetchrow(
+        "UPDATE jobs SET status='paused', lease_until=NULL, spec = spec - 'approved', updated_at=now() WHERE id=$1 "
+        "AND created_by='owner' "
+        "AND NOT (rule ? 'once') AND status IN ('scheduled','armed','waiting') RETURNING *", job_id)
+    if row is None:
+        return None
+    if row["mailbox_id"] and await db.pool().fetchval(
+            "UPDATE mailbox_items SET status='expired', updated_at=now() WHERE id=$1 AND status IN ('waiting','deferred') "
+            "RETURNING id", row["mailbox_id"]):
+        await mailbox.notify(app.state.redis)
+    await _close_heads_up(app, job_id)
+    await _log(job_id, _planned(dict(row)), "paused", None, why)
+    return dict(row)
+
+
+async def resume(app, job_id: int) -> dict | None:
+    """Back on, from the next time after now (never a backlog of what it missed while paused)."""
+    async with db.pool().acquire() as conn, conn.transaction():
+        row = await conn.fetchrow("SELECT * FROM jobs WHERE id=$1 AND created_by='owner' AND status='paused' FOR UPDATE",
+                                  job_id)
+        if row is None:
+            return None
+        job = dict(row)
+        status, planned, nxt, phase = slot(app, job, now())
+        await conn.execute(
+            "UPDATE jobs SET status=$2, planned_at=$3, due_at=$3, next_at=$4, phase=$5, task_id=NULL, tries=0, "
+            "fails_in_row=0, mailbox_id=NULL, spec = spec - 'approved', updated_at=now() WHERE id=$1",
+            job_id, status, planned, nxt, phase)
+    poke()
+    return {**job, "status": status, "planned_at": planned, "due_at": planned, "next": next_said(app, job, status, planned)}
+
+
+async def fire(app, job_id: int, why: str) -> bool:
+    """An armed automation's event happened: it runs now (after its heads-up), at most once per cooldown."""
+    hs = int(rules(app)["heads_up_seconds"])
+    row = await db.pool().fetchrow(
+        "UPDATE jobs SET status='scheduled', spec = spec - 'approved', "
+        "planned_at=now() + make_interval(secs => CASE WHEN heads_up THEN $2 ELSE 0 END), "
+        "due_at=now() + make_interval(secs => CASE WHEN heads_up THEN $2 ELSE 0 END), next_at=now(), "
+        "phase=CASE WHEN heads_up THEN 'heads_up' ELSE 'run' END, task_id=NULL, tries=0, updated_at=now() "
+        "WHERE id=$1 AND status='armed' RETURNING id", job_id, float(hs))
+    if row is not None:
+        log.info("automation %s fired: %s", job_id, why)
+        poke()
+    return row is not None
 
 
 # ---- the runner -----------------------------------------------------------------------------------------
@@ -294,7 +421,35 @@ def next_time(rule: dict, after: datetime, tz: str, every: float | None = None) 
             at = when.localize(datetime(d.year, d.month, d.day, h, m), z)
             if at > after:
                 return at
-    return None
+    if rule.get("monthday") and rule.get("time"):           # 31 (or more than the month has) = its last day
+        import calendar
+        z = ZoneInfo(tz)
+        h, m = (int(x) for x in str(rule["time"]).split(":"))
+        local = after.astimezone(z)
+        y, mo = local.year, local.month
+        for _ in range(3):
+            day = min(int(rule["monthday"]), calendar.monthrange(y, mo)[1])
+            at = when.localize(datetime(y, mo, day, h, m), z)
+            if at > after:
+                return at
+            y, mo = (y + 1, 1) if mo == 12 else (y, mo + 1)
+    return None                                             # once, or an event's ("on"): no next time by the clock
+
+
+def recurring(job: dict) -> bool:
+    """One of his automations (Pulsar): it repeats, by the clock or on an event, until he deletes it."""
+    return job.get("created_by", "owner") == "owner" and not _j(job.get("rule")).get("once")
+
+
+def repeats(job: dict) -> str | None:
+    """How an automation repeats, in his words ('every weekday at 7:00 AM', 'when Den PC comes online')."""
+    rule = _j(job.get("rule"))
+    if rule.get("once"):
+        return None
+    if rule.get("on"):
+        what = {"online": "comes online", "offline": "goes offline", "open": "opens"}.get(rule["on"], rule["on"])
+        return f"when {rule.get('device_name') or 'it'} {what}"
+    return when.say_rule(rule)
 
 
 def _planned(job: dict) -> datetime:
@@ -306,19 +461,37 @@ async def _finish(app, job: dict, outcome: str, note: str | None = None, task_id
     """End this run: schedule the next occurrence (or a system job's follow-up), or end the job; then log it.
     Raises LostLease if another runner holds the job now (it records the run instead)."""
     rule = _j(job["rule"])
+    if recurring(job) and again_in is None and await db.pool().fetchval(
+            "SELECT spec ? 'deleted' FROM jobs WHERE id=$1", job["id"]):          # he deleted it while it ran
+        await _mine("UPDATE jobs SET status='cancelled', runs=runs+1, last_outcome=$2, last_run_at=now(), lease_until=NULL, "
+                    "updated_at=now() WHERE id=$1", job["id"], outcome)
+        await _log(job["id"], _planned(job), outcome, task_id or job.get("task_id"), note, job.get("_started"))
+        return
     every = None
     if job["kind"] == "system" and job.get("name") in SYSTEM and SYSTEM[job["name"]][1] and rule.get("every_minutes"):
         every = max(0.05, float(SYSTEM[job["name"]][1](app)))          # config can change between runs
     nxt = now() + timedelta(seconds=again_in) if again_in is not None else (
         None if rule.get("once") else next_time(rule, now(), job["tz"], every))
+    auto = recurring(job) and again_in is None
+    if auto and outcome != "waiting":                   # his automations: failures in a row (one that works resets it)
+        await _mine("UPDATE jobs SET fails_in_row = CASE WHEN $2 IN ('failed','unconfirmed') THEN fails_in_row + 1 "
+                    "WHEN $2 = 'done' THEN 0 ELSE fails_in_row END WHERE id=$1", job["id"], outcome)
     if outcome == "waiting":
         await _mine("UPDATE jobs SET status='waiting', last_outcome=$2, lease_until=NULL, updated_at=now() WHERE id=$1",
+                    job["id"], outcome)
+    elif auto and rule.get("on"):                       # an event's automation: back to waiting for its event
+        await _mine("UPDATE jobs SET status=CASE WHEN spec ? 'deleted' THEN 'cancelled' ELSE 'armed' END, "
+                    "task_id=NULL, tries=0, runs=runs+1, last_outcome=$2, "
+                    "last_run_at=now(), lease_until=NULL, mailbox_id=NULL, phase='run', spec = spec - 'approved', updated_at=now() "
+                    "WHERE id=$1",
                     job["id"], outcome)
     elif nxt is not None:
         hs = int(rules(app)["heads_up_seconds"]) if job.get("heads_up") else 0
         new_spec = {k: v for k, v in (spec if spec is not None else _j(job["spec"])).items() if k != "approved"}
-        await _mine("UPDATE jobs SET status='scheduled', planned_at=$2, due_at=$2, next_at=$3, phase=$4, task_id=NULL, "
-                    "tries=0, runs=runs+1, last_outcome=$5, last_run_at=now(), lease_until=NULL, spec=$6::jsonb, "
+        await _mine("UPDATE jobs SET status=CASE WHEN spec ? 'deleted' THEN 'cancelled' ELSE 'scheduled' END, "
+                    "planned_at=$2, due_at=$2, next_at=$3, phase=$4, task_id=NULL, "
+                    "tries=0, runs=runs+1, last_outcome=$5, last_run_at=now(), lease_until=NULL, "
+                    "spec=CASE WHEN spec ? 'deleted' THEN spec ELSE $6::jsonb END, "
                     "mailbox_id=NULL, updated_at=now() WHERE id=$1", job["id"], nxt, nxt - timedelta(seconds=hs),
                     "heads_up" if hs else "run", outcome, json.dumps(new_spec))
     else:
@@ -326,6 +499,37 @@ async def _finish(app, job: dict, outcome: str, note: str | None = None, task_id
         await _mine("UPDATE jobs SET status=$2, runs=runs+1, last_outcome=$3, last_run_at=now(), lease_until=NULL, "
                     "updated_at=now() WHERE id=$1", job["id"], final.get(outcome, "done"), outcome)
     await _log(job["id"], _planned(job), outcome, task_id or job.get("task_id"), note, job.get("_started"))
+    if auto and outcome in ("failed", "unconfirmed"):
+        await _too_many_failures(app, job)
+
+
+async def _too_many_failures(app, job: dict) -> None:
+    """An automation that failed (or couldn't be confirmed) several times in a row is paused, and he's told."""
+    from . import pulsar
+    limit = pulsar.rules(app)["pause_after_failures"]
+    fails = await db.pool().fetchval("SELECT fails_in_row FROM jobs WHERE id=$1", job["id"]) or 0
+    if fails < limit:
+        return
+    if await pause(app, job["id"], f"{fails} failures in a row") is None:
+        return
+    last = await db.pool().fetchval("SELECT note FROM job_runs WHERE job_id=$1 AND outcome IN ('failed','unconfirmed') "
+                                    "ORDER BY id DESC LIMIT 1", job["id"])
+    await pulsar.notice(app, "automation_paused", f"job:{job['id']}:{job['runs']}",
+                        f"Paused an automation: {job['title']}",
+                        f"It didn't work {fails} times in a row" + (f" (last: {last})" if last else "") +
+                        ". Say \"resume the automation\" once it's fixed.")
+
+
+def _approved(job: dict, spec: dict) -> bool:
+    """His OK on a change-tier job's card is for that one occurrence (the time it was planned for): a retry of
+    it is still approved; the next run, a skipped one, or one after a pause or resume asks again."""
+    a = spec.get("approved")
+    if a is True:                                        # (from before approvals carried their time)
+        return not recurring(job)
+    try:
+        return abs(float(a) - _planned(job).timestamp()) < 1
+    except (TypeError, ValueError):
+        return False
 
 
 def _late(job: dict) -> float:
@@ -336,6 +540,12 @@ async def _execute(app, job: dict) -> None:
     renew = asyncio.create_task(_renew(job["id"]))
     job["_started"] = now()
     try:
+        if recurring(job) and _j(job["spec"]).get("deleted") and not (job.get("task_id") and await _started(job["task_id"])):
+            await _close_heads_up(app, job["id"])        # deleted while it ran: its retry or next heads-up never happens
+            await _mine("UPDATE jobs SET status='cancelled', last_outcome='deleted', lease_until=NULL, updated_at=now() "
+                        "WHERE id=$1", job["id"])
+            await _log(job["id"], _planned(job), "deleted", None, "you deleted it")
+            return
         late = _late(job)
         started = bool(job.get("task_id")) and await _started(job["task_id"])     # a started task is waited for
         if job["grace_seconds"] is not None and late > job["grace_seconds"] and not started:
@@ -355,6 +565,8 @@ async def _execute(app, job: dict) -> None:
             await _run_tool(app, job)
         elif job["kind"] == "plan":
             await _run_plan(app, job)
+        elif job["kind"] == "routine":
+            await _run_routine(app, job)
         else:
             await _finish(app, job, "failed", f"unknown kind {job['kind']}")
     except LostLease:
@@ -465,6 +677,12 @@ async def approve(app, job_id: int, ok: bool) -> str:
     """His answer on a scheduled change-tier job's card. Too late (past its grace) means it doesn't run. One
     guarded update each way, so a cancel or the sweep in between always wins."""
     from . import morpho
+    cur = await db.pool().fetchrow("SELECT * FROM jobs WHERE id=$1", job_id)
+    if cur is not None and recurring(dict(cur)) and cur["status"] == "waiting" and not ok:
+        sp = _j(cur["spec"])                             # an automation: no means not this time
+        out = await skip(app, job_id, "you said no", only=("waiting",))
+        await morpho.record(app, sp.get("tool") or "", sp.get("args") or {}, cur["user_id"], False, "schedule")
+        return f"Skipped this time. {out['skipped']}"
     if not ok:
         row = await db.pool().fetchrow("UPDATE jobs SET status='cancelled', last_outcome='skipped', updated_at=now() "
                                        "WHERE id=$1 AND status='waiting' RETURNING *", job_id)
@@ -475,7 +693,8 @@ async def approve(app, job_id: int, ok: bool) -> str:
         await _log(job_id, _planned(dict(row)), "skipped", None, "you said no")
         return "Skipped. It won't run."
     row = await db.pool().fetchrow(
-        "UPDATE jobs SET spec = spec || '{\"approved\": true}'::jsonb, status='scheduled', phase='run', next_at=now(), "
+        "UPDATE jobs SET spec = spec || jsonb_build_object('approved', extract(epoch FROM COALESCE(planned_at, due_at))), "
+        "status='scheduled', phase='run', next_at=now(), "
         "updated_at=now() WHERE id=$1 AND status='waiting' AND (grace_seconds IS NULL OR "
         "now() <= COALESCE(planned_at, due_at) + make_interval(secs => grace_seconds)) RETURNING id", job_id)
     if row is not None:
@@ -491,11 +710,22 @@ async def approve(app, job_id: int, ok: bool) -> str:
         raise ValueError("That isn't waiting for you anymore.")
     job = dict(late)
     await _log(job_id, _planned(job), "missed", None, "your OK came after it was too late")
+    if recurring(job):                                   # an automation carries on from its next time
+        await _carry_on(app, job)
     if job["mailbox_id"]:
         await db.pool().execute("UPDATE mailbox_items SET status='expired', updated_at=now() WHERE id=$1 "
                                 "AND status IN ('waiting','deferred')", job["mailbox_id"])
     raise ValueError(f"That was due {when.say(_planned(job).astimezone(ZoneInfo(job['tz'])))}; "
                      "it's too late to run it now.")
+
+
+async def _carry_on(app, job: dict) -> None:
+    """An automation whose run was missed (no OK in time) goes on to its next time."""
+    status, planned, nxt, phase = slot(app, job, max(_planned(job), now()))
+    await db.pool().execute(
+        "UPDATE jobs SET status=$2, planned_at=$3, due_at=$3, next_at=$4, phase=$5, task_id=NULL, tries=0, mailbox_id=NULL, "
+        "spec = spec - 'approved', updated_at=now() WHERE id=$1 AND status='missed'", job["id"], status, planned, nxt, phase)
+    poke()
 
 
 async def _started(task_id: Any) -> bool:
@@ -533,7 +763,7 @@ async def _run_tool(app, job: dict) -> None:
     spec = _j(job["spec"])
     try:
         task_id = await _launch(app, job, StartTask(tool=spec["tool"], args=spec.get("args") or {}, user=job["user_id"],
-                                                    trigger="schedule", confirmed=bool(spec.get("approved"))))
+                                                    trigger=_trigger(job), confirmed=_approved(job, spec)))
     except Dispatched as exc:
         await _close_heads_up(app, job["id"])
         await _finish(app, job, "failed", f"{exc} (not retried: it may still have happened)")
@@ -545,6 +775,8 @@ async def _run_tool(app, job: dict) -> None:
         await _close_heads_up(app, job["id"])
         if d.get("needs_confirmation"):
             await _finish(app, job, "waiting", "waiting for your OK")
+            if await db.pool().fetchval("SELECT status FROM jobs WHERE id=$1", job["id"]) != "waiting":
+                return                                   # deleted while it ran: nothing to ask
             await _card(app, job, str(d.get("reason") or "it needs your OK"))
             await _tell(app, job, f"It's time: {job['title']}", "It needs your OK first: it's in your mailbox.")
             return
@@ -565,9 +797,87 @@ async def _run_tool(app, job: dict) -> None:
             await _tell(app, job, "Asked, not confirmed", f"{head}. I couldn't confirm it happened: {why}"[:250])
         else:
             await _finish(app, job, "done", head, task_id)
-            await _tell(app, job, "Done", head[:250])
+            if not recurring(job):                       # an automation that worked is in the digest, not on his phone
+                await _tell(app, job, "Done", head[:250])
         return
     await _retry_or_fail(app, job, str(res.get("error") or res["status"]), task_id)
+
+
+def _trigger(job: dict) -> str:
+    return "automation" if recurring(job) else "schedule"
+
+
+ROUTINE_END = {"done": "done", "gaps": "unconfirmed", "failed": "failed", "stopped": "failed", "expired": "failed"}
+
+
+async def _run_routine(app, job: dict) -> None:
+    """One of his routines (a skill made from his words, Morpho's): its plan runs, each step governed and checked
+    from its own result, and the run is what the plan ends as. A step that needs his OK waits on the plan's panel,
+    but only as long as the job's grace: an OK after that is too late, so the plan is stopped and the run missed.
+    A routine is never started twice: once its plan exists, that plan is followed (after a restart too)."""
+    from . import admiral
+    from .tasks import StartTask, wait_for_result
+    spec = _j(job["spec"])
+    try:
+        task_id = await _launch(app, job, StartTask(tool="morpho.run", args={"skill": str(spec["skill_id"])},
+                                                    user=job["user_id"], trigger=_trigger(job)))
+    except Dispatched as exc:
+        task_id = str(job["task_id"])
+        if not await _plan_of(task_id):
+            await _close_heads_up(app, job["id"])
+            await _finish(app, job, "failed", f"{exc} (not retried: it may still have started)")
+            await _tell(app, job, "Not sure it started", f"{job['title']}: the routine didn't confirm it started, and I "
+                                                         "didn't try again so it can't run twice. Check it."[:250])
+            return
+    await _close_heads_up(app, job["id"])
+    res = await wait_for_result(task_id, 60)
+    plan_id = (((res or {}).get("result") or {}).get("plan") or {}).get("id") or await _plan_of(task_id)
+    if not plan_id:
+        if res is None:                                  # it may still start: never a second one
+            await _finish(app, job, "failed", "the routine didn't answer (not retried, so it can't run twice)", task_id)
+            await _tell(app, job, "Not sure it started", f"{job['title']}: the routine didn't answer in time.")
+            return
+        await _retry_or_fail(app, job, str(res.get("error") or "the routine didn't start"), task_id)
+        return
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + STEP_WAIT
+    grace_end = _planned(job) + timedelta(seconds=job["grace_seconds"]) if job["grace_seconds"] is not None else None
+    status, report = "running", {}
+    while True:
+        row = await db.pool().fetchrow("SELECT status, report, error FROM plans WHERE id=$1", uuid.UUID(str(plan_id)))
+        status = row["status"] if row else "failed"
+        if status in ROUTINE_END:
+            report = _j(row["report"]) if row and row["report"] else {"headline": (row or {}).get("error")}
+            break
+        if status == "waiting":                          # a step waits for his OK: only until the grace runs out
+            if grace_end is not None and now() > grace_end:
+                if not await admiral.stop_plan(app, str(plan_id), "Your OK came after it was too late, so I stopped it."):
+                    continue                             # it moved on just now (his answer won): look again
+                due = when.say(_planned(job).astimezone(ZoneInfo(job["tz"])))
+                await _finish(app, job, "missed", f"a step waited for your OK past its time (due {due}); stopped", task_id)
+                await _tell(app, job, "Missed", f"{job['title']} was due {due}; a step needed your OK and it didn't come "
+                                                "in time, so I stopped it.")
+                return
+            deadline = loop.time() + STEP_WAIT            # once he answers, the rest gets a full window
+        elif loop.time() > deadline:
+            await _finish(app, job, "failed", f"still running after {STEP_WAIT // 60} minutes", task_id)
+            await _tell(app, job, "That didn't finish", f"{job['title']} was still running after {STEP_WAIT // 60} minutes.")
+            return
+        await asyncio.sleep(1)
+    head = str((report or {}).get("headline") or job["title"])[:250]
+    outcome = ROUTINE_END[status]
+    gaps = "; ".join((report or {}).get("gaps") or [])
+    await _finish(app, job, outcome, (gaps or head)[:300], task_id)
+    # A plan that failed or ended with gaps has already told him (its own notification); one that worked is in
+    # the digest when it's an automation's.
+    if outcome == "done" and not recurring(job):
+        await _tell(app, job, "Done", head)
+
+
+async def _plan_of(task_id: Any) -> str | None:
+    pid = await db.pool().fetchval("SELECT id FROM plans WHERE task_id=$1 ORDER BY created_at LIMIT 1",
+                                   uuid.UUID(str(task_id)))
+    return str(pid) if pid else None
 
 
 async def _retry_or_fail(app, job: dict, error: str, task_id: Any = None) -> None:
@@ -633,13 +943,21 @@ async def sweep(app, spec: dict) -> dict | None:
     for j in await db.pool().fetch(
             "SELECT id, COALESCE(planned_at, due_at) AS due_at, mailbox_id FROM jobs WHERE status='waiting' "
             "AND grace_seconds IS NOT NULL AND COALESCE(planned_at, due_at) < now() - make_interval(secs => grace_seconds)"):
-        await db.pool().execute("UPDATE jobs SET status='missed', last_outcome='missed', updated_at=now() "
-                                "WHERE id=$1 AND status='waiting'", j["id"])
+        gone = await db.pool().fetchrow("UPDATE jobs SET status='missed', last_outcome='missed', updated_at=now() "
+                                        "WHERE id=$1 AND status='waiting' RETURNING *", j["id"])
+        if gone is None:
+            continue
         await _log(j["id"], j["due_at"], "missed", None, "no OK in time")
+        if recurring(dict(gone)):
+            await _carry_on(app, dict(gone))
         if j["mailbox_id"]:
             changed |= bool(await db.pool().fetchval(
                 "UPDATE mailbox_items SET status='expired', updated_at=now() WHERE id=$1 AND status IN ('waiting','deferred') "
                 "RETURNING id", j["mailbox_id"]))
+    for j in await db.pool().fetch(                      # cut off between "missed" and its next time (a restart)
+            "SELECT * FROM jobs WHERE status='missed' AND created_by='owner' AND NOT (rule ? 'once') "
+            "AND updated_at < now() - interval '1 minute'"):
+        await _carry_on(app, dict(j))
     if changed:
         await mailbox.notify(app.state.redis)
     return None
@@ -658,6 +976,18 @@ async def resume_plan(app, spec: dict) -> dict | None:
 _REMIND = __import__("re").compile(r"^(?:please\s+)?remind\s+me\s+(?P<rest>.+)$", __import__("re").I)
 _LEAD = __import__("re").compile(r"^(?:to|that|about|of)\s+", __import__("re").I)
 NOT_SCHEDULED = ("admiral.schedule", "admiral.scheduled", "admiral.unschedule", "admiral.stop", "admiral.plans")
+# Never scheduled: her own planning, Pulsar's (an automation is saved only by his confirmation of its read-back),
+# and Morpho's except running a skill.
+NEVER_SCHEDULED = ("admiral.", "pulsar.", "morpho.")
+
+
+def schedulable(tool: str) -> bool:
+    return not tool.startswith(NEVER_SCHEDULED) or tool == "morpho.run"
+
+
+def _once_patterns(app) -> list:
+    return [p for p in app.state.config.current.fastpath.patterns
+            if p.tool not in NOT_SCHEDULED and (schedulable(p.tool) or p.tool == "admiral.plan")]
 
 
 def _sentence(s: str) -> str:
@@ -668,8 +998,10 @@ def _sentence(s: str) -> str:
 async def _resolve(app, what: str) -> tuple[str, dict, str]:
     """His words for a command -> exactly what will run, settled now (the same fast path as saying it now)."""
     from . import fastpath, registry
-    patterns = [p for p in app.state.config.current.fastpath.patterns if p.tool not in NOT_SCHEDULED]
-    m = fastpath.match(what, patterns)
+    if when.mentions_repeat(what):
+        raise ValueError("That repeats, so it's an automation, not something for once. Say it again the same way and "
+                         "I'll read it back as one.")
+    m = fastpath.match(what, _once_patterns(app))
     if m is None:
         raise ValueError(f"I can't tell exactly which command \"{what}\" is, so I didn't schedule it. Say it the way "
                          f"you'd ask me right now (like \"lock the front door\"), or ask me to remind you instead.")
@@ -690,9 +1022,11 @@ def fast_ok(app, say_: str) -> bool:
     except when.Unclear:
         return False
     if m or _REMIND.match(rest):
-        return bool(_LEAD.sub("", rest).strip())
-    patterns = [p for p in app.state.config.current.fastpath.patterns if p.tool not in NOT_SCHEDULED]
-    return fastpath.match(rest, patterns) is not None
+        text = _LEAD.sub("", rest).strip()
+        return bool(text) and not when.repeat_first(text)       # "remind me at 5 every day to…" repeats
+    if when.mentions_repeat(rest):
+        return False                                            # what's left still repeats: the model hears it
+    return fastpath.match(rest, _once_patterns(app)) is not None
 
 
 async def schedule_tool(app, user: str, args: dict) -> dict:
@@ -719,6 +1053,8 @@ async def schedule_tool(app, user: str, args: dict) -> dict:
         raise ValueError("That time has already passed.")
     if reminder and _REMIND.match(reminder):
         reminder = _LEAD.sub("", _REMIND.match(reminder).group("rest"))
+    if (reminder and when.repeat_first(reminder)) or (what and not reminder and when.mentions_repeat(what)):
+        raise ValueError("That repeats, so it's an automation (pulsar.automate), not something for once.")
     if what and not (reminder or goal or tool) and _REMIND.match(what):
         reminder, what = _LEAD.sub("", _REMIND.match(what).group("rest")), ""
     task_id = str(args.get("_self") or "")
@@ -734,7 +1070,7 @@ async def schedule_tool(app, user: str, args: dict) -> dict:
         if goal:
             kind, title, spec = "plan", f"Plan: {_sentence(goal)}"[:200], {"goal": goal}
         elif tool:
-            if tool.startswith("admiral."):
+            if not schedulable(tool):
                 raise ValueError("I can't schedule that.")
             resolved = await registry.resolve(app.state.redis, tool)
             if resolved is None:
@@ -795,8 +1131,10 @@ def _hay(job: dict) -> str:
     ap = due.strftime("%p").lower()
     clock = [f"{h12}{ap}", h12, due.strftime("%H:%M"), f"{h12}:{due.strftime('%M')}{ap}", due.strftime("%A").lower(),
              "tomorrow" if due.date() == (now().astimezone(due.tzinfo).date() + timedelta(days=1)) else "today"]
-    kind = {"reminder": "reminder", "plan": "plan", "tool": "action"}.get(job["kind"], "")
-    return " ".join([job["title"].lower(), kind, *clock])
+    kind = {"reminder": "reminder", "plan": "plan", "tool": "action", "routine": "routine"}.get(job["kind"], "")
+    extra = ["automation", (repeats(job) or "").lower(), str(_j(job.get("spec")).get("name") or "").lower()] \
+        if recurring(job) else []
+    return " ".join([job["title"].lower(), kind, *clock, *extra])
 
 
 async def unschedule_tool(app, user: str, args: dict) -> dict:
@@ -811,11 +1149,17 @@ async def unschedule_tool(app, user: str, args: dict) -> dict:
         stop = {"the", "my", "a", "an", "one", "that", "this", "job", "scheduled", "to", "for", "at", "of", "on", "timer"}
         words = [w for w in re.findall(r"[a-z0-9:]+", when._clean(str(args.get("which") or ""))) if w not in stop]
         words = ["reminder" if w == "reminders" else w for w in words]
-        hits = [j for j in up if all(w in _hay(j) for w in words)] if words else (up if len(up) == 1 else [])
+        once = [j for j in up if not recurring(j)]
+        hits = [j for j in once if all(w in _hay(j) for w in words)] if words else (once if len(once) == 1 else [])
+        if not hits and words and any(all(w in _hay(j) for w in words) for j in up if recurring(j)):
+            raise ValueError("That's one of your automations. Say \"skip the next one\" to skip a single run, or "
+                             "\"delete the … automation\" to stop it for good.")
     if not hits:
         raise ValueError("Nothing scheduled matches that. Say \"what's scheduled\" to see them.")
     if len(hits) > 1:
         n = now()
         raise ValueError("Which one? " + "; ".join(f"{j['title']} ({view(j, n)['when']})" for j in hits[:5]))
+    if recurring(hits[0]):
+        raise ValueError("That's one of your automations: \"skip\" or \"delete\" it instead.")
     job = await cancel(app, hits[0]["id"], "you cancelled it")
     return {"headline": f"Cancelled: {job['title']}", "did": {"node": "Admiral", "what": f"Cancelled: {job['title']}"}}

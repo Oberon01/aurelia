@@ -1,0 +1,58 @@
+# Pulsar — automations, routines and initiative (Phase 10).
+#
+# An automation repeats one of her commands, a routine or a reminder, by the clock or when something happens.
+# Making one grants nothing: each run goes through governance like a request of yours, when it runs, so a
+# change-tier action still asks you each time (unless you've let her earn trust for exactly that, Morpho), and
+# physical actions get Admiral's heads-up with a Cancel first. She only ever drafts an automation or routine and
+# reads it back; it's saved by your confirmation (save is change-tier, never trusted, and never offered to the
+# model). She never creates or approves one on her own.
+function: pulsar
+enabled: true
+
+tools:
+  automate:       { tier: act }        # a draft, read back to you (nothing saved)
+  routine:        { tier: act }        # a draft, read back to you (nothing saved)
+  save:           { tier: change }     # your confirmation of a read-back saves it
+  automations:    { tier: reference }
+  notices:        { tier: reference }
+  pause:          { tier: act }
+  resume:         { tier: act }
+  skip:           { tier: act }        # the next run only
+  delete:         { tier: act }
+  forget_routine: { tier: act }
+
+rate_limit_per_minute: 30
+
+rules:
+  min_every_minutes: 15          # "every N minutes" no more often than this
+  pause_after_failures: 3        # failed (or unconfirmed) runs in a row before an automation is paused
+  event_cooldown_minutes: 10     # an event's automation runs at most once in this long (a flapping computer)
+  # quiet_hours: "23:00-07:00"   # leave out to use the ambient screen's quiet hours (config/aurelia.yaml)
+
+  # Initiative: how you hear about each thing she notices.
+  #   critical  your phone and every open display, even in quiet hours
+  #   high      your phone now; during quiet hours, held until they end
+  #   normal    the mailbox and your displays, no phone; in the digest
+  #   low       the digest only
+  severity:
+    door_unlocked_at_night: critical   # a lock left unlocked during quiet hours
+    water_leak: critical               # a leak sensor that's wet
+    server_disk_low: critical          # the server's disk nearly full
+    computer_down: high                # a server-role computer (or one listed below) stopped checking in
+    update_failed: high                # a release that failed or was rolled back
+    automation_paused: high            # an automation paused after failing pause_after_failures times
+    budget_ahead: normal               # the model budget running out before the month ends
+    mailbox_waiting: normal            # mailbox items waiting longer than mailbox_waiting_hours
+    automations_ready: normal          # automations you approved before Pulsar existed, now running
+    battery_low: low                   # a lock or sensor battery low
+
+  # How often a notice is repeated while it lasts and you haven't said "got it" (hours; 0 = once).
+  repeat_hours: { critical: 1, high: 24, normal: 0, low: 0 }
+
+  watch:
+    server_disk_free_percent: 10
+    computer_down_minutes: 10
+    always_on: []                      # computers to watch besides servers, by name: ["TV PC"]
+    mailbox_waiting_hours: 24
+    home_check_minutes: 10             # how often she reads the home's state (locks, leak sensors, batteries)
+    battery_low_percent: 15

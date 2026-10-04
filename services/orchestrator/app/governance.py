@@ -48,6 +48,9 @@ class UserEntry(BaseModel):
     role: str = "member"
     # Per-user narrowing: tools this user may not run, e.g. {"nebula": ["purchase"]}
     deny: dict[str, list[str]] = {}
+    # Or the only tools this user may run, e.g. {"orbit": ["status"]}: anything not listed is denied, including
+    # tools added later. (A system user that only looks gets this, not a deny list that new tools slip past.)
+    allow: dict[str, list[str]] | None = None
 
 
 class Charter(BaseModel):
@@ -135,7 +138,8 @@ class GovernanceStore:
             return Decision(allowed=False, tier="never", reason=f"no policy for function '{function}'")
         if not policy.enabled:
             return Decision(allowed=False, tier="never", reason=f"function '{function}' is disabled")
-        if tool in self.charter.users[user].deny.get(function, []):
+        who = self.charter.users[user]
+        if tool in who.deny.get(function, []) or (who.allow is not None and tool not in who.allow.get(function, [])):
             return Decision(allowed=False, tier="never", reason=f"'{function}.{tool}' is denied for {user}")
 
         tier = policy.tools[tool].tier if tool in policy.tools else enforced.default_tier

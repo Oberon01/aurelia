@@ -41,9 +41,12 @@ def test_approve_with_changes_stores_the_automation(stack):
     bad = decide(stack, item_id, action="modify", changes={"schedule": {"time": "25:00", "days": ["mon"]}})
     assert bad.status_code == 400 and "07:30" in bad.json()["detail"]
     ok = decide(stack, item_id, action="modify", changes={"schedule": {"time": "07:20", "days": ["mon", "wed", "fri"]}})
-    assert ok.json()["status"] == "modified" and "Pulsar" in ok.json()["done"]
-    row = sql(stack, "SELECT tool, schedule, status FROM automations WHERE from_item=$1", item_id)[0]
-    assert row["tool"] == "testfn.status" and '"07:20"' in row["schedule"] and row["status"] == "waiting_for_pulsar"
+    assert ok.json()["status"] == "modified"
+    assert ok.json()["done"].startswith("Saved: Every Monday, Wednesday and Friday at 7:20 AM:")   # Pulsar runs it now
+    row = sql(stack, "SELECT tool, schedule, status, job_id FROM automations WHERE from_item=$1", item_id)[0]
+    assert row["tool"] == "testfn.status" and '"07:20"' in row["schedule"] and row["status"] == "active"
+    job = sql(stack, "SELECT kind, status, rule FROM jobs WHERE id=$1", row["job_id"])[0]
+    assert (job["kind"], job["status"]) == ("tool", "scheduled") and '"07:20"' in job["rule"]
     assert decide(stack, item_id, action="approve").status_code == 409        # already decided
     assert propose(stack).json()["result"] == "already_approved"
     assert count(stack) == 0

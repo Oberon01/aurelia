@@ -107,3 +107,10 @@ def test_a_phrase_must_have_words_of_its_own():
 def test_slot_values_go_back_only_as_whole_values():
     assert morpho._generalize({"q": "under $1400 for 4 people", "n": 4}, {"budget": "4"}) == \
         {"q": "under $1400 for {budget} people", "n": "{budget}"}
+
+
+def test_a_routines_name_can_be_one_word_but_a_skills_phrase_cant():
+    from app import morpho
+    assert not morpho.phrase_ok("goodnight") and morpho.phrase_ok("goodnight", short_ok=True)
+    assert not morpho.phrase_ok("{thing}", short_ok=True)                     # a lone slot never catches everything
+    assert morpho.never("pulsar.save", {}) and morpho.never("pulsar.automate", {})   # trust is never earned for these
