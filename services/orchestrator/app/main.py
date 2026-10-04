@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
-from . import (admiral, ambient, assistant, auth, constellation, push, quasar, db, digest, glance, learning, llm_api, mailbox, memory, mnemosyne,
+from . import (admiral, ambient, engine, assistant, auth, constellation, push, quasar, db, digest, glance, learning, llm_api, mailbox, memory, mnemosyne,
                nodes, registry, releases, tasks)
 from .config import ConfigStore
 from .events import CHANNEL
@@ -35,8 +35,7 @@ async def lifespan(app: FastAPI):
     app.state.redis = Redis.from_url(settings.redis_url, socket_timeout=60)
     await db.connect(settings.database_url)
     app.state.draining = False
-    maintenance = asyncio.create_task(memory.maintenance_loop(app))
-    record = asyncio.create_task(mnemosyne.record_loop(app))
+    timers = asyncio.create_task(engine.loop(app))          # Admiral's engine: her own jobs and his scheduled ones
     mnemo = asyncio.create_task(mnemosyne.register_loop(app))
     stars = asyncio.create_task(constellation.register_loop(app))
     media = asyncio.create_task(quasar.register_loop(app))
@@ -51,8 +50,7 @@ async def lifespan(app: FastAPI):
         app.state.draining = True
         watcher.cancel()
         gov_watcher.cancel()
-        maintenance.cancel()
-        record.cancel()
+        timers.cancel()
         mnemo.cancel()
         stars.cancel()
         media.cancel()
@@ -82,6 +80,7 @@ app.include_router(quasar.router)
 app.include_router(push.router)
 app.include_router(quasar.node_router)
 app.include_router(admiral.router)
+app.include_router(engine.router)
 
 
 VIEW = Path(__file__).parent / "static" / "view.html"

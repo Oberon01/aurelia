@@ -217,12 +217,23 @@ def test_building_the_speaker_is_watched_to_the_end_and_he_hears_how_it_went(app
     monkeypatch.setattr(constellation, "_ask_new", ask)
     monkeypatch.setattr(constellation, "_tell", tell)
     monkeypatch.setattr(constellation, "_asker", asker)
-    monkeypatch.setattr(quasar.asyncio, "sleep", (lambda real: (lambda s: real(0)))(asyncio.sleep))
+    from app import engine
+    queued = []
+
+    async def after(app, seconds, name, spec, title=None):        # the watch is a job on Admiral's engine
+        queued.append((seconds, name, spec))
+        return 1
+    monkeypatch.setattr(engine, "after", after)
 
     async def go():
-        out = await quasar.speaker(app_with(FakeSp()), "owner", {"target": "tv pc", "_self": "t"})
-        for _ in range(20):
-            await asyncio.sleep(0)
+        app = app_with(FakeSp())
+        out = await quasar.speaker(app, "owner", {"target": "tv pc", "_self": "t"})
+        (secs, name, spec), = queued
+        assert name == "quasar.build_watch" and secs == quasar.BUILD_LOOK_EVERY
+        step = engine.SYSTEM[name][0]
+        nxt = await step(app, spec)                               # still building: look again later
+        assert nxt["again_in"] == quasar.BUILD_LOOK_EVERY
+        assert await step(app, nxt["spec"]) is None               # done: said, and the watch ends
         return out
     out = run(go())
     assert out["headline"] == "Building librespot on TV PC" and "I'll tell you" in out["did"]["what"]

@@ -1,4 +1,5 @@
-"""After a restart she watches for the computer to come back, and says so (or files an urgent card)."""
+"""After a restart she watches for the computer to come back, and says so (or files an urgent card). The watch
+is a job on Admiral's engine: each look is one step, so it carries on across her own restarts."""
 import asyncio
 import os
 
@@ -9,21 +10,12 @@ from app import constellation as C  # noqa: E402
 
 
 def run_watch(monkeypatch, kind, states, booted=111, wait=60):
-    """states: what each 5-second check sees, as (online, booted_at)."""
+    """states: what each 5-second look sees, as (online, booted_at). Steps run until the watch settles."""
     told, alerts, seq = [], [], list(states)
-    current = {"v": seq[0]}
-
-    async def fake_sleep(s):
-        current["v"] = seq.pop(0) if seq else current["v"]
-    monkeypatch.setattr(C.asyncio, "sleep", fake_sleep)
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(C.time, "time", lambda: clock["t"])
     monkeypatch.setattr(C, "BACK_WAIT", wait)
-
-    class Loop:
-        t = 0.0
-        def time(self):
-            Loop.t += 5
-            return Loop.t
-    monkeypatch.setattr(C.asyncio, "get_running_loop", lambda: Loop())
+    current = {"v": seq[0]}
 
     async def online(app, nid): return current["v"][0]
     async def row(nid): return {"id": nid, "name": "TV PC", "info": {"booted_at": current["v"][1]}}
@@ -34,7 +26,23 @@ def run_watch(monkeypatch, kind, states, booted=111, wait=60):
     monkeypatch.setattr(C, "_tell", tell)
     monkeypatch.setattr(C.nodes, "_alert", alert)
     app = type("A", (), {"state": type("S", (), {"redis": None})()})()
-    asyncio.run(C._watch(app, "owner", {"id": 3, "name": "TV PC"}, 7, kind, booted))
+    st = {"user": "owner", "node": {"id": 3, "name": "TV PC"}, "display": 7, "kind": kind, "booted": booted,
+          "started": clock["t"], "went_away": False}
+    looks = 0
+
+    async def go():
+        nonlocal st, looks
+        while True:
+            clock["t"] += C.WATCH_EVERY                     # the engine runs each look WATCH_EVERY seconds apart
+            current["v"] = seq.pop(0) if seq else current["v"]
+            looks += 1
+            out = await C.watch_step(app, st)
+            if out is None:
+                return
+            assert out["again_in"] == C.WATCH_EVERY
+            st = out["spec"]
+            assert looks < 200
+    asyncio.run(go())
     return told, alerts
 
 
@@ -60,3 +68,10 @@ def test_shutdown_and_sleep_say_when_its_gone(monkeypatch):
     assert told == ["TV PC is off"]
     told, _ = run_watch(monkeypatch, "sleep", [(True, 111)] * 40)
     assert told == ["TV PC is still on"]
+
+
+def test_the_watch_state_survives_as_plain_json(monkeypatch):
+    import json
+    st = {"user": "owner", "node": {"id": 3, "name": "TV PC"}, "display": None, "kind": "wake", "booted": None,
+          "started": 1.0, "went_away": True}
+    assert json.loads(json.dumps(st)) == st                 # what the engine stores between looks

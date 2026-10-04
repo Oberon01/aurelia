@@ -977,36 +977,56 @@ async def speaker(app, user: str, args: dict) -> dict:
     if d.get("state") not in ("installing", "building", "done"):
         raise ValueError(f"{node['name']} didn't say it started building.")
     display = await constellation._asker(args.get("_self"))
-    asyncio.create_task(_watch_build(app, user, node, display))
+    await _watch_build(app, user, node, display)
     return {"headline": f"Building librespot on {node['name']}",
             "did": {"node": node["name"], "what": (d.get("step") or "Started") + ". I'll tell you when it's ready "
                                                   "(10-20 minutes)."}}
 
 
+BUILD_LOOK_EVERY = 30
+
+
 async def _watch_build(app, user: str, node: dict, display: int | None) -> None:
+    """Watch a librespot build until it's done (a job on Admiral's engine: it survives my own restarts)."""
+    from . import engine
+    await engine.after(app, BUILD_LOOK_EVERY, "quasar.build_watch",
+                       {"user": user, "node": {"id": node["id"], "name": node["name"]}, "display": display,
+                        "until": time.time() + BUILD_WATCH_MINUTES * 60}, f"Watch the librespot build on {node['name']}")
+
+
+async def build_step(app, st: dict) -> dict | None:
     from . import constellation
-    loop = asyncio.get_running_loop()
-    end = loop.time() + BUILD_WATCH_MINUTES * 60
-    while loop.time() < end:
-        await asyncio.sleep(30)
-        try:
-            st = await constellation._ask_new(app, node, "speaker_build_status", {}, timeout=20)
-        except ValueError:
-            continue                                        # asleep or busy: ask again later
-        if st.get("state") == "done":
-            ok = st.get("running")
-            await constellation._tell(app, user, display, f"{node['name']} is a Spotify speaker",
-                                      f"librespot {st.get('version')} is built on {node['name']}" +
-                                      (" and running. Once, pick it in the Spotify app on your phone (the speaker icon); "
-                                       "after that I can start music there myself." if ok else
-                                       ", but it didn't stay running; ask me to play something there and I'll say why."))
-            return
-        if st.get("state") == "failed":
-            await constellation._tell(app, user, display, f"librespot didn't build on {node['name']}",
-                                      f"It stopped: {st.get('error') or 'no reason given'}.")
-            return
+    user, node, display = st["user"], st["node"], st.get("display")
+    try:
+        bs = await constellation._ask_new(app, node, "speaker_build_status", {}, timeout=20)
+    except ValueError:
+        bs = {}                                             # asleep or busy: ask again later
+    if bs.get("state") == "done":
+        ok = bs.get("running")
+        await constellation._tell(app, user, display, f"{node['name']} is a Spotify speaker",
+                                  f"librespot {bs.get('version')} is built on {node['name']}" +
+                                  (" and running. Once, pick it in the Spotify app on your phone (the speaker icon); "
+                                   "after that I can start music there myself." if ok else
+                                   ", but it didn't stay running; ask me to play something there and I'll say why."))
+        return None
+    if bs.get("state") == "failed":
+        await constellation._tell(app, user, display, f"librespot didn't build on {node['name']}",
+                                  f"It stopped: {bs.get('error') or 'no reason given'}.")
+        return None
+    if time.time() < float(st["until"]):
+        return {"again_in": BUILD_LOOK_EVERY, "spec": st}
     await constellation._tell(app, user, display, f"Still no Spotify speaker on {node['name']}",
-                              "The build hasn't finished after 100 minutes, so I stopped watching. Ask me again later.")
+                              f"The build hasn't finished after {BUILD_WATCH_MINUTES} minutes, so I stopped watching. "
+                              "Ask me again later.")
+    return None
+
+
+def _register_jobs() -> None:
+    from . import engine
+    engine.system("quasar.build_watch")(build_step)
+
+
+_register_jobs()
 
 
 @router.get("/spotify/login", include_in_schema=False)

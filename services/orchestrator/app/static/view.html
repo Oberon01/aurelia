@@ -1237,6 +1237,11 @@ function body(tool, d) {
   if (d.onscreen && typeof d.onscreen === "object") { wrap.append(onscreenView(d.onscreen, !!d.did)); used.add("onscreen"); used.add("headline"); }
   if (d.did && typeof d.did === "object") { wrap.prepend(didView(d.did)); used.add("did"); used.add("headline"); }
   if (d.plan && typeof d.plan === "object" && Array.isArray(d.plan.steps)) { wrap.append(planView(d.plan)); used.add("plan"); used.add("headline"); }
+  if (d.scheduled && typeof d.scheduled === "object" && d.scheduled.job) { wrap.append(scheduledView(d.scheduled)); used.add("scheduled"); used.add("headline"); }
+  if (d.schedule && typeof d.schedule === "object" && Array.isArray(d.schedule.upcoming)) { wrap.append(scheduleView(d.schedule)); used.add("schedule"); used.add("headline"); }
+  if (d.heads_up && typeof d.heads_up === "object" && d.heads_up.job) { wrap.append(headsUpView(d.heads_up)); used.add("heads_up"); used.add("headline"); }
+  if (d.reminder && typeof d.reminder === "object") { wrap.append(el("div", "facts", d.reminder.late || (d.reminder.when ? `Your reminder for ${d.reminder.when}.` : "Your reminder.")));
+                                                       used.add("reminder"); used.add("headline"); }
   if (d.budget && typeof d.budget === "object" && typeof d.budget.cap === "number") { wrap.append(budgetView(d.budget)); used.add("budget"); used.add("headline"); }
   if (d.plans && Array.isArray(d.plans.items)) { wrap.append(plansView(d.plans)); used.add("plans"); used.add("headline"); }
   if (d.packages && Array.isArray(d.packages.items)) { wrap.append(packagesView(d.packages)); used.add("packages"); used.add("headline"); }
@@ -1838,6 +1843,68 @@ function planView(p) {
   box.append(list);
   return box;
 }
+// Admiral's engine: what's scheduled, each with its exact time and a Cancel.
+async function cancelJob(id, box) {
+  box.querySelectorAll("button").forEach(x => x.disabled = true);
+  try { const out = await planPost(`/admiral/jobs/${id}/cancel`, {}); box.replaceChildren(el("div", "more", out.done || "Cancelled.")); }
+  catch (e) { box.querySelectorAll("button").forEach(x => x.disabled = false); say(e.message); }
+}
+function jobRow(j) {
+  const row = el("div"); row.style.cssText = "display:flex;flex-direction:column;gap:2px;padding:6px 0;border-bottom:1px solid var(--cyan-soft)";
+  const t = el("div", null, j.title); t.style.color = "var(--ink-strong)";
+  row.append(t, el("div", "facts", `${j.when}${j.in && j.in !== "now" ? " · " + j.in : ""}`));
+  const what = j.kind === "tool" ? [j.tool, ...Object.entries(j.args || {}).map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`)].join(" · ")
+             : j.kind === "reminder" ? "reminder" : j.kind === "plan" ? "plan" : "";
+  if (what) row.append(el("div", "more", what + (j.heads_up ? " · heads-up first" : "")));
+  if (j.note) row.append(el("div", "more", j.note));
+  if (["scheduled", "waiting"].includes(j.status)) {
+    const btns = el("div"); btns.style.cssText = "display:flex;gap:8px;margin-top:4px";
+    const c = el("button", "btn quiet", "Cancel"); c.type = "button"; c.addEventListener("click", () => cancelJob(j.id, btns));
+    btns.append(c); row.append(btns);
+  }
+  return row;
+}
+function scheduledView(sc) {
+  const box = el("div"); box.style.cssText = "display:flex;flex-direction:column;gap:8px";
+  box.append(jobRow(sc.job));
+  if (sc.note) box.append(el("div", "lib-note", sc.note));
+  return box;
+}
+function scheduleView(sc) {
+  const box = el("div"); box.style.cssText = "display:flex;flex-direction:column;gap:12px";
+  const list = el("div", "procs");
+  if (!sc.upcoming.length) list.append(el("div", "msg", "Nothing scheduled."));
+  sc.upcoming.forEach(j => list.append(jobRow(j)));
+  box.append(list);
+  if ((sc.recent || []).length) {
+    const r = el("div"); r.append(el("h4", null, "Recently"));
+    sc.recent.forEach(x => r.append(el("div", "more", `${x.when} · ${x.title} · ${x.outcome}${x.late ? " · " + x.late : ""}${x.note ? " · " + x.note : ""}`)));
+    box.append(r);
+  }
+  if ((sc.mine || []).length) {
+    const m = el("details", "mb-ev"); m.append(el("summary", null, `My own timers (${sc.mine.length})`));
+    sc.mine.forEach(x => m.append(el("div", "more", `${x.title} · next ${x.next}${x.every ? " · " + x.every : ""}${x.last ? " · last: " + x.last : ""}`)));
+    box.append(m);
+  }
+  return box;
+}
+function headsUpView(h) {
+  const box = el("div"); box.style.cssText = "display:flex;flex-direction:column;gap:8px";
+  const left = el("div", "facts");
+  let shown = false;
+  const tick = () => {
+    if (left.isConnected) shown = true; else if (shown) return;          // the panel closed: stop counting
+    const s = Math.max(0, Math.round((new Date(h.at) - Date.now()) / 1000));
+    left.textContent = s ? `Runs in ${s} s unless you cancel` : "Running now";
+    if (s) setTimeout(tick, 1000);
+  };
+  tick();
+  const btns = el("div"); btns.style.cssText = "display:flex;gap:8px";
+  const c = el("button", "btn", "Cancel"); c.type = "button"; c.addEventListener("click", () => cancelJob(h.job, btns));
+  btns.append(c);
+  box.append(left, btns);
+  return box;
+}
 // My monthly model budget: how much is used, the pace, and when it starts over.
 function budgetView(b) {
   const box = el("div"); box.style.cssText = "display:flex;flex-direction:column;gap:10px";
@@ -2270,7 +2337,7 @@ function linkView(link) {
 // ---------------------------------------------------------------- mailbox
 // Deciding happens only here, from your click: there is no tool for it, so
 // Aurelia can show you her ideas but never approve them herself.
-const KIND_LABEL = { plan_question: "Questions from plans", plan_step: "Plan steps waiting for you", device: "Waiting to pair", node_update: "Computers", node_alert: "Computers", about_you: "About you", automation: "Automations", criticality: "What matters most", retention: "Keep longer" };
+const KIND_LABEL = { schedule_ok: "Scheduled, needs your OK", plan_question: "Questions from plans", plan_step: "Plan steps waiting for you", device: "Waiting to pair", node_update: "Computers", node_alert: "Computers", about_you: "About you", automation: "Automations", criticality: "What matters most", retention: "Keep longer" };
 const CATEGORY_LABEL = { communication: "How to talk to you", mood: "Mood patterns", interests: "Interests", goals: "Goals",
   life: "What's going on", people: "People", learning: "What you know and are learning", rhythms: "Rhythms",
   work: "Work", preferences: "Preferences", general: "Other" };
@@ -2293,7 +2360,7 @@ function mailboxView(items) {
   for (const [kind, list] of Object.entries(groups).sort((a, b) => order(a[0]) - order(b[0]))) {
     const g = el("div", "mb-group");
     const head = el("div", "mb-ghead"); head.append(el("span", null, `${KIND_LABEL[kind] || kind} · ${list.length}`));
-    if (list.length > 1 && kind !== "device" && kind !== "plan_question") {                // each device is approved on its own, code checked
+    if (list.length > 1 && !["device", "plan_question", "schedule_ok"].includes(kind)) {                // each device is approved on its own, code checked
       const all = el("button", "btn quiet", `Approve all ${list.length}`); all.type = "button";
       all.addEventListener("click", async () => {
         all.disabled = true;
@@ -2324,7 +2391,7 @@ function mailboxItem(item) {
   const c = el("div", "mb-item" + (item.urgent ? " urgent" : ""));
   const top = el("div", "mb-top");
   top.append(el("span", "mb-title", item.title),
-             el("span", "mb-conf", item.kind === "device" ? `asked ${item.age}` : ["node_update", "node_alert", "plan_step", "plan_question"].includes(item.kind) ? item.age
+             el("span", "mb-conf", item.kind === "device" ? `asked ${item.age}` : ["node_update", "node_alert", "plan_step", "plan_question", "schedule_ok"].includes(item.kind) ? item.age
                                  : `${Math.round(item.confidence * 100)}% sure · ${item.age}`));
   c.append(top);
   if (item.kind === "device") {
@@ -2388,7 +2455,7 @@ function mailboxItem(item) {
   const btns = el("div", "btns");
   const mk = (text, cls) => { const b = el("button", "btn " + (cls || ""), text); b.type = "button"; return b; };
   const approve = mk("Approve", "primary"), change = mk("Change"), later = mk("Not now", "quiet"), no = mk("Decline", "quiet");
-  if (item.kind === "plan_step") { no.textContent = "Skip it"; }
+  if (item.kind === "plan_step" || item.kind === "schedule_ok") { no.textContent = "Skip it"; }
   if (item.kind === "plan_question") {             // his answer: a choice, or his own words; "Your call" lets me decide
     const q = el("div"); q.style.cssText = "display:flex;flex-wrap:wrap;gap:6px";
     (p.choices || []).forEach(ch => { const b = mk(ch); b.addEventListener("click", () => act({ action: "modify", changes: { answer: ch } })); q.append(b); });
@@ -2401,8 +2468,8 @@ function mailboxItem(item) {
   }
   if (item.kind === "node_update") { approve.textContent = "Retry"; no.textContent = "Leave it"; }
   if (item.kind === "node_alert") { approve.textContent = "Got it"; no.textContent = "Dismiss"; }
-  const noChange = ["node_update", "node_alert", "plan_step"].includes(item.kind);   // a plan step runs as shown, or not at all
-  if (item.kind !== "plan_question") btns.append(approve, ...(noChange ? [] : [change]), ...(item.kind === "device" ? [] : [later]), no);   // a pairing request expires; no "not now"
+  const noChange = ["node_update", "node_alert", "plan_step", "schedule_ok"].includes(item.kind);   // a plan step runs as shown, or not at all
+  if (item.kind !== "plan_question") btns.append(approve, ...(noChange ? [] : [change]), ...(["device", "schedule_ok"].includes(item.kind) ? [] : [later]), no);   // a pairing request expires; no "not now"
   c.append(btns);
 
   const act = async (body, ok) => {
@@ -2416,7 +2483,7 @@ function mailboxItem(item) {
   });
   later.addEventListener("click", () => act({ action: "defer", days: 7 }));
   no.addEventListener("click", () => {
-    if (reasonForm.hidden && item.kind !== "plan_step") { reasonForm.hidden = false; form.hidden = true; no.textContent = "Decline for good"; reason.focus(); return; }
+    if (reasonForm.hidden && !["plan_step", "schedule_ok"].includes(item.kind)) { reasonForm.hidden = false; form.hidden = true; no.textContent = "Decline for good"; reason.focus(); return; }
     act({ action: "reject", reason: reason.value });
   });
   return c;

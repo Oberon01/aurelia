@@ -96,6 +96,10 @@ async def ask(body: Ask, request: Request):
 
     chosen = style.switch(body.text)
     fp = fastpath.match(body.text, cfg.fastpath.patterns) if cfg.fastpath.enabled and chosen is None else None
+    if fp and fp.pattern.tool == "admiral.schedule":
+        from . import engine                # "tomorrow I have a meeting" isn't a command for later: the model hears it
+        if not engine.fast_ok(app, fp.args.get("say") or ""):
+            fp = None
     resolved = await registry.resolve(app.state.redis, fp.pattern.tool) if fp else None
     if chosen is not None:              # "use Raphael style" / "normal style": how she speaks, nothing else
         outcome.update(route="style", reply=await style.choose(app.state.redis, body.user, chosen))

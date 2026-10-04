@@ -992,8 +992,8 @@ record of your conversations and the facts you ask her to keep.
   an "About you" card with the moment it came from; nothing is kept until you
   approve it (or change it first). Declined ones aren't asked again. "What do
   you know about me" shows it all, grouped by kind: ☆/★ moves a fact in or
-  out of the core, × deletes it. "Remember to…" is a reminder, which comes
-  with Pulsar.
+  out of the core, × deletes it. "Remind me to…" is a reminder on Admiral's
+  scheduling engine.
 - **Mood.** She reads your mood from how you write and adjusts how she talks,
   in the moment. Only patterns you approve are kept ("prefers short answers
   when tired"), never a one-off mood. Health is never inferred from
@@ -1281,9 +1281,57 @@ each one a call to one of her tools, and runs it.
   finishes without it and the report says what's left open. Your "no" is never
   routed around.
 
+### The scheduling engine
+
+Timers that survive restarts: Admiral's engine runs everything that happens
+later, his and mine. A job is what to run (a command, a plan, a reminder, or
+one of my own jobs), when (once, every N minutes, or on days at a time, in your
+time zone) and its rules. Jobs live in Postgres (`jobs`, `job_runs`).
+
+- **Once, later.** "Remind me at 5 to call the pharmacy", "at 11 PM, lock the
+  front door", "turn off the lights in 20 minutes", "tomorrow at 8, make a plan
+  to…". The time is read by code (`app/when.py`), never guessed: "in 20
+  minutes", "at 5:30 pm", "tonight at 11", "tomorrow at 8", "Friday at 9", "Oct
+  5 at 3pm". A bare 1-6 is PM; 7-11 is whichever comes next; a time that has
+  passed today is tomorrow. The command is settled when you ask, exactly as it
+  will run (the same fast path as saying it now), and the confirmation shows
+  the exact time and command. If the time or the command isn't clear, nothing
+  is scheduled and I say why. "What's scheduled" lists everything (each with
+  Cancel); "cancel the 11 PM one" cancels by your words, and asks which when
+  several match. These fast paths come first, so "turn off the lights in 20
+  minutes" can never run now; a sentence with a time that isn't a command I
+  know ("tomorrow I want to rest") goes to the model instead.
+- **Done means confirmed.** Each run is checked by its own result, like plan
+  steps; "unconfirmed" is said as such. You hear on your phone; the run's
+  panel opens on your displays (not TVs' screens).
+- **Heads-up.** Locks, lights, the thermostat and computer power get a
+  notification and a panel with Cancel a minute before they run
+  (`rules.schedule.heads_up_for` in `admiral.yaml`).
+- **Governance when it runs.** A change-tier action (unlock, restart) never runs
+  unattended: when it's due it becomes a mailbox card and a phone notification.
+  An OK after its grace is too late, and it doesn't run.
+- **Reliable.** Due jobs are claimed with a lease (`FOR UPDATE SKIP LOCKED`),
+  so two orchestrators during a deploy never both run one. A restart mid-run
+  waits for the task that had started instead of running it again. A run later
+  than its grace (actions 10 min, plans 1 h, reminders 6 h) is marked missed
+  and you're told; a backlog never runs more than once. Times follow your
+  clock through daylight saving. A failed run tries once more two minutes
+  later (with its heads-up again), but never when the command may have reached
+  the computer without it saying so: then you're told to check, so nothing
+  happens twice.
+- **My own timers.** Memory maintenance and Mnemosyne's rounds are recurring
+  jobs; watching a computer come back after a restart or wake, and a librespot
+  build, are follow-ups that carry on across my own restarts. Plans waiting on
+  you remind you after 4 hours and expire after 3 days; a plan step's retry
+  waits two minutes on the engine. They're listed under "My own timers" in the
+  schedule panel.
+
+Recurring routines in your words, Parallax's automations and a panel to pause
+and edit them are Pulsar (Phase 10), built on this engine.
+
 Planning, filling, changing course and checking are model calls, counted toward
 `llm.monthly_token_cap`; when that's spent, a new plan says so instead of
-starting. Next: the scheduling engine, and Morpho (plans kept as skills). Policy:
+starting. Next: Morpho (plans kept as skills). Policy:
 `config/governance/functions/admiral.yaml`. Code:
 `services/orchestrator/app/admiral.py`.
 

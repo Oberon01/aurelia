@@ -69,7 +69,13 @@ def stack(tmp_path_factory):
     (tmp / "gov" / "functions" / "quasar.yaml").write_text(
         "function: quasar\nrate_limit_per_minute: 1000\ntools:\n  find: {tier: reference}\n  play: {tier: act}\n  youtube: {tier: read}\n  spotify: {tier: act}\n  speaker: {tier: change}\n")
     (tmp / "gov" / "functions" / "admiral.yaml").write_text(
-        "function: admiral\nrate_limit_per_minute: 1000\ntools:\n  plan: {tier: act}\n  plans: {tier: reference}\n  stop: {tier: act}\n")
+        "function: admiral\nrate_limit_per_minute: 1000\ntools:\n  plan: {tier: act}\n  plans: {tier: reference}\n  stop: {tier: act}\n"
+        "  schedule: {tier: act}\n  scheduled: {tier: reference}\n  unschedule: {tier: act}\n"
+        "rules:\n  schedule:\n    grace_minutes: {action: 0.1, plan: 1, reminder: 0.1}\n    heads_up_seconds: 2\n"
+        "    heads_up_for: [enginefn.act]\n    retry_after_seconds: 1\n")
+    (tmp / "gov" / "functions" / "enginefn.yaml").write_text(          # the engine's tests' stand-in function
+        "function: enginefn\nrate_limit_per_minute: 1000\ntools:\n  act: {tier: act}\n  look: {tier: reference}\n"
+        "  confirm: {tier: change}\n")
     (tmp / "gov" / "functions" / "planfn.yaml").write_text(          # Admiral's tests' stand-in function
         "function: planfn\nrate_limit_per_minute: 1000\ntools:\n  look: {tier: reference}\n  act: {tier: act}\n"
         "  flaky: {tier: act}\n  broken: {tier: act}\n  confirm: {tier: change}\n")

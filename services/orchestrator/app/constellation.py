@@ -1584,48 +1584,67 @@ async def _tell(app, user: str, display: int | None, headline: str, text: str) -
             return
 
 
+WATCH_EVERY = 5                                   # seconds between looks while watching a computer
+
+
 async def _watch(app, user: str, node: dict, display: int | None, kind: str, booted: int | None) -> None:
-    """After a restart, shutdown, sleep or wake: wait for the computer to be back (or gone), and say so."""
-    loop = asyncio.get_running_loop()
-    start = loop.time()
-    try:
-        if kind in ("shutdown", "sleep"):
-            while loop.time() - start < 120:
-                await asyncio.sleep(5)
-                if not await nodes.online(app, node["id"]):
-                    word = "off" if kind == "shutdown" else "asleep"
-                    await _tell(app, user, display, f"{node['name']} is {word}",
-                                f"{node['name']} is {word}." + (" Say \"wake the " + node["name"] + "\" to bring it back."
-                                                                if kind == "sleep" else ""))
-                    return
-            await _tell(app, user, display, f"{node['name']} is still on",
-                        f"I asked {node['name']} to {'shut down' if kind == 'shutdown' else 'sleep'}, but it's still checking in.")
-            return
-        went_away = False
-        while loop.time() - start < BACK_WAIT:              # restart or wake: a fresh check-in
-            await asyncio.sleep(5)
-            now = await _node_row(node["id"])
-            fresh = now["info"].get("booted_at")
-            up = await nodes.online(app, node["id"])
-            went_away = went_away or not up
-            # A new boot time, or (an agent that doesn't report one) offline and back again.
-            back = kind == "wake" or (fresh and fresh != booted) or (booted is None and went_away)
-            if up and back:
-                took = int(loop.time() - start)
-                await _tell(app, user, display, f"{node['name']} is back",
-                            f"{node['name']} is back (took {took // 60} min {took % 60} s)." if took >= 60
-                            else f"{node['name']} is back (took {took} s).")
-                return
-        what = "the restart" if kind == "restart" else "being woken"
-        advice = ("It may be stuck shutting down or starting up. If its screen shows a stop job, give it a minute; "
-                  "otherwise hold the power button, then ask me \"what's wrong with " + node["name"] + "\" once it's up: "
-                  "I'll read how the last shutdown went." if kind == "restart" else
-                  "Wake-on-LAN may be off in its firmware (BIOS) or network settings, or it may be unplugged.")
-        await nodes._alert(app.state.redis, node, [{"key": kind, "level": "urgent",
-                                                     "text": f"Didn't come back after {what} ({BACK_WAIT // 60} minutes)"}],
-                           advice=advice)
-    except Exception:
-        log.exception("watching %s after %s", node.get("name"), kind)
+    """After a restart, shutdown, sleep or wake: watch for the computer to be back (or gone), and say so. The
+    watch is a job on Admiral's engine, so it carries on even if I restart in the middle of it."""
+    from . import engine
+    state = {"user": user, "node": {"id": node["id"], "name": node["name"]}, "display": display, "kind": kind,
+             "booted": booted, "started": time.time(), "went_away": False}
+    await engine.after(app, WATCH_EVERY, "constellation.power_watch", state, f"Watch {node['name']} ({kind})")
+
+
+async def watch_step(app, st: dict) -> dict | None:
+    """One look. Returns the state to look again in WATCH_EVERY seconds, or None when it's settled (and said)."""
+    user, node, display, kind = st["user"], st["node"], st.get("display"), st["kind"]
+    took = time.time() - float(st["started"])
+    again = {"again_in": WATCH_EVERY, "spec": st}
+    if kind in ("shutdown", "sleep"):
+        if not await nodes.online(app, node["id"]):
+            word = "off" if kind == "shutdown" else "asleep"
+            await _tell(app, user, display, f"{node['name']} is {word}",
+                        f"{node['name']} is {word}." + (" Say \"wake the " + node["name"] + "\" to bring it back."
+                                                        if kind == "sleep" else ""))
+            return None
+        if took < 120:
+            return again
+        await _tell(app, user, display, f"{node['name']} is still on",
+                    f"I asked {node['name']} to {'shut down' if kind == 'shutdown' else 'sleep'}, but it's still checking in.")
+        return None
+    row = await _node_row(node["id"])                      # restart or wake: a fresh check-in
+    fresh = row["info"].get("booted_at")
+    up = await nodes.online(app, node["id"])
+    st = {**st, "went_away": st.get("went_away") or not up}
+    booted = st.get("booted")
+    # A new boot time, or (an agent that doesn't report one) offline and back again.
+    back = kind == "wake" or (fresh and fresh != booted) or (booted is None and st["went_away"])
+    if up and back:
+        t = int(took)
+        await _tell(app, user, display, f"{node['name']} is back",
+                    f"{node['name']} is back (took {t // 60} min {t % 60} s)." if t >= 60
+                    else f"{node['name']} is back (took {t} s).")
+        return None
+    if took < BACK_WAIT:
+        return {"again_in": WATCH_EVERY, "spec": st}
+    what = "the restart" if kind == "restart" else "being woken"
+    advice = ("It may be stuck shutting down or starting up. If its screen shows a stop job, give it a minute; "
+              "otherwise hold the power button, then ask me \"what's wrong with " + node["name"] + "\" once it's up: "
+              "I'll read how the last shutdown went." if kind == "restart" else
+              "Wake-on-LAN may be off in its firmware (BIOS) or network settings, or it may be unplugged.")
+    await nodes._alert(app.state.redis, node, [{"key": kind, "level": "urgent",
+                                                 "text": f"Didn't come back after {what} ({BACK_WAIT // 60} minutes)"}],
+                       advice=advice)
+    return None
+
+
+def _register_jobs() -> None:
+    from . import engine
+    engine.system("constellation.power_watch")(watch_step)
+
+
+_register_jobs()
 
 
 async def _asker(task_id: str | None) -> int | None:
@@ -1648,7 +1667,7 @@ async def power(app, user: str, args: dict) -> dict:
         return {"headline": f"{node['name']}: idle for {human}" if s >= 60 else f"{node['name']} is in use",
                 "power": {"node": node["name"], "idle_s": s}}
     if action == "sleep":
-        asyncio.create_task(_watch(app, user, node, await _asker(args.get("_self")), "sleep", None))
+        await _watch(app, user, node, await _asker(args.get("_self")), "sleep", None)
     return {"headline": f"{node['name']}: {data.get('said') or POWER_SAY[action]}", "power": {"node": node["name"], "action": action}}
 
 
@@ -1659,7 +1678,7 @@ async def restart(app, user: str, args: dict) -> dict:
     node = await target(app, args.get("target"))
     booted = (await _node_row(node["id"]))["info"].get("booted_at")
     data = await _ask_new(app, node, "power", {"action": action, "confirmed": True})   # governance confirmed it
-    asyncio.create_task(_watch(app, user, node, await _asker(args.get("_self")), action, booted))
+    await _watch(app, user, node, await _asker(args.get("_self")), action, booted)
     word = "Restarting" if action == "restart" else "Shutting down"
     return {"headline": f"{word} {node['name']}",
             "power": {"node": node["name"], "action": action,
@@ -1702,7 +1721,7 @@ async def wake(app, user: str, args: dict) -> dict:
                 except OSError:
                     pass
         via = "the server"
-    asyncio.create_task(_watch(app, user, node, await _asker(args.get("_self")), "wake", None))
+    await _watch(app, user, node, await _asker(args.get("_self")), "wake", None)
     return {"headline": f"Waking {r['name']}", "power": {"node": r["name"], "action": "wake",
                                                          "note": f"Sent the wake signal from {via}. I'll tell you when it's back."}}
 

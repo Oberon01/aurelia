@@ -75,7 +75,7 @@ async def start_task(body: StartTask, request: Request):
         status = 429 if decision.reason.startswith("rate limit") else 403
         raise HTTPException(status, {"tier": decision.tier, "reason": decision.reason})
 
-    task_id = str(uuid.uuid4())
+    task_id = getattr(request, "task_id", None) or str(uuid.uuid4())     # the engine picks its id first
     await db.pool().execute(
         "INSERT INTO task_runs (id, tool, args, trigger, progress_unit, user_id, tier, confirmed, device) "
         "VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9)",
@@ -199,10 +199,13 @@ class _AppContext:
         self.app = app
 
 
-async def launch(app, body: StartTask) -> str:
+async def launch(app, body: StartTask, task_id: str | None = None) -> str:
     """Start a task through the exact same path as POST /tasks — registry,
-    governance, rate limits, logging. Raises HTTPException on refusal."""
-    return (await start_task(body, _AppContext(app)))["task_id"]
+    governance, rate limits, logging. Raises HTTPException on refusal. task_id: an id chosen (and saved)
+    by the caller first, so a crash between saving and starting can never start it twice."""
+    ctx = _AppContext(app)
+    ctx.task_id = task_id
+    return (await start_task(body, ctx))["task_id"]
 
 
 async def wait_for_result(task_id: str, seconds: float) -> dict[str, Any] | None:

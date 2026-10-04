@@ -261,19 +261,22 @@ async def maintain(config, embedder: Embedder | None = None, now: datetime | Non
     return stats
 
 
-async def maintenance_loop(app) -> None:
-    """One replica at a time (Redis lock), so two orchestrators during a swap don't race."""
-    await asyncio.sleep(30)                       # let the service settle after start
-    while True:
-        minutes = max(5, app.state.config.current.memory.maintenance_minutes)
-        try:
-            if await app.state.redis.set(LOCK_KEY, "1", nx=True, ex=minutes * 60 - 30):
-                stats = await maintain(app.state.config, app.state.embedder)
-                if any(stats.values()):
-                    log.info("memory maintenance: %s", stats)
-        except Exception:
-            log.exception("memory maintenance failed; will retry next round")
-        await asyncio.sleep(minutes * 60)
+async def maintenance_job(app, spec: dict) -> dict | None:
+    """Tiering, rollups and the embedding backfill: one of her own jobs on Admiral's engine (it runs once per
+    round across orchestrators, survives restarts, and its runs are logged)."""
+    stats = await maintain(app.state.config, app.state.embedder)
+    if any(stats.values()):
+        log.info("memory maintenance: %s", stats)
+    return {"note": ", ".join(f"{k} {v}" for k, v in stats.items() if v) or None}
+
+
+def _register() -> None:
+    from . import engine
+    engine.system("memory.maintenance",
+                  every=lambda app: max(5, app.state.config.current.memory.maintenance_minutes))(maintenance_job)
+
+
+_register()
 
 
 # ---- API -----------------------------------------------------------------------------

@@ -573,20 +573,21 @@ async def _embed_backlog(app) -> int:
     return len(vecs)
 
 
-async def record_loop(app) -> None:
-    """One replica at a time (Redis lock), like memory maintenance."""
-    await asyncio.sleep(20)
-    while True:
-        minutes = max(1, float(rules(app)["every_minutes"]))
-        try:
-            if await app.state.redis.set(LOCK_KEY, "1", nx=True, ex=int(minutes * 60) - 5):
-                stats = await record_quiet_conversations(app)
-                await app.state.redis.set(LAST_ROUND_KEY, datetime.now(timezone.utc).isoformat())
-                if any(stats.values()):
-                    log.info("mnemosyne: %s", stats)
-        except Exception:
-            log.exception("mnemosyne round failed; will retry")
-        await asyncio.sleep(minutes * 60)
+async def record_job(app, spec: dict) -> dict | None:
+    """A round of conversation records: one of her own jobs on Admiral's engine."""
+    stats = await record_quiet_conversations(app)
+    await app.state.redis.set(LAST_ROUND_KEY, datetime.now(timezone.utc).isoformat())
+    if any(stats.values()):
+        log.info("mnemosyne: %s", stats)
+    return {"note": ", ".join(f"{k} {v}" for k, v in stats.items() if v) or None}
+
+
+def _register_jobs() -> None:
+    from . import engine
+    engine.system("mnemosyne.record", every=lambda app: max(1, float(rules(app)["every_minutes"])))(record_job)
+
+
+_register_jobs()
 
 
 @router.get("/health")

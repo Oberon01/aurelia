@@ -413,3 +413,33 @@ def test_stopping_a_plan_takes_its_cards_out_of_the_mailbox(stack, model, planfn
         time.sleep(0.1)
     assert card_of(pid, 1)["status"] == "expired"
     assert httpx.post(f"{orch}/admiral/plans/{pid}/steps/1/answer", json={"answer": "A"}).status_code == 409
+
+
+def test_a_failed_step_waits_a_little_on_the_engine_before_its_retry(stack, model, planfn):
+    orch, goal = stack["orch"], "flaky with a pause"
+    model.plans[goal] = {"steps": [step(1, "planfn.flaky", {"key": goal})]}
+    _, res = make_plan(orch, goal)
+    pid = res["plan"]["id"]
+    p, steps = until(pid, {"done", "gaps", "failed"})
+    assert steps[0]["status"] == "done" and steps[0]["attempts"] == 2
+    t = sorted(r[2] for r in planfn["runs"] if r[1].get("key") == goal)
+    assert t[1] - t[0] >= 0.9                                                   # retry_after_seconds: 1 (test policy)
+    [j] = sql("SELECT status FROM jobs WHERE name='admiral.resume' AND spec->>'plan_id' = $1", pid)
+    assert j["status"] == "done"
+
+
+def test_a_plan_can_be_scheduled_for_later(stack, model, planfn):
+    orch, goal = stack["orch"], "compare later"
+    model.plans[goal] = {"steps": [step(1, "planfn.look", {"q": "later"})]}
+    tid = httpx.post(f"{orch}/tasks", json={"tool": "admiral.schedule",
+                                            "args": {"when": "in 1 second", "goal": goal}}).json()["task_id"]
+    deadline = time.time() + 10
+    while (t := httpx.get(f"{orch}/tasks/{tid}").json())["status"] == "running" and time.time() < deadline:
+        time.sleep(0.1)
+    res = json.loads(t["result"]) if isinstance(t["result"], str) else t["result"]
+    assert res["scheduled"]["job"]["kind"] == "plan" and res["scheduled"]["job"]["title"] == f"Plan: {goal[0].upper() + goal[1:]}"
+    deadline = time.time() + 20
+    while not sql("SELECT 1 FROM plans WHERE goal=$1 AND status='done'", goal) and time.time() < deadline:
+        time.sleep(0.2)
+    [p] = sql("SELECT p.status, r.trigger FROM plans p JOIN task_runs r ON r.id = p.task_id WHERE p.goal=$1", goal)
+    assert p["status"] == "done" and p["trigger"] == "schedule"

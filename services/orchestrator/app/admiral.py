@@ -75,6 +75,29 @@ TOOLS = [
         name="stop", description="Stop a running plan (the newest one if he doesn't say which). Steps already "
                                  "running finish; nothing else starts.",
         input_schema={"type": "object", "properties": {"plan": {"type": "string"}}}, cancellable=False),
+    registry.ToolSpec(
+        name="schedule", display="panel", cancellable=False,
+        description="Do something later, once, at a time he says: a reminder ('remind me at 5 to call the pharmacy'), "
+                    "one of your commands ('at 11 PM lock the front door', 'turn off the lights in 20 minutes') or a plan "
+                    "('tomorrow at 8, make a plan to…'). Prefer say: his words in full; the time is read by code in his "
+                    "time zone and the command is settled now, exactly as it will run. Otherwise when (his words for the "
+                    "time) plus one of: reminder (text), goal (a plan), tool+args, or what (his words for the command). "
+                    "Only when he asks; never on your own. Tell him the exact time the result shows. Recurring routines "
+                    "come with Pulsar.",
+        input_schema={"type": "object", "properties": {
+            "say": {"type": "string"}, "when": {"type": "string"}, "what": {"type": "string"},
+            "reminder": {"type": "string"}, "goal": {"type": "string"}, "tool": {"type": "string"},
+            "args": {"type": "object"}}}),
+    registry.ToolSpec(
+        name="scheduled", display="panel", cancellable=False, freshness_seconds=10,
+        description="What's scheduled: his upcoming reminders, actions and plans with their exact times (each with "
+                    "Cancel), what ran recently and how it went, and your own timers.",
+        input_schema={"type": "object", "properties": {}}),
+    registry.ToolSpec(
+        name="unschedule", cancellable=False,
+        description="Cancel something scheduled. which: his words for it ('the 11 PM one', 'the reminder to call mom'); "
+                    "or job: its id from the schedule panel. If several match, it asks which.",
+        input_schema={"type": "object", "properties": {"which": {"type": "string"}, "job": {"type": "string"}}}),
 ]
 
 
@@ -282,7 +305,7 @@ def view(plan: dict, steps: list[dict]) -> dict:
     head = {"planning": "Planning", "running": f"Plan · {done} of {len(live)} steps",
             "waiting": "Plan · a question for you" if asking else "Plan · waiting for you",
             "done": "Plan done", "gaps": "Plan done, with gaps", "failed": "Plan stopped",
-            "stopped": "Plan stopped"}.get(st, "Plan")
+            "stopped": "Plan stopped", "expired": "Plan expired: no answer in time"}.get(st, "Plan")
     if plan.get("report") and plan["report"].get("headline"):
         head = str(plan["report"]["headline"])[:160]
 
@@ -415,7 +438,7 @@ async def settle(app, plan_id: str, n: int, approve: bool, answer: str | None = 
         card = ("rejected", None)
     if not from_card:
         await _close_card(app, step, *card)
-    await _set_plan(plan_id, status="running")
+    await _set_plan(plan_id, status="running", waiting_since=None, reminded=False)
     await publish(app, plan_id)
     start(app, plan_id)
     return out
@@ -506,8 +529,11 @@ async def _await_step(app, plan: dict, n: int, task_id: str) -> None:
         return
     _, steps = await load(pid)
     step = next(s for s in steps if s["n"] == n)
-    if step["attempts"] < TRIES:                            # once more, the same way
-        await _set_step(pid, n, status="pending", note=f"tried again: {str(res.get('error') or '')[:200]}")
+    if step["attempts"] < TRIES:                            # once more, the same way, a little later
+        from . import engine
+        wait = float(engine.rules(app)["retry_after_seconds"])
+        await _set_step(pid, n, status="pending", not_before=_now() + __import__("datetime").timedelta(seconds=wait),
+                        note=f"trying again shortly: {str(res.get('error') or '')[:200]}")
         return
     await _set_step(pid, n, status="failed", note=str(res.get("error") or res["status"])[:300], finished_at=_now())
 
@@ -519,7 +545,15 @@ def _now():
 
 def ready(steps: list[dict]) -> list[dict]:
     done = {s["n"] for s in steps if s["status"] == "done"}
-    return [s for s in steps if s["status"] == "pending" and all(d in done for d in s["depends"])]
+    at = _now()
+    return [s for s in steps if s["status"] == "pending" and all(d in done for d in s["depends"])
+            and not (s.get("not_before") and s["not_before"] > at)]
+
+
+def later(steps: list[dict]) -> list[dict]:
+    """Pending steps whose retry is waiting a few minutes."""
+    at = _now()
+    return [s for s in steps if s["status"] == "pending" and s.get("not_before") and s["not_before"] > at]
 
 
 def blocked(steps: list[dict]) -> list[dict]:
@@ -581,7 +615,7 @@ async def run(app, plan_id: str) -> None:
     try:
         while True:
             plan, steps = await load(plan_id)
-            if plan["status"] != "running":
+            if plan["status"] not in ("running", "waiting"):
                 return
             for s in [s for s in steps if s["status"] == "running"]:          # after a restart
                 if s.get("task_id"):
@@ -594,14 +628,25 @@ async def run(app, plan_id: str) -> None:
                 await asyncio.gather(*(_run_step(app, plan, s, steps) for s in go))
                 await publish(app, plan_id)
                 continue
-            if any(s["status"] == "waiting" for s in steps):
-                await _set_plan(plan_id, status="waiting")
+            waiting = [s for s in steps if s["status"] == "waiting"]
+            delayed = later(steps)
+            if delayed:                                 # a retry in a few minutes: the engine wakes the plan then
+                from . import engine
+                wait = max(0.0, (min(s["not_before"] for s in delayed) - _now()).total_seconds())
+                await engine.after(app, wait + 0.2, "admiral.resume", {"plan_id": plan_id}, f"Resume plan: {plan['goal'][:60]}")
+            if waiting:
+                if plan["status"] != "waiting":         # tell him once, when it starts waiting
+                    await db.pool().execute("UPDATE plans SET status='waiting', waiting_since=COALESCE(waiting_since, now()), "
+                                            "updated_at=now() WHERE id=$1", uuid.UUID(plan_id))
+                    await publish(app, plan_id)
+                    asking = [s for s in waiting if s["tool"] == ASK]
+                    if asking:
+                        await _tell(app, plan, "A plan has a question for you", asking[0]["args"]["question"][:200])
+                    else:
+                        await _tell(app, plan, "A plan needs your OK", f"{plan['goal'][:80]}: a step is waiting for you.")
+                return
+            if delayed:
                 await publish(app, plan_id)
-                asking = [s for s in steps if s["status"] == "waiting" and s["tool"] == ASK]
-                if asking:
-                    await _tell(app, plan, "A plan has a question for you", asking[0]["args"]["question"][:200])
-                else:
-                    await _tell(app, plan, "A plan needs your OK", f"{plan['goal'][:80]}: a step is waiting for you.")
                 return
             trouble = [s for s in steps if s["status"] in BAD and not s["handled"]]
             if trouble:                                 # change course, or carry on without it
@@ -628,7 +673,7 @@ async def run(app, plan_id: str) -> None:
 
 async def finish(app, plan_id: str) -> None:
     plan, steps = await load(plan_id)
-    if plan["status"] != "running":
+    if plan["status"] not in ("running", "waiting"):
         return
     live = [s for s in steps if s["status"] != "replaced"]
     ok = [s for s in live if s["status"] == "done" and s["tool"] != ASK]
@@ -741,7 +786,23 @@ async def stop_tool(app, user: str, args: dict) -> dict:
     return {"headline": "Plan stopped", "did": {"node": "Admiral", "what": f"Stopped: {row['goal'][:120]}"}}
 
 
-HANDLERS = {"plan": plan_tool, "plans": plans_tool, "stop": stop_tool}
+async def _schedule(app, user, args):
+    from . import engine
+    return await engine.schedule_tool(app, user, args)
+
+
+async def _scheduled(app, user, args):
+    from . import engine
+    return await engine.scheduled_tool(app, user, args)
+
+
+async def _unschedule(app, user, args):
+    from . import engine
+    return await engine.unschedule_tool(app, user, args)
+
+
+HANDLERS = {"plan": plan_tool, "plans": plans_tool, "stop": stop_tool, "schedule": _schedule,
+            "scheduled": _scheduled, "unschedule": _unschedule}
 
 
 # ---- his answers from the plan's panel (the mailbox card calls settle() too) -------------------------

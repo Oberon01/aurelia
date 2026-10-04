@@ -96,6 +96,33 @@ session:
 fastpath:
   enabled: true
   patterns:
+    # Admiral's engine (Phase 9): once, later. First in the list, so "turn off the lights in 20 minutes" is never
+    # taken as "turn off the lights" now. The time is read by code and the command settled when he asks.
+    - name: schedule-remind
+      match: '^(?P<say>remind\s+me\s+.+)$'
+      tool: admiral.schedule
+      args: { say: "{say}" }
+      reply: "Setting that reminder."
+    - name: schedule-time-first
+      match: '^(?P<say>(?:in\s+(?:\d+(?:\.\d+)?|an?|half\s+an|a\s+couple\s+of|a\s+few|one|two|three|four|five|ten|fifteen|twenty|thirty|forty-five)\s+(?:seconds?|secs?|minutes?|mins?|hours?|hrs?|days?)|in\s+half\s+an\s+hour|at\s+(?:\d{1,2}(?::\d{2})?(?:\s*[ap]\.?m\.?)?|noon|midnight)|tomorrow|tonight|this\s+(?:morning|afternoon|evening)|(?:on\s+|this\s+|next\s+)?(?:mon|tues|wednes|thurs|fri|satur|sun)day)(?:\s+(?:at|in)\s+[\w:. ]+?)?,?\s+(?!(?:at|in|on)\b)(?![ap]\.?m\.?$)[a-z].*)$'
+      tool: admiral.schedule
+      args: { say: "{say}" }
+      reply: "Scheduling that."
+    - name: schedule-time-last
+      match: '^(?!(?:what|when|where|who|why|how|is|are|was|were|do|does|did|can|could|will|would|should|which)\b)(?P<say>.+?\s+(?:in\s+(?:\d+(?:\.\d+)?|an?|half\s+an|a\s+couple\s+of|a\s+few|one|two|three|four|five|ten|fifteen|twenty|thirty|forty-five)\s+(?:seconds?|secs?|minutes?|mins?|hours?|hrs?)|in\s+half\s+an\s+hour|at\s+(?:\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?|\d{1,2}:\d{2}|noon|midnight)|(?:tomorrow|tonight|(?:on\s+)?(?:mon|tues|wednes|thurs|fri|satur|sun)day)(?:\s+(?:morning|afternoon|evening|night))?\s+at\s+\d{1,2}(?::\d{2})?(?:\s*[ap]\.?m\.?)?))$'
+      tool: admiral.schedule
+      args: { say: "{say}" }
+      reply: "Scheduling that."
+    - name: schedule-list
+      match: '^(?:what(?:''s|s| is)|show(?: me)?|list)\s+(?:my\s+|the\s+)?(?:scheduled(?:\s+(?:stuff|things|jobs|tasks|actions))?|reminders|timers)\??$|^what(?:''s|s| is)\s+scheduled\??$|^what\s+(?:have|did)\s+i\s+scheduled\??$|^my\s+(?:reminders|schedule)$'
+      tool: admiral.scheduled
+      args: {}
+      reply: "Here's what's scheduled."
+    - name: schedule-cancel
+      match: '^(?:cancel|unschedule|delete|remove|forget)\s+(?:the\s+|my\s+|that\s+)?(?P<which>(?:.+\s+)?(?:reminder|reminders|timer|one|scheduled\s+\w+)(?:\s+.+)?)$'
+      tool: admiral.unschedule
+      args: { which: "{which}" }
+      reply: "Cancelling that."
     - name: echo
       match: '^(?:probe\s+)?echo\s+(?P<message>.+?)(?:\s+(?P<steps>\d+)\s+times)?$'
       tool: probe.echo

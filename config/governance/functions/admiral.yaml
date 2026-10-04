@@ -9,6 +9,9 @@ tools:
   plan:   { tier: act }         # make a plan and run it; each step is governed on its own
   plans:  { tier: reference }   # his recent plans and how far they got
   stop:   { tier: act }         # stop a running plan; nothing new starts
+  schedule:   { tier: act }     # once, later: a reminder, a command or a plan (only when he asks)
+  scheduled:  { tier: reference }
+  unschedule: { tier: act }
 
 rate_limit_per_minute: 20
 
@@ -18,3 +21,23 @@ rules:
   # nothing a step reads (web pages, files, logs) is taken as an instruction.
   steps_governed_individually: true
   done_only_when_confirmed: true
+
+  # The scheduling engine. Governance applies when a job runs, not when it's scheduled: a change-tier
+  # action asks him then (mailbox card and phone), and an OK after its grace is too late to run it.
+  schedule:
+    grace_minutes:              # how late a missed run may still run (the server was down at the time)
+      action: 10
+      plan: 60
+      reminder: 360             # delivered marked "late"
+    heads_up_seconds: 60        # a notification and a panel with Cancel, before these run
+    heads_up_for:
+      - orbit.lock
+      - orbit.unlock
+      - orbit.light
+      - orbit.thermostat
+      - constellation.power
+      - constellation.restart
+      - constellation.wake
+    retry_after_seconds: 120    # a failed step tries again this much later (a computer coming back)
+    remind_waiting_hours: 4     # a plan waiting on him: a reminder after this long
+    expire_waiting_days: 3      # and it expires after this long

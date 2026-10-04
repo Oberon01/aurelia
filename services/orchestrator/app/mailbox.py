@@ -89,6 +89,12 @@ def validate(kind: str, proposal: dict[str, Any]) -> dict[str, Any]:
             raise HTTPException(400, "The request doesn't say which device.")
         p["name"] = " ".join(str(p.get("name") or "").split())[:60]
         return p
+    if kind == "schedule_ok":                    # a scheduled change-tier action, due now (engine.py)
+        try:
+            p["job_id"] = int(p.get("job_id"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "The card doesn't say which scheduled job.")
+        return p
     if kind in ("plan_step", "plan_question"):   # a plan waiting for him (admiral.py)
         try:
             p["n"] = int(p.get("n"))
@@ -151,6 +157,8 @@ async def apply(conn, item_id: int, kind: str, p: dict[str, Any]) -> str:
         return "Noted. I'll let you know again if it happens tomorrow or gets worse."
     if kind in ("plan_step", "plan_question"):
         return await _plan(p, approve=True)
+    if kind == "schedule_ok":
+        return await _job(p, ok=True)
     if kind == "about_you":
         from . import profile
         user = "owner"
@@ -194,6 +202,16 @@ async def _plan(p: dict[str, Any], approve: bool) -> str:
         raise HTTPException(409, "That plan isn't waiting for this anymore.")
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+
+
+async def _job(p: dict[str, Any], ok: bool) -> str:
+    """His answer on a scheduled job's card. The job (not the card) says what runs."""
+    from . import engine
+    from .main import app as _app
+    try:
+        return await engine.approve(_app, p["job_id"], ok)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
 
 
 # ---- reading ---------------------------------------------------------------------------
@@ -302,6 +320,8 @@ async def _decide(item_id: int, d: Decision, batch: bool = False) -> dict[str, A
                 raise HTTPException(400, "Approve devices one at a time, after checking the code on each.")
         if row["kind"] == "plan_question" and batch:
             raise HTTPException(400, "Answer a plan's questions one at a time.")
+        if row["kind"] == "schedule_ok" and batch and d.action == "approve":
+            raise HTTPException(400, "Approve scheduled actions one at a time.")
     row = await pool.fetchrow("SELECT * FROM mailbox_items WHERE id=$1", item_id)
     if row is None:
         raise HTTPException(404, "No such mailbox item.")
@@ -309,7 +329,12 @@ async def _decide(item_id: int, d: Decision, batch: bool = False) -> dict[str, A
         raise HTTPException(409, f"That was already {row['status']}.")
     proposal = json.loads(row["proposal"]) if isinstance(row["proposal"], str) else row["proposal"]
     if d.action in ("approve", "modify"):
-        final = validate(row["kind"], {**proposal, **d.changes} if d.action == "modify" else proposal)
+        changes = d.changes if d.action == "modify" else {}
+        if row["kind"] in ("schedule_ok", "plan_step"):           # the card can't change what it's about
+            changes = {}
+        elif row["kind"] == "plan_question":
+            changes = {k: v for k, v in changes.items() if k == "answer"}
+        final = validate(row["kind"], {**proposal, **changes})
         async with pool.acquire() as conn, conn.transaction():
             done = await apply(conn, item_id, row["kind"], final)
             await conn.execute("UPDATE mailbox_items SET status=$2, applied=$3::jsonb, decided_at=now(), decided_by=$4, "
@@ -320,6 +345,11 @@ async def _decide(item_id: int, d: Decision, batch: bool = False) -> dict[str, A
         if row["kind"] == "device":
             from . import auth
             await auth.decline(pool, proposal["device_id"])
+        if row["kind"] == "schedule_ok":
+            done_ = await _job(validate(row["kind"], proposal), ok=False)
+            await pool.execute("UPDATE mailbox_items SET status='rejected', reason=$2, decided_at=now(), decided_by=$3, "
+                               "updated_at=now() WHERE id=$1", item_id, (d.reason or "").strip() or None, d.user)
+            return {"id": item_id, "status": "rejected", "done": done_}
         if row["kind"] in ("plan_step", "plan_question"):          # "skip it" / "your call": the plan carries on
             plan_done = await _plan(validate(row["kind"], {**proposal, "answer": "-"}), approve=False)
             await pool.execute("UPDATE mailbox_items SET status='rejected', reason=$2, decided_at=now(), decided_by=$3, "

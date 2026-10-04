@@ -182,3 +182,28 @@ def test_budget_phrases_open_the_budget_panel(said, hit):
     cfg = RuntimeConfig.model_validate(yaml.safe_load(CONFIG.read_text()))
     m = fastpath.match(said, cfg.fastpath.patterns)
     assert bool(m and m.pattern.tool == "mnemosyne.budget") == hit, said
+
+
+@pytest.mark.skipif(not CONFIG.exists(), reason="the repo's config isn't in the test image")
+@pytest.mark.parametrize("said,name", [
+    ("remind me at 5 to call the pharmacy", "schedule-remind"),
+    ("at 11 PM, lock the front door", "schedule-time-first"),
+    ("in 20 minutes turn off the lights", "schedule-time-first"),
+    ("tomorrow at 8, make a plan to compare NAS prices", "schedule-time-first"),
+    ("turn off the lights in 20 minutes", "schedule-time-last"),      # never "turn off the lights" now
+    ("lock the front door at 11pm", "schedule-time-last"),
+    ("play music in 20 minutes", "schedule-time-last"),
+    ("what's scheduled", "schedule-list"), ("show my reminders", "schedule-list"),
+    ("cancel the 11 pm one", "schedule-cancel"), ("cancel my reminder to call mom", "schedule-cancel"),
+    ("cancel the plan", "plan-stop"),
+    ("what's on tv at 8 pm", None), ("at 5 pm", None), ("in 5 minutes", None), ("tomorrow's weather", None),
+])
+def test_later_phrases_go_to_the_engine_first(said, name):
+    from app import fastpath
+    from app.config import RuntimeConfig
+    cfg = RuntimeConfig.model_validate(yaml.safe_load(CONFIG.read_text()))
+    m = fastpath.match(said, cfg.fastpath.patterns)
+    if name is None:
+        assert m is None or not m.pattern.name.startswith("schedule-"), said
+    else:
+        assert m and m.pattern.name == name, (said, m and m.pattern.name)
