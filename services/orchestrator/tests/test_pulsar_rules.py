@@ -1,9 +1,7 @@
 """Pulsar's rules that need no database: what counts as repeating, whose OK is for which run, and a system user
 that may only look."""
 import os
-import shutil
 from datetime import datetime, timezone
-from pathlib import Path
 
 os.environ.setdefault("DATABASE_URL", "postgresql://x@localhost/x")
 os.environ.setdefault("REDIS_URL", "redis://localhost")
@@ -12,8 +10,6 @@ import pytest
 
 from app import engine, when
 from app.governance import GovernanceStore
-
-GOV = Path(__file__).parents[3] / "config" / "governance"
 
 
 @pytest.mark.parametrize("said,repeats", [
@@ -50,14 +46,34 @@ def test_his_ok_is_for_the_run_it_was_given_for():
     assert not engine._approved(_job(at, auto), {"approved": "yes"})
 
 
+CHARTER = """
+version: 1
+enforced:
+  default_tier: change
+  tiers: {reference: {}, read: {}, act: {}, change: {requires_confirmation: true}, never: {blocked: true}}
+users:
+  owner: {display_name: Kentrell, role: owner}
+  pulsar:
+    display_name: Pulsar
+    role: system
+    allow:
+      orbit: [status]
+"""
+
+
 def test_a_look_only_user_may_run_only_what_it_is_allowed(tmp_path):
-    root = tmp_path / "governance"
-    shutil.copytree(GOV, root)
-    g = GovernanceStore(str(root))
+    """Its own small charter, so this runs in the image's test stage too (the repo's config isn't copied there)."""
+    (tmp_path / "functions").mkdir()
+    (tmp_path / "charter.yaml").write_text(CHARTER)
+    for fn_, tools in (("orbit", "status: {tier: reference}\n  lock: {tier: act}\n  unlock: {tier: change}"),
+                       ("constellation", "power: {tier: change}"), ("pulsar", "save: {tier: change}")):
+        (tmp_path / "functions" / f"{fn_}.yaml").write_text(f"function: {fn_}\nenabled: true\ntools:\n  {tools}\n")
+    g = GovernanceStore(str(tmp_path))
     g.load_all()
     assert g.decide("orbit", "status", "pulsar", False).allowed
     for fn_, tool in (("orbit", "lock"), ("orbit", "unlock"), ("orbit", "something_new"), ("constellation", "power"),
-                      ("pulsar", "save"), ("morpho", "run"), ("admiral", "plan")):
+                      ("pulsar", "save")):
         d = g.decide(fn_, tool, "pulsar", True)
         assert not d.allowed and d.tier == "never", (fn_, tool)
     assert g.decide("orbit", "status", "owner", False).allowed                       # his own rules are untouched
+    assert g.decide("orbit", "lock", "owner", False).allowed
