@@ -96,9 +96,9 @@ rules:
   # on if it's off and switches it to this input first. tv: Orbit's name for the TV (empty = your
   # only TV). input: "HDMI 2", or the name you gave the input on the TV. Empty input = not set.
   screens:
-    - computer: TV PC
+    - computer: Node-TV
       tv: Living room TV
-      input: ""                        # which HDMI the TV PC is plugged into, e.g. "HDMI 2"
+      input: "HDMI 2"                        # which HDMI the TV PC is plugged into, e.g. "HDMI 2"
   targeting:
     default_target: requesting_node
     quiet_hours: []                    # e.g. { node: bedroom-tv, from: "22:00", to: "07:00" }

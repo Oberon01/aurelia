@@ -119,3 +119,20 @@ def test_chrysalis_checks_a_checks_file_before_its_release_applies():
     assert bad["valid"] is False and "unknown expect colour" in " ".join(bad["error"])
     home = c.post("/config/validate", json={"path": "config/checks/_home.yaml", "content": "vars: [1, 2]\n"}).json()
     assert home["valid"] is False
+
+
+def test_a_device_is_found_the_way_orbit_finds_it():
+    devices = [{"name": "Front Door Lock", "kind": "lock"}, {"name": "Kitchen", "kind": "light"},
+               {"name": "Living Room Lamp", "kind": "light"}, {"name": "Thermostat", "kind": "thermostat"}]
+    assert S._named(devices, "name", "front door", [])[0]["name"] == "Front Door Lock"
+    assert S._named(devices, "name", "kitchen light", [])[0]["name"] == "Kitchen"
+    assert S._named(devices, "name", "livingroom light", [])[0]["name"] == "Living Room Lamp"
+    assert S._named(devices, "name", "porch", ["Kitchen"])[0]["name"] == "Kitchen"          # the name its action reported
+    item, why = S._named(devices, "name", "garage", [])
+    assert item is None and why.startswith("nothing called garage (it has: Front Door Lock, Kitchen")
+    two = devices + [{"name": "Kitchen Island", "kind": "light"}]
+    item, why = S._named(two, "name", "kitchen light", [])
+    assert item["name"] == "Kitchen"                                                       # the exact one wins
+    item, why = S._named(two, "name", "island kitchen", [])
+    assert item["name"] == "Kitchen Island"
+    assert S._reported_names({"tools": [{"result": {"name": "Kitchen", "kind": "light", "on": True}}]}) == ["Kitchen"]

@@ -364,7 +364,59 @@ async def _tool(app, tool: str, args: dict, state: dict, within: float) -> dict:
     return act
 
 
-async def _verify(app, v: Verify, names: dict, mode: str, since: datetime, found: dict, run_id: int) -> list[dict]:
+_FILLER = {"the", "my", "a", "an", "light", "lights", "lamp", "lamps", "door", "lock", "switch", "dimmer", "sensor", "tv"}
+
+
+def _norm(name: Any) -> str:
+    words = re.sub(r"[^\w ]+", " ", str(name or "").lower()).split()
+    return " ".join(w for w in words if w not in _FILLER)
+
+
+def _reported_names(actual: dict) -> list[str]:
+    """The device names the check's own action reported (Orbit answers with the real one: "Kitchen")."""
+    out: list[str] = []
+
+    def walk(v, depth=0):
+        if depth > 4:
+            return
+        if isinstance(v, dict):
+            for k in ("name", "device"):
+                if isinstance(v.get(k), str):
+                    out.append(v[k])
+            for x in v.values():
+                walk(x, depth + 1)
+        elif isinstance(v, list):
+            for x in v[:20]:
+                walk(x, depth + 1)
+    for t in (actual or {}).get("tools") or []:
+        walk(t.get("result"))
+    return out
+
+
+def _named(items: list, key: str, wanted: Any, reported: list[str]) -> tuple[dict | None, str]:
+    """The item his words mean, matched the way Orbit matches names ("front door" is "Front Door Lock", "kitchen
+    light" is "Kitchen"), or the name the check's action reported. Never a guess between two."""
+    things = [it for it in items if isinstance(it, dict) and it.get(key) is not None]
+    have = ", ".join(str(it[key]) for it in things[:12]) or "nothing"
+    for r in reported:
+        hit = [it for it in things if str(it[key]).lower() == r.lower()]
+        if len(hit) == 1:
+            return hit[0], ""
+    w = _norm(wanted)
+    if not w:
+        return (things[0], "") if len(things) == 1 else (None, f"which {wanted}? (it has: {have})")
+    for test in (lambda n: n == w, lambda n: set(w.split()) <= set(n.split()),
+                 lambda n: w.replace(" ", "") in n.replace(" ", "")):
+        hit = [it for it in things if test(_norm(it[key]))]
+        if len(hit) == 1:
+            return hit[0], ""
+        if len(hit) > 1:
+            return None, f"more than one called {wanted}: {', '.join(str(it[key]) for it in hit[:5])}"
+    return None, f"nothing called {wanted} (it has: {have})"
+
+
+async def _verify(app, v: Verify, names: dict, mode: str, since: datetime, found: dict, run_id: int,
+                  reported: list[str] | None = None) -> list[dict]:
     """What the device (or his automation's run) reports afterwards, polled until it matches or time runs out.
     An automation counts only if it was made after the check started (the one he just made for it, never one of
     his own), and `found` remembers it so the clean-up deletes exactly that one."""
@@ -391,20 +443,26 @@ async def _verify(app, v: Verify, names: dict, mode: str, since: datetime, found
     tool, args, find = v.tool, fill(app, v.args, names), fill(app, v.find, names)
     want = fill(app, v.equals, names)
     seen: Any = "no answer"
+    matched = None
     while True:
         res = await _tool(app, tool, args, checkctx.state(mode), 20)
         data = (res["tools"] or [{}])[0].get("result") if res["tools"] else None
         items = data.get(find.get("list")) if isinstance(data, dict) and find.get("list") else [data]
         crit = {k: x for k, x in find.items() if k != "list"}
-        item = None
-        for it in items if isinstance(items, list) else []:
-            if isinstance(it, dict) and all(_same(it.get(k), x) for k, x in crit.items()):
-                item = it
-                break
+        item, why = None, ""
+        if isinstance(items, list):
+            pool = [it for it in items if isinstance(it, dict)
+                    and all(_same(it.get(k), x) for k, x in crit.items() if k != "name")]
+            if "name" in crit:
+                item, why = _named(pool, "name", crit["name"], reported or [])
+            else:
+                item = pool[0] if len(pool) == 1 else None
+                why = "" if item else f"{len(pool)} match"
         if item is None and crit:
-            seen = f"nothing called {', '.join(str(x) for x in crit.values())}" if isinstance(items, list) else \
+            seen = why if isinstance(items, list) else \
                 (res.get("reply") or (res["tools"] or [{}])[0].get("error") or "no answer")
         elif item is not None:
+            matched = item.get("name")
             seen = _path(item, v.field)
             if _same(seen, want):
                 break
@@ -412,7 +470,9 @@ async def _verify(app, v: Verify, names: dict, mode: str, since: datetime, found
             break
         await _touch(run_id)
         await asyncio.sleep(3)
-    label = f"{(crit.get('name') if crit else tool)}: {v.field}" if v.field else str(tool)
+    said = crit.get("name") if crit else tool
+    shown = f"{said} ({matched})" if matched and str(matched).lower() != str(said).lower() else said   # "kitchen light (Kitchen)"
+    label = f"{shown}: {v.field}" if v.field else str(tool)
     return [_line(f"{label} (as it reports)", want, seen, _same(seen, want))]
 
 
@@ -548,7 +608,7 @@ async def run_one(app, run_id: int, r: dict, mode: str) -> None:
             if not filled["needs_you"]:
                 await _set(r["id"], status="running", asking=None)
                 await publish(app, run_id)
-            lines += await _verify(app, c.verify, names, mode, started, found, run_id)
+            lines += await _verify(app, c.verify, names, mode, started, found, run_id, _reported_names(actual))
             await _set(r["id"], status="running", asking=None)
         if filled["question"]:
             yes = await _wait_answer(r["id"], "ask", filled["question"], app, run_id)
