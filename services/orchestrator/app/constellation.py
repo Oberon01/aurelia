@@ -180,6 +180,17 @@ TOOLS = [
             "url": {"type": "string"}, "text": {"type": "string"}}, "required": ["to"]},
         cancellable=False),
     registry.ToolSpec(
+        name="show", description="A look-up shown on another of his displays, as a step of a routine or an "
+                                 "automation ('send my youtube to my phone'): it runs once and appears only there, "
+                                 "confirmed by that display's own report. tool: the look-up (function.tool), args: its "
+                                 "arguments, to: a display or a group. Only look-ups. Made from his words by Pulsar; "
+                                 "not for the model, which uses _on.",
+        input_schema={"type": "object", "properties": {
+            "tool": {"type": "string"}, "args": {"type": "object"}, "to": {"type": "string"},
+            "what": {"type": "string", "description": "how he said it ('my youtube')"}},
+            "required": ["tool", "to"]},
+        cancellable=False),
+    registry.ToolSpec(
         name="logins", description="Which sites have a login saved on one of his computers (names only; never the "
                                    "logins themselves).",
         input_schema={"type": "object", "properties": {"target": {"type": "string"}}},
@@ -1416,6 +1427,47 @@ async def send(app, user: str, args: dict) -> dict:
     return out
 
 
+async def show(app, user: str, args: dict) -> dict:
+    """A look-up on another display, from a routine or an automation: exactly what "send my youtube to my phone"
+    does when he says it (the look-up runs once, never here, and is delivered and confirmed like a send)."""
+    from .assistant import ELSEWHERE
+    from .tasks import StartTask, launch, wait_for_result
+    qualified, to = str(args.get("tool") or ""), str(args.get("to") or "").strip()
+    targs = args.get("args") if isinstance(args.get("args"), dict) else {}
+    what = str(args.get("what") or "it")[:80]
+    fn, _, tool = qualified.partition(".")
+    if not fn or not tool or not to:
+        raise ValueError("Show what, and where?")
+    from .assistant import NOT_ELSEWHERE
+    if (fn == NAME and tool == "show") or qualified in NOT_ELSEWHERE:   # never a screen's contents, or a send
+        raise ValueError(f"{qualified} can't be shown on another display.")
+    if app.state.governance.decide(fn, tool, user, False).tier not in ("reference", "read"):
+        raise ValueError(f"Only look-ups can be shown on another display, and {qualified} isn't one.")
+    targets, label = await send_targets(app, to, None)
+    try:
+        task_id = await launch(app, StartTask(tool=qualified, args=targs, user=user, device=ELSEWHERE, trigger="send"))
+    except HTTPException as exc:
+        raise ValueError(f"I couldn't get {what}: {exc.detail}") from None
+    result = await wait_for_result(task_id, max(30, int(app.state.config.current.llm.wait_for_result_seconds)))
+    if result is None:
+        raise ValueError(f"Getting {what} took too long, so nothing was shown on {label}.")
+    if result["status"] != "completed" or not result["result"]:
+        raise ValueError(f"I couldn't get {what}: {result['error'] or 'nothing to show'}")
+    sent = await deliver(app, user, targets, qualified, targs, result["result"], "a routine")
+    went, cap = sent["shown"], what[:1].upper() + what[1:]
+    if went:                                            # confirmed by the display's own report
+        out = {"headline": f"{cap} on {', '.join(went)}", "sent": {"what": "look-up", "confirmed": went,
+                                                                   "later": sent["later"], "failed": []}}
+        note = delivery_note(sent)
+        if note:
+            out["note"] = note + "."
+        return out
+    # Not open (a phone in a pocket): kept, and shown the moment it opens. Not shown yet, so never "done"; but not a
+    # failure either, so it never pauses the automation (the run is recorded as kept).
+    return {"headline": f"{cap} kept for {label}: it shows there when it's opened",
+            "kept": {"what": "look-up", "for": sent["later"]}, "note": (delivery_note(sent) or "") + "."}
+
+
 async def notify_tool(app, user: str, args: dict) -> dict:
     from . import push
     if str(args.get("action") or "test") == "status":
@@ -2031,7 +2083,7 @@ async def live_frame(node_id: int, request: Request):
 HANDLERS = {"devices": devices, "open": open_, "apps": apps, "home": home, "look": look, "click": click, "type": type_,
             "press": press, "scroll": scroll, "back": back, "media": media, "submit": submit, "health": health,
             "list_processes": list_processes, "close_process": close_process, "kill_process": kill_process,
-            "sign_in": sign_in, "logins": logins, "send": send, "clear": clear, "notify": notify_tool, "screens": screens, "diagnose": diagnose_node,
+            "sign_in": sign_in, "logins": logins, "send": send, "show": show, "clear": clear, "notify": notify_tool, "screens": screens, "diagnose": diagnose_node,
             "power": power, "restart": restart, "wake": wake, "sound": sound, "watch": watch,
             "install": install, "install_package": install_package, "uninstall": uninstall, "remove_package": remove_package,
             "clipboard": clipboard, "copy": copy, "paste": paste, "mode": mode}

@@ -55,3 +55,52 @@ checks:
     after:
       - delete: automation          # exactly the one made for this check (never one of yours)
       - say: "turn off the {light}"
+
+  # Time windows on event automations, and routine steps that show a look-up on another display.
+  - id: window-readback
+    name: A time window is read by code and read back
+    say: "when the {lock} unlocks between 5pm and 6pm, turn on the {light}"
+    expect:
+      route: fastpath
+      asks_to_confirm: pulsar.save
+      reply_has: ["between 5:00 PM and 6:00 PM", "Save it?"]
+
+  - id: bare-hour-asked
+    name: A bare hour in a window is never guessed
+    say: "when the {lock} unlocks between 5 and 6, turn on the {light}"
+    expect:
+      route: "not fastpath"
+      tool: none
+
+  - id: condition-never-now
+    name: A condition I can't read is never done right now
+    say: "turn on the {light} when the {lock} unlocks if it's dark"
+    expect:
+      route: "not fastpath"
+      tool: none
+
+  - id: routine-show-readback
+    name: A routine step can show a look-up on another display
+    say: "make a routine called check show: send my youtube to my phone, then turn on the {light}"
+    expect:
+      route: fastpath
+      asks_to_confirm: pulsar.save
+      reply_starts: "Routine \"check show\": 1) Send my youtube to my phone; 2) Turn on the"
+
+  - id: routine-show-runs
+    name: The routine's step shows your YouTube on your phone, confirmed by the phone
+    needs_you: "Say “make a routine called check show: send my youtube to my phone” and confirm it. Then, with your phone unlocked and Aurelia open on it, say “check show” on another display."
+    question: "Did your YouTube recommendations open on your phone, and not on the display you asked from?"
+    after:
+      - say: "forget the check show routine"
+
+  - id: window-runs
+    name: A door unlocking inside its window starts the automation, checked by the light's own report
+    needs_you: "Say “when the {lock} unlocks between {in_0_minutes} and {in_30_minutes}, turn on the {light}” and confirm the read-back. Then unlock the {lock} (and lock it again)."
+    verify:
+      automation: "{light}"
+      outcome: done
+      within: 10m
+    after:
+      - delete: automation          # exactly the one made for this check (never one of yours)
+      - say: "turn off the {light}"

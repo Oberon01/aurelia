@@ -102,9 +102,10 @@ async def ask(body: Ask, request: Request):
     chosen = style.switch(body.text) if chk is None else None     # a check never changes how she speaks
     fp = fastpath.match(body.text, cfg.fastpath.patterns) if cfg.fastpath.enabled and chosen is None else None
     from . import when as _when
-    repeats = _when.mentions_repeat(body.text)
+    repeats = _when.mentions_repeat(body.text) or _CONDITIONAL.search(body.text) is not None
     if repeats and fp and not fp.pattern.tool.startswith("pulsar."):
-        fp = None                           # "lock the door every night at 11": an automation, never a command now
+        fp = None                           # "lock the door every night at 11", "flip the porch light when the door
+                                            # unlocks if it's dark": an automation (or the model asks), never a command now
     later = bool(fp and fp.pattern.tool in ("admiral.schedule", "pulsar.automate", "pulsar.routine"))
     if later:
         from . import engine, pulsar        # "tomorrow I have a meeting" isn't a command for later: the model hears it
@@ -221,6 +222,21 @@ async def confirm(body: Confirm, request: Request):
 # ---- fast path ----------------------------------------------------------------
 
 import re as _re_send
+# "… when the door unlocks", "whenever I get home, …": a condition, so what it says is never done right now.
+# (Questions aren't conditions: "when is …", "when does …".)
+_CONDITIONAL = _re_send.compile(
+    r"\b(?:when(?:ever)?|each\s+time|every\s+time|any\s+time|as\s+soon\s+as)\s+"
+    r"(?!(?:is|are|was|were|do|does|did|will|would|can|could|should|has|have|had)\b)\w"
+    # "… if the door opens", "… once I leave", "… until I get home", "… after I leave" (not "check if …", a question)
+    r"|(?<!check\s)(?<!see\s)(?<!ask\s)(?<!know\s)(?<!out\s)(?<!me\s)(?<!wonder\s)"
+    r"\b(?:once|until|till|while|after|before|next\s+time)\s+"
+    r"(?:i|i'm|im|i've|you|you're|the|my|it|it's|its|someone|somebody|anyone|everyone|everybody|no\s+one|nobody|"
+    r"he|she|they|we|there|there's)\b"
+    # "… if it's dark", "… if Sarah leaves", "… unless …", "… in case …": any "if" that isn't a question
+    r"|(?<!check\s)(?<!see\s)(?<!ask\s)(?<!know\s)(?<!out\s)(?<!me\s)(?<!wonder\s)(?<!asks\s)(?<!asking\s)"
+    r"(?<!checking\s)(?<!whether\s)\b(?:if|unless|in\s+case)\s+\w"
+    r"|\b(?:after|at|before|around|by)\s+(?:sunset|sunrise|dusk|dawn|dark)\b"
+    r"|\b(?:during|in)\s+(?:the\s+)?quiet\s+hours\b", _re_send.I)
 SEND_ELSEWHERE = _re_send.compile(
     r"^send\s+(?!(?:panel\s+\d+|this|that|it|this\s+panel|that\s+panel|a\s+note|note|https?://)\b)"
     r"(?P<what>.+?)\s+(?:to|over\s+to|onto|on)\s+(?:the\s+|my\s+)?(?P<to>[\w' -]+?)$", _re_send.I)
@@ -571,6 +587,8 @@ async def _run_for_display(app, user: str, qualified: str, args: dict, on: str, 
     the same way send does: big on a presentation display, kept for one that isn't open."""
     from . import constellation
     fn, _, tool = qualified.partition(".")
+    if qualified in NOT_ELSEWHERE:                    # a screen's contents, or another send: never to another display
+        return _data({"status": "refused", "reason": f"{qualified} can't be shown on another display."}), True
     tier = app.state.governance.decide(fn, tool, user, False).tier
     if tier not in ("reference", "read"):
         return _data({"status": "refused", "reason": "Only look-ups can be shown on another display; "
@@ -611,8 +629,9 @@ async def _run_for_display(app, user: str, qualified: str, args: dict, on: str, 
 # ---- long replies open as a panel --------------------------------------------------------------
 
 REPLY_TOOL = "aurelia.reply"
-QUIET_TOOLS = {"constellation.send"}
-NOT_FOR_MODEL = {"pulsar.save", "lagrange.connect", "lagrange.approve", "lagrange.turn_on"}   # his own taps and words only               # only his confirmation of a read-back runs it           # tools whose panel isn't something to read
+QUIET_TOOLS = {"constellation.send", "constellation.show"}
+NOT_FOR_MODEL = {"pulsar.save", "lagrange.connect", "lagrange.approve", "lagrange.turn_on",
+                 "constellation.show"}       # routines' and automations' steps; the model uses _on   # his own taps and words only               # only his confirmation of a read-back runs it           # tools whose panel isn't something to read
 _SENTENCE = __import__("re").compile(r"(?<=[.!?])[\"')\]]*\s+(?=[A-Z0-9\"'(])")
 
 

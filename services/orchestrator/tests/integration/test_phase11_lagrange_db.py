@@ -70,14 +70,16 @@ def svc(stack):
     threading.Thread(target=srv.run, daemon=True).start()
     time.sleep(0.5)
     gov = Path(app.state.governance.root) / "functions"
-    (gov / "lagfn.yaml").write_text("function: lagfn\nrate_limit_per_minute: 1000\ntools:\n  act: {tier: act}\n")
+    (gov / "lagfn.yaml").write_text("function: lagfn\nrate_limit_per_minute: 1000\ntools:\n  act: {tier: act}\n"
+                                    "  look: {tier: reference}\n")
     app.state.governance.load_all()
     app.state.governance.functions["orbit"].tools["status"] = ToolPolicy(tier="reference")
     url = f"http://127.0.0.1:{port}"
     prop = lambda *ks: {"type": "object", "properties": {k: {"type": "string"} for k in ks}}
 
     def register():
-        for name, tools in (("lagfn", [{"name": "act", "description": "act", "input_schema": prop("what")}]),
+        for name, tools in (("lagfn", [{"name": "act", "description": "act", "input_schema": prop("what")},
+                                       {"name": "look", "description": "look", "input_schema": prop("what")}]),
                             ("orbit", [{"name": "status", "description": "home", "input_schema": prop()}])):
             httpx.post(f"{orch}/registry/functions", json={"name": name, "description": "test", "url": url,
                                                            "tools": tools}).raise_for_status()
@@ -92,10 +94,14 @@ def home(stack, svc):
     from app.main import app
     from app.config import FastPathPattern
     import yaml
+    from app.governance import ToolPolicy
     svc["register"]()
+    app.state.governance.functions["orbit"].tools["status"] = ToolPolicy(tier="reference")   # (a reload drops it)
     real = yaml.safe_load(Path(__file__).parents[4].joinpath("config", "aurelia.yaml").read_text())["fastpath"]["patterns"]
     mine = [FastPathPattern(**p) for p in real if p["tool"].startswith(("pulsar.", "lagrange."))]
-    mine += [FastPathPattern(name="t-act", match=r"^flip (?P<what>.+)$", tool="lagfn.act", args={"what": "{what}"})]
+    mine += [FastPathPattern(name="t-act", match=r"^flip (?P<what>.+)$", tool="lagfn.act", args={"what": "{what}"}),
+             FastPathPattern(name="t-look", match=r"^(?:show )?my feed$", tool="lagfn.look", args={"what": "feed"})]
+    mine += [FastPathPattern(**p) for p in real if p["name"] == "routine-run"]
     cfg = app.state.config.current.fastpath
     old = cfg.patterns
     cfg.patterns = mine
@@ -239,3 +245,141 @@ def test_a_connected_service_asks_first_until_his_own_rules_say_otherwise(home):
         app.state.governance.load_all()
         app.state.governance.functions.pop("gitea", None)
         httpx.delete(f"{orch}/registry/functions/gitea")
+
+
+def _hour(dt) -> str:
+    return dt.strftime("%I%p").lstrip("0").lower()                  # "5pm"
+
+
+def _clock(dt) -> str:
+    return dt.strftime("%I:%M %p").lstrip("0")                      # "5:00 PM"
+
+
+def test_a_time_window_decides_whether_an_event_starts_it(home):
+    """"when the front door unlocks between 5pm and 6pm, …": read back, kept with the rule, and checked in his
+    time zone when the door unlocks; a bare hour is asked about, never guessed."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    from app.main import app
+    orch = home["orch"]
+    app.state.governance.functions["pulsar"].rules["quiet_hours"] = ""
+    now = datetime.now(ZoneInfo("America/Chicago")).replace(minute=0, second=0, microsecond=0)
+    a, b = now - timedelta(hours=1), now + timedelta(hours=2)            # now is inside
+    c, d = now + timedelta(hours=3), now + timedelta(hours=4)            # now is outside
+    out = ask(orch, f"when the front door unlocks between {_hour(a)} and {_hour(b)}, flip the hall light")
+    assert out["route"] == "fastpath" and out["reply"].startswith(
+        f"When Front Door unlocks between {_clock(a)} and {_clock(b)}: Flip the hall light."), out
+    confirm(orch, out)
+    out = ask(orch, f"flip the porch light when the front door unlocks between {_hour(c)} and {_hour(d)}")
+    assert out["reply"].startswith(f"When Front Door unlocks between {_clock(c)} and {_clock(d)}: Flip the porch light."), out
+    confirm(orch, out)
+    rules = [json.loads(j["rule"]) if isinstance(j["rule"], str) else j["rule"] for j in armed()]
+    assert [r["window"] for r in rules] == [{"from": a.strftime("%H:%M"), "to": b.strftime("%H:%M")},
+                                           {"from": c.strftime("%H:%M"), "to": d.strftime("%H:%M")}]
+    n = len(home["runs"])
+    state(orch, id="front door", name="Front Door", state={"locked": True})
+    r = state(orch, id="front door", name="Front Door", state={"locked": False}).json()
+    assert r == {"event": "unlocked", "started": 1}                      # only the one whose window holds now
+    until(lambda: ("act", {"what": "the hall light"}) in home["runs"][n:], what="the hall light")
+    assert ("act", {"what": "the porch light"}) not in home["runs"][n:]
+    # A condition I can't read is never a command now ("flip …" would otherwise run the porch light at once).
+    n = len(home["runs"])
+    out = ask(orch, "flip the porch light when the front door unlocks if it's dark")
+    assert out["route"] != "fastpath", out
+    time.sleep(1.0)
+    assert ("act", {"what": "the porch light when the front door unlocks if it's dark"}) not in home["runs"][n:]
+    assert not [r for r in home["runs"][n:] if r[0] == "act"]
+    # A time said inside what to do would never limit when it runs: asked about, never saved.
+    before = len(armed())
+    out = ask(orch, "when the front door unlocks, flip the hall light after 9pm")
+    assert out["route"] != "fastpath" and not out.get("needs_confirmation"), out
+    assert len(armed()) == before
+    # A bare hour: never guessed (the model hears it and asks, as with "every day at 7"); nothing saved or run.
+    before, n = len(armed()), len(home["runs"])
+    out = ask(orch, "when the front door unlocks between 5 and 6, flip the hall light")
+    assert out["route"] != "fastpath" and not out.get("needs_confirmation"), out
+    time.sleep(1.0)
+    assert len(armed()) == before and not [r for r in home["runs"][n:] if r[0] == "act"]
+
+
+def test_a_routine_step_shows_a_look_up_on_another_display(home):
+    """"make a routine called coming home: send my feed to my phone, then flip the tv": the feed runs once, only for
+    the phone, and the step is done only when the phone's own report says it's showing; the same words work as an
+    automation's command."""
+    import threading
+    import uuid
+    from app import auth
+    from .test_phase7_roles_send_db import device, listen
+    orch = home["orch"]
+    ws_url = orch.replace("http", "ws") + "/ws"
+    sql("UPDATE devices SET status='revoked' WHERE status='approved'")
+    auth._by_id.clear()
+    phone = device("browser", "Kentrell's 16 Pro", {"os": "iOS", "browser": "Safari", "app": True})
+    sql("UPDATE skills SET status='retired' WHERE name='coming home'")
+    out = ask(orch, "make a routine called coming home: send my feed to my phone, then flip the tv")
+    assert out["route"] == "fastpath" and out["reply"].startswith(
+        'Routine "coming home": 1) Send my feed to my phone; 2) Flip the tv (after the one before).'), out
+    confirm(orch, out)
+    [sk] = sql("SELECT * FROM skills WHERE name='coming home' AND status='active'")
+    steps = json.loads(sk["steps"])
+    assert [s["tool"] for s in steps] == ["constellation.show", "lagfn.act"]
+    assert steps[0]["args"] == {"tool": "lagfn.look", "args": {"what": "feed"}, "to": "phone", "what": "my feed"}
+
+    got: list = []
+    t = threading.Thread(target=lambda: asyncio.run(listen(ws_url, phone, 25, got)), daemon=True)
+    t.start()
+    time.sleep(1.0)
+    n = len(home["runs"])
+    run = ask(orch, "coming home")
+    assert run["route"] == "fastpath", run
+    until(lambda: ("act", {"what": "the tv"}) in home["runs"][n:], 30, "the routine's second step")
+    assert ("look", {"what": "feed"}) in home["runs"][n:]
+    [show] = [dict(r) for r in sql("SELECT status, result FROM task_runs WHERE tool='constellation.show' "
+                                   "ORDER BY started_at DESC LIMIT 1")]
+    res = json.loads(show["result"]) if isinstance(show["result"], str) else show["result"]
+    assert show["status"] == "completed" and res["sent"]["confirmed"] == ["Kentrell's 16 Pro"], res
+    assert [e for e in got if e.get("type") == "panel.open" and e.get("tool") == "lagfn.look"]   # on the phone
+    looks = sql("SELECT device, trigger FROM task_runs WHERE tool='lagfn.look' ORDER BY started_at DESC LIMIT 1")
+    assert looks[0]["trigger"] == "send"                                 # run for the phone, never here first
+    t.join(timeout=30)
+
+    def task(tool, args, wait=40):
+        tid = httpx.post(f"{orch}/tasks", json={"tool": tool, "args": args}).json()["task_id"]
+        return until(lambda: (r := httpx.get(f"{orch}/tasks/{tid}").json())["status"] != "running" and r, wait, tool)
+
+    # The phone isn't open now: kept for it (honestly not shown), never a failure.
+    r = task("constellation.show", {"tool": "lagfn.look", "args": {"what": "feed"}, "to": "phone", "what": "my feed"})
+    res = r["result"] if isinstance(r["result"], dict) else json.loads(r["result"])
+    assert r["status"] == "completed" and res["kept"]["for"] == ["Kentrell's 16 Pro"] and "sent" not in res, res
+    assert res["headline"].startswith("My feed kept for")
+    from app import admiral
+    assert admiral.unconfirmed(res) is None
+    # The routine with the phone closed: the TV still turns on, and the run is "kept", never "done" or a failure.
+    home["register"]()                                                   # (stand-ins don't heartbeat: still registered)
+    n = len(home["runs"])
+    ask(orch, "coming home")
+    until(lambda: ("act", {"what": "the tv"}) in home["runs"][n:], 30, "the second step with the phone closed")
+    pl = until(lambda: (p := sql("SELECT id, status, report FROM plans ORDER BY created_at DESC LIMIT 1"))
+               and p[0]["status"] not in ("planning", "running") and p[0], 30, "the routine's end")
+    assert pl["status"] == "kept", dict(pl)
+    rep = json.loads(pl["report"]) if isinstance(pl["report"], str) else pl["report"]
+    assert rep["kept"] and "kept for" in rep["kept"][0] and not rep["gaps"], rep
+    assert [s["status"] for s in sql("SELECT status FROM plan_steps WHERE plan_id=$1 ORDER BY n", pl["id"])] == ["kept", "done"]
+    # Never a screen's contents or another send, and never an action.
+    for bad in ("constellation.screens", "constellation.send", "lagfn.act"):
+        r = task("constellation.show", {"tool": bad, "args": {}, "to": "phone"})
+        assert r["status"] == "failed" and ("can't be shown" in r["error"] or "Only look-ups" in r["error"]), (bad, r)
+
+    # As an automation's own command, with a window: read back and saved as the same step.
+    home["register"]()                                                   # (stand-ins don't heartbeat: still registered)
+    out = ask(orch, "when the front door unlocks between 5pm and 6pm, send my feed to my phone")
+    assert out["reply"].startswith("When Front Door unlocks between 5:00 PM and 6:00 PM: Send my feed to my phone."), out
+    confirm(orch, out)
+    [j] = [x for x in sql("SELECT spec, rule FROM jobs WHERE created_by='owner' AND status='armed' ORDER BY id DESC LIMIT 1")]
+    spec = json.loads(j["spec"]) if isinstance(j["spec"], str) else j["spec"]
+    assert spec["tool"] == "constellation.show" and spec["args"]["tool"] == "lagfn.look"
+    # Never an action: "send" only carries look-ups.
+    out = ask(orch, "make a routine called nope: send flip the tv to my phone")
+    assert not out.get("needs_confirmation") or out["route"] != "fastpath", out
+    sql("UPDATE skills SET status='retired' WHERE name='coming home'")
+    sql("UPDATE devices SET status='revoked' WHERE id=$1", phone)

@@ -450,8 +450,9 @@ def repeats(job: dict) -> str | None:
         from .happenings import says
         return says(rule)
     if rule.get("on"):
+        from .happenings import say_conditions
         what = {"online": "comes online", "offline": "goes offline", "open": "opens"}.get(rule["on"], rule["on"])
-        return f"when {rule.get('device_name') or 'it'} {what}"
+        return f"when {rule.get('device_name') or 'it'} {what}{say_conditions(rule)}"
     return when.say_rule(rule)
 
 
@@ -795,6 +796,9 @@ async def _run_tool(app, job: dict) -> None:
     if res["status"] == "completed":
         why = admiral.unconfirmed(data)
         head = str(data.get("headline") or job["title"])
+        if not why and isinstance(data.get("kept"), dict):      # kept for a display that isn't open: not shown yet
+            await _finish(app, job, "kept", head, task_id)          # (never "done", never a failure; the display
+            return                                                  # it's kept for has already told him)
         if why:
             await _finish(app, job, "unconfirmed", why, task_id)
             await _tell(app, job, "Asked, not confirmed", f"{head}. I couldn't confirm it happened: {why}"[:250])
@@ -810,7 +814,8 @@ def _trigger(job: dict) -> str:
     return "automation" if recurring(job) else "schedule"
 
 
-ROUTINE_END = {"done": "done", "gaps": "unconfirmed", "failed": "failed", "stopped": "failed", "expired": "failed"}
+ROUTINE_END = {"done": "done", "kept": "kept", "gaps": "unconfirmed", "failed": "failed", "stopped": "failed",
+               "expired": "failed"}
 
 
 async def _run_routine(app, job: dict) -> None:
@@ -869,7 +874,7 @@ async def _run_routine(app, job: dict) -> None:
         await asyncio.sleep(1)
     head = str((report or {}).get("headline") or job["title"])[:250]
     outcome = ROUTINE_END[status]
-    gaps = "; ".join((report or {}).get("gaps") or [])
+    gaps = "; ".join((report or {}).get("gaps") or (report or {}).get("kept") or [])
     await _finish(app, job, outcome, (gaps or head)[:300], task_id)
     # A plan that failed or ended with gaps has already told him (its own notification); one that worked is in
     # the digest when it's an automation's.

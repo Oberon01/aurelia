@@ -2326,7 +2326,7 @@ function onscreenView(o, compact) {
 }
 // Admiral: a plan's steps as they run, each marked from its own result; a step that waits for his OK
 // has its buttons here; the report (checked against what he asked) when it's done.
-const STEP_WORD = { pending: "to do", running: "running", waiting: "needs your OK", done: "done", unconfirmed: "not confirmed",
+const STEP_WORD = { pending: "to do", running: "running", waiting: "needs your OK", done: "done", kept: "kept for later", unconfirmed: "not confirmed",
                     failed: "failed", skipped: "skipped", replaced: "replaced" };
 const PLAN_ASK = "admiral.ask";
 async function planPost(url, body) {
@@ -2362,6 +2362,10 @@ function planView(p) {
   if (p.report) {
     const r = p.report;
     if (r.summary) { const sm = el("div", "lib-note", r.summary); sm.style.whiteSpace = "pre-wrap"; box.append(sm); }
+    if ((r.kept || []).length) {                     // shown when that display opens: not done yet, not failed
+      const g = el("div"); g.append(el("div", "facts", "Waiting for a display to open"));
+      r.kept.forEach(x => g.append(el("div", "more", "· " + x))); box.append(g);
+    }
     if ((r.gaps || []).length) {
       const g = el("div"); g.append(el("div", "facts", "Not covered"));
       r.gaps.forEach(x => g.append(el("div", "more", "· " + x))); box.append(g);

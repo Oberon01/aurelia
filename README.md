@@ -1442,6 +1442,18 @@ Admiral's engine. Policy: `config/governance/functions/pulsar.yaml`. Code:
   something else. A step waiting for your OK waits only as long as that run
   may still happen (`grace_minutes.action`); after that the routine is stopped
   and the run counted as missed, never run late.
+- **A look-up on another display, as a step.** "Make a routine called coming
+  home: send my youtube to my phone, then turn on the roku, then switch the
+  roku to hdmi 2", or an automation's own command ("when the front door
+  unlocks between 5pm and 6pm, send my youtube to my phone"). The step runs
+  the look-up once, only for that display, exactly as when you say it
+  (`constellation.show`); it's done when the display's own report says it's
+  showing, and if your phone is locked it's kept for when it opens. A kept
+  step isn't "done": the routine still goes on (the Roku still turns on), and
+  ends as "Plan done · kept for later", recorded as kept, never as a failure
+  that could pause the automation. Your phone gets one notification when it's
+  kept, not two. Only look-ups: "send" never carries an action, a screen's
+  contents or another send.
 - **Events.** "When the TV PC comes online, open YouTube on the TV PC", "lock
   the front door when the desk goes offline", "when I open my phone, show the
   weather": at most once per `event_cooldown_minutes`. Doors, lights, sensors,
@@ -1576,6 +1588,22 @@ Anything more goes to the model, which then sees only that service's tools.
   Lagrange reports Home Assistant's. I keep the last state I heard, so the
   same state reported twice (or by two copies of me) starts nothing twice.
   "During quiet hours" (or "at night") limits it to quiet hours.
+- **When it may run.** Right after the event: "between 5pm and 6pm", "from
+  10:30pm to 2am" (an overnight window belongs to the day it started), "after
+  9pm", "before 7am", "on weekdays", "on weekends", "on Mondays and Fridays",
+  and "during quiet hours", alone or together ("after 9pm on weekdays"). Read
+  by code in your time zone and read back ("When Front Door unlocks between
+  5:00 PM and 6:00 PM: …"). A bare hour ("between 5 and 6") is never guessed:
+  the model hears it and asks. So are "after midnight", "after 1am" (until
+  when?) and "weeknights" (which hours?). Said inside what to do instead
+  ("…, turn on the light after 9pm"), it would never limit when it runs, so I
+  ask you to move it right after the event rather than save it. The same words work for computers and displays
+  ("when the den PC comes online after 6pm, …").
+- **Never run now by mistake.** A sentence with a condition in it ("… when
+  the door unlocks if it's dark", "… unless I'm home", "… after sunset") that
+  I can't read as an automation is never run as a plain command: the model
+  hears it and asks. Questions ("check if the door is locked") aren't
+  conditions.
 - "Turn on the porch light when I get home", "when I leave, lock the front
   door": your person in Home Assistant (its phone app tracks you).
 - "When the arrive home webhook is called, …": a webhook in.

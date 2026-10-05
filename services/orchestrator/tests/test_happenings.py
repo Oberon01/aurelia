@@ -39,7 +39,85 @@ def test_home_events_in_his_words(text, what, parts):
         assert m.group("dev").strip() == parts["dev"]
     if "hook" in parts:
         assert m.group("hook") == parts["hook"]
-    assert bool(m.group("quiet")) == parts.get("quiet", False)
+    assert (H.conditions(m.group("cond")).get("only") == "quiet") == parts.get("quiet", False)
+
+
+@pytest.mark.parametrize("text,what,cond", [
+    ("when the front door unlocks between 5pm and 6pm, run coming home", "run coming home",
+     {"window": {"from": "17:00", "to": "18:00"}}),
+    ("when the front door unlocks between 5 pm and 6 p.m. send my youtube to my phone", "send my youtube to my phone",
+     {"window": {"from": "17:00", "to": "18:00"}}),
+    ("when the front door unlocks after 9pm on weekdays, turn on the hall light", "turn on the hall light",
+     {"window": {"from": "21:00", "to": None}, "days": ["mon", "tue", "wed", "thu", "fri"]}),
+    ("turn on the porch light when I get home before 7am", "turn on the porch light", {"window": {"from": None, "to": "07:00"}}),
+    ("when the front door unlocks on mondays and fridays, turn on the light", "turn on the light", {"days": ["mon", "fri"]}),
+    ("when the front door unlocks from 10:30pm to 2am, turn on the light", "turn on the light",
+     {"window": {"from": "22:30", "to": "02:00"}}),
+    ("when the front door unlocks during quiet hours on weekends, turn on the light", "turn on the light",
+     {"only": "quiet", "days": ["sat", "sun"]}),
+    ("when the front door unlocks between noon and midnight, turn on the light", "turn on the light",
+     {"window": {"from": "12:00", "to": "00:00"}}),
+    ("when the front door unlocks, turn on the light", "turn on the light", {}),
+    ("when the tv turns on, monitor the lights", "monitor the lights", {}),          # "on mon…" only as days
+    ("when the front door opens after 10 minutes, turn on the light", "after 10 minutes, turn on the light", {}),
+])
+def test_when_an_event_automation_may_run(text, what, cond):
+    m = H.FIRST.match(text) or H.LAST.match(text)
+    assert m and m.group("what") == what, (m and m.groupdict())
+    assert H.conditions(m.group("cond")) == cond
+
+
+@pytest.mark.parametrize("said,ask", [
+    ("between 5 and 6", "Do you mean 5 in the morning or the evening?"),        # a bare hour: asked, never guessed
+    ("after 9", "Do you mean 9 in the morning or the evening?"),
+    ("between 5pm and 6pm after 7pm", "One time window"),
+    ("between 5pm and 5pm", "starts and ends at the same time"),
+    ("on weekdays on mondays", "Say the days once"),
+    ("after midnight", "until when"), ("before 12am", "until when"),
+    ("on weeknights", "Which hours do you mean by weeknights"),
+    ("between 12 and 1pm", "noon or 12 midnight"),
+    ("after 1am", "until when"), ("after 12:30am", "until when"),           # "after 1am" alone runs nearly all day
+])
+def test_unclear_times_are_asked_about(said, ask):
+    with pytest.raises(ValueError, match=ask):
+        H.conditions(" " + said)
+
+
+def test_a_window_and_days_are_checked_in_his_time_zone(monkeypatch):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from app import engine, pulsar
+    monkeypatch.setattr(engine, "tz_name", lambda app: "America/Chicago")
+    monkeypatch.setattr(pulsar, "is_quiet", lambda app, at=None: False)
+    at = lambda y, mo, d, h, mi: datetime(y, mo, d, h, mi, tzinfo=ZoneInfo("America/Chicago"))
+    five_six = {"window": {"from": "17:00", "to": "18:00"}}
+    assert H.allowed(None, five_six, at(2026, 10, 5, 17, 0))
+    assert H.allowed(None, five_six, at(2026, 10, 5, 17, 59))
+    assert not H.allowed(None, five_six, at(2026, 10, 5, 18, 0))                # the end is not in it
+    assert not H.allowed(None, five_six, at(2026, 10, 5, 16, 59))
+    assert H.allowed(None, five_six, at(2026, 10, 5, 17, 30))
+    from datetime import timezone
+    assert H.allowed(None, five_six, datetime(2026, 10, 5, 22, 30, tzinfo=timezone.utc))     # 5:30 PM in Chicago
+    after9 = {"window": {"from": "21:00", "to": None}}
+    assert H.allowed(None, after9, at(2026, 10, 5, 23, 59)) and not H.allowed(None, after9, at(2026, 10, 6, 0, 30))
+    before7 = {"window": {"from": None, "to": "07:00"}}
+    assert H.allowed(None, before7, at(2026, 10, 5, 6, 59)) and not H.allowed(None, before7, at(2026, 10, 5, 7, 0))
+    # Overnight on Fridays: 1 AM Saturday belongs to Friday's window; 1 AM Friday to Thursday's.
+    night_fri = {"window": {"from": "22:00", "to": "02:00"}, "days": ["fri"]}
+    assert H.allowed(None, night_fri, at(2026, 10, 9, 23, 0))                   # Friday 11 PM
+    assert H.allowed(None, night_fri, at(2026, 10, 10, 1, 0))                   # Saturday 1 AM
+    assert not H.allowed(None, night_fri, at(2026, 10, 9, 1, 0))                # Friday 1 AM: Thursday's night
+    weekdays = {"days": ["mon", "tue", "wed", "thu", "fri"]}
+    assert H.allowed(None, weekdays, at(2026, 10, 5, 12, 0)) and not H.allowed(None, weekdays, at(2026, 10, 4, 12, 0))
+    monkeypatch.setattr(pulsar, "is_quiet", lambda app, at=None: True)
+    monkeypatch.setattr(pulsar, "quiet_spec", lambda app: "23:00-07:00")
+    assert not H.allowed(None, {"only": "quiet", **five_six}, at(2026, 10, 5, 12, 0))       # every condition holds
+    assert H.allowed(None, {"only": "quiet"}, at(2026, 10, 5, 12, 0))
+    # "at night on Fridays": Friday night's quiet hours, into Saturday morning; never Thursday's night.
+    fri_nights = {"only": "quiet", "days": ["fri"]}
+    assert H.allowed(None, fri_nights, at(2026, 10, 9, 23, 30))                 # Friday 11:30 PM
+    assert H.allowed(None, fri_nights, at(2026, 10, 10, 1, 0))                  # Saturday 1 AM
+    assert not H.allowed(None, fri_nights, at(2026, 10, 9, 3, 0))               # Friday 3 AM: Thursday's night
 
 
 def test_questions_are_not_events():
@@ -70,6 +148,17 @@ def test_read_back():
         "when Front Door unlocks during quiet hours"
     assert H.says({"on": "state", "entity_name": "you", "say": "get home"}) == "when you get home"
     assert H.says({"on": "hook", "hook_name": "Arrive home"}) == "when the Arrive home webhook is called"
+    assert H.says({"on": "state", "entity_name": "Front Door", "say": "unlocks", "window": {"from": "17:00", "to": "18:00"}}) == \
+        "when Front Door unlocks between 5:00 PM and 6:00 PM"
+    assert H.says({"on": "state", "entity_name": "Front Door", "say": "unlocks", "window": {"from": "21:00", "to": None},
+                   "days": ["mon", "tue", "wed", "thu", "fri"]}) == "when Front Door unlocks after 9:00 PM on weekdays"
+    assert H.says({"on": "hook", "hook_name": "Arrive home", "window": {"from": None, "to": "07:00"}, "days": ["sat", "sun"]}) == \
+        "when the Arrive home webhook is called before 7:00 AM on weekends"
+    assert H.says({"on": "state", "entity_name": "you", "say": "get home", "days": ["mon", "fri"], "only": "quiet"}) == \
+        "when you get home during quiet hours on Mondays and Fridays"
+    from app import engine
+    assert engine.repeats({"rule": {"on": "online", "device_name": "Den PC", "window": {"from": "17:00", "to": "18:00"}}}) == \
+        "when Den PC comes online between 5:00 PM and 6:00 PM"
 
 
 def test_a_connected_service_asks_first_until_his_rules_say_otherwise(tmp_path):
@@ -110,3 +199,52 @@ def test_only_my_own_network_may_call_me(monkeypatch):
     assert not peers.from_stack("172.18.0.7")                     # can't tell, in the running stack: refused
     monkeypatch.delenv("STACK_GUARD")
     assert peers.from_stack("172.18.0.7")                          # a dev machine or the tests
+
+
+@pytest.mark.parametrize("text,conditional", [
+    ("flip the porch light when the front door unlocks if it's dark", True),
+    ("whenever I get home, turn on the tv", True),
+    ("turn on the light as soon as the door opens", True),
+    ("every time the den pc wakes up open youtube", True),
+    ("lock the front door after I leave", True), ("turn on the porch light if the front door opens", True),
+    ("turn off the lights once I leave", True), ("turn off the tv until I get home", True),
+    ("put frieren on the tv after I get home", True), ("next time the door opens, turn on the light", True),
+    ("when is the next release", False), ("when does my cap reset", False), ("when did I last lock the door", False),
+    ("check if the front door is locked", False), ("tell me if the door is locked", False),
+    ("ask me again before restarting the desk", False), ("play it once", False),
+    ("turn on the porch light", False), ("play the video", False),
+    ("turn on the porch light if its dark", True), ("lock the door if Sarah leaves", True),
+    ("turn off the lights once everyone leaves", True), ("turn off the tv unless I'm watching", True),
+    ("turn on the light in case I'm late", True), ("turn on the porch light after sunset", True),
+    ("lock the front door during quiet hours", True),
+])
+def test_a_condition_is_never_a_command_now(text, conditional):
+    from app import assistant
+    assert (assistant._CONDITIONAL.search(text) is not None) == conditional
+
+
+def test_an_early_after_and_a_count_of_minutes():
+    assert H.conditions(" after 5am") == {"window": {"from": "05:00", "to": None}}
+    assert H.conditions(" after 10 minutes") == {}                      # a wait, never "after 1"
+
+
+@pytest.mark.parametrize("what,stray", [
+    ("turn on the hall light after 9pm", "after 9pm"), ("play jazz between 5pm and 6pm", "between 5pm and 6pm"),
+    ("turn on the lights on weekends", "on weekends"), ("lock the door during quiet hours", "during quiet hours"),
+    ("turn off the tv after 10 minutes", None), ("remind me about the weekend plans", None),
+    ("send my youtube to my phone", None), ("run coming home", None),
+])
+def test_a_condition_inside_what_to_do_is_found(what, stray):
+    """It would never limit when the automation runs (it's read as part of the command), so it's asked about."""
+    assert H.condition_in(what) == stray
+
+
+def test_a_kept_look_up_is_neither_done_nor_a_failure():
+    from app import admiral
+    kept = {"headline": "My feed kept for Kentrell's 16 Pro: it shows there when it's opened",
+            "kept": {"what": "look-up", "for": ["Kentrell's 16 Pro"]}}
+    assert admiral.kept(kept).startswith("My feed kept for") and admiral.unconfirmed(kept) is None
+    assert admiral.kept({"headline": "On Kentrell's 16 Pro", "sent": {"confirmed": ["x"]}}) is None
+    steps = [{"n": 1, "status": "kept", "depends": []}, {"n": 2, "status": "pending", "depends": [1]}]
+    assert [s["n"] for s in admiral.ready(steps)] == [2]                 # the TV still turns on
+    assert admiral.blocked(steps) == []

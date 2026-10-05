@@ -42,7 +42,19 @@ _VERB = "|".join(f"(?:{v[0]})" for v in VERBS)
 _ME_HOME = r"(?:i\s+(?:get|come|arrive)\s+(?:back\s+)?home|i\s+arrive|i\s+get\s+back|i'?m\s+home|i\s+am\s+home)"
 _ME_AWAY = r"(?:i\s+leave(?:\s+home|\s+the\s+house)?|i\s+go\s+out|i'?m\s+away)"
 _WHEN = r"(?:when(?:ever)?|each\s+time|every\s+time|any\s+time)"
-_QUIET = r"(?P<quiet>\s+(?:during|in)\s+(?:the\s+)?quiet\s+hours|\s+at\s+night|\s+overnight)?"
+# When it may run, said right after the event: "during quiet hours", "between 5pm and 6pm", "after 9pm",
+# "before 7am", "on weekdays", "on Mondays and Fridays" (several at once: all must hold).
+_TIME = (r"(?:\d{1,2}(?!\d)(?::\d{2})?\s*(?:[ap]\.?\s?m\.?)?|noon|midnight)"
+         r"(?!\s*(?:minutes?|mins?|hours?|hrs?|seconds?|secs?|days?|weeks?)\b)")      # "after 10 minutes" isn't a time
+_DAYS_SAID = (r"(?:mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:r(?:s(?:day)?)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)s?"
+              r"(?:(?:\s*(?:,|and|&|or)\s*(?:and\s+)?|\s+)(?:mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:r(?:s(?:day)?)?)?|"
+              r"fri(?:day)?|sat(?:urday)?|sun(?:day)?)s?)*(?!\w)")
+_ONE_COND = (rf"(?:(?:during|in)\s+(?:the\s+)?quiet\s+hours|at\s+night|overnight|"
+             rf"between\s+{_TIME}\s+and\s+{_TIME}|from\s+{_TIME}\s+(?:to|until|till|til)\s+{_TIME}|"
+             rf"after\s+{_TIME}|before\s+{_TIME}|"
+             rf"(?:on\s+)?(?:weekdays|weeknights|weekends|the\s+weekend)|on\s+{_DAYS_SAID})")
+_COND = rf"(?P<cond>(?:\s*,?\s+(?:and\s+|but\s+only\s+|only\s+)?{_ONE_COND})*)"
+_QUIET = _COND                                                    # (its old name)
 _HOOK = r"(?:the\s+|my\s+)?(?P<hook>[\w' -]+?)\s+(?:web)?hook\s+(?:is\s+called|gets\s+called|fires|is\s+triggered|goes\s+off|rings)"
 _THING = rf"(?:{_ME_HOME}|{_ME_AWAY}|{_HOOK}|(?:the\s+|my\s+)?(?P<dev>[\w' -]+?)\s+(?P<verb>{_VERB}))"
 FIRST = re.compile(rf"^{_WHEN}\s+(?P<ev>{_THING}){_QUIET}\s*,?\s+(?:then\s+)?(?P<what>.+)$", re.I)
@@ -86,15 +98,14 @@ def _internal(request: Request) -> None:
 
 
 async def _fire(app, where: str, *args: Any) -> int:
-    """Start each armed automation waiting for this (after its heads-up), once per cooldown, and only during
-    quiet hours when it says so."""
+    """Start each armed automation waiting for this (after its heads-up), once per cooldown, and only when its
+    conditions hold (quiet hours, a time window, days)."""
     from . import engine, pulsar
     cool = float(pulsar.rules(app)["event_cooldown_minutes"]) * 60
-    quiet = pulsar.is_quiet(app)
     fired = 0
     for j in await db.pool().fetch(f"SELECT id, rule, last_run_at FROM jobs WHERE status='armed' AND {where}", *args):
         rule = json.loads(j["rule"]) if isinstance(j["rule"], str) else (j["rule"] or {})
-        if rule.get("only") == "quiet" and not quiet:
+        if not allowed(app, rule):                     # quiet hours, a time window, days
             continue
         if j["last_run_at"] and (engine.now() - j["last_run_at"]).total_seconds() < cool:
             continue
@@ -231,15 +242,158 @@ async def parse(app, text: str) -> tuple[dict, str] | None:
             e = _pick(m.group("dev"), ents, kinds)
             rule = {"on": "state", "source": e["source"], "entity": e["id"], "entity_name": e["name"], "kind": e["kind"],
                     "to": to, "say": say}
-    if m.group("quiet"):
-        rule["only"] = "quiet"
+    rule.update(conditions(m.group("cond")))
     return rule, m.group("what")
+
+
+# ---- when it may run -------------------------------------------------------------------------------------
+
+def _hhmm(said: str) -> str:
+    """'5pm' -> '17:00'. A bare hour from 1 to 12 is asked about, never guessed (5 in the morning or evening?)."""
+    from . import when
+    s = when._clean(said)
+    if s in ("noon", "midnight"):
+        return "12:00" if s == "noon" else "00:00"
+    c = when._clock(s.replace(" ", ""))
+    if c is None:
+        raise ValueError(f"I can't read “{said}” as a time.")
+    h, mi, ap = c
+    if ap is None:
+        hm = f"{h}{f':{mi:02d}' if mi else ''}"
+        if h == 12:
+            raise ValueError(f"Do you mean {hm} noon or {hm} midnight? Say “noon” or “midnight”.")
+        raise ValueError(f"Do you mean {hm} in the morning or the evening? Say “{hm}am” or “{hm}pm”.")
+    if ap == "am":
+        h = 0 if h == 12 else h
+    elif ap == "pm":
+        h = 12 if h == 12 else h + 12
+    return f"{h:02d}:{mi:02d}"
+
+
+def conditions(said: str | None) -> dict:
+    """The when-it-may-run words after an event -> rule fields: only='quiet', window={'from','to'} (either may be
+    None: "after 9pm" runs until midnight, "before 7am" from midnight), days=['mon', …]. ValueError to ask."""
+    from . import when
+    out: dict[str, Any] = {}
+    t = " ".join((said or "").lower().replace(",", " ").split())
+    if not t:
+        return out
+    for m in re.finditer(_ONE_COND, t, re.I):
+        c = m.group(0)
+        if re.match(r"(?:during|in)\s|at\s+night|overnight", c):
+            out["only"] = "quiet"
+            continue
+        w = (re.fullmatch(rf"(?:between|from)\s+(?P<a>{_TIME})\s+(?:and|to|until|till|til)\s+(?P<b>{_TIME})", c) or
+             re.fullmatch(rf"(?P<k>after|before)\s+(?P<a>{_TIME})", c))
+        if w:
+            if "window" in out:
+                raise ValueError("One time window per automation, please: which one did you mean?")
+            if "k" in w.groupdict() and w.group("k"):
+                at = _hhmm(w.group("a"))
+                if at == "00:00":                              # after midnight: all day; before midnight: never ends
+                    raise ValueError(f"{w.group('k').capitalize()} midnight until when? Say “between midnight and 6am” "
+                                     "(or “before 6am”).")
+                if w.group("k") == "after" and at < "05:00":   # "after 1am" would run until midnight: nearly all day
+                    raise ValueError(f"After {w.group('a').strip()} until when? Say “between {w.group('a').strip()} and 6am”.")
+                out["window"] = {"from": at, "to": None} if w.group("k") == "after" else {"from": None, "to": at}
+            else:
+                a, b = _hhmm(w.group("a")), _hhmm(w.group("b"))
+                if a == b:
+                    raise ValueError("That window starts and ends at the same time.")
+                out["window"] = {"from": a, "to": b}
+            continue
+        if "days" in out:
+            raise ValueError("Say the days once (“on weekdays”, or “on Mondays and Fridays”).")
+        if "weeknight" in c:                                   # which hours are "night"? never guessed
+            raise ValueError("Which hours do you mean by weeknights? Say e.g. “after 9pm on weekdays”.")
+        if "weekday" in c:
+            out["days"] = when.ABBR[:5]
+        elif "weekend" in c:
+            out["days"] = when.ABBR[5:]
+        else:
+            d = re.sub(r"\btues", "tue", re.sub(r"\bthurs?", "thu", c))
+            out["days"] = [a for a in when.ABBR if re.search(rf"\b{a}", d)]
+    return out
+
+
+def condition_in(words: str) -> str | None:
+    """A time or day condition inside the part that says what to do ("turn on the light after 9pm"): it would be
+    read as part of the command and never limit when it runs, so it's asked about instead of saved."""
+    for m in re.finditer(rf"(?<!\w){_ONE_COND}", words or "", re.I):
+        c = m.group(0).strip()
+        if re.fullmatch(r"(?:weekdays|weeknights|weekends|the\s+weekend)", c, re.I):
+            continue                                   # "remind me about the weekend plans": a word, not a condition
+        return c
+    return None
+
+
+def allowed(app, rule: dict, at=None) -> bool:
+    """Whether an event automation may run now: its quiet hours, time window and days (in his time zone). An
+    overnight window ("between 10pm and 2am") belongs to the day it started on."""
+    from datetime import datetime, time as dtime, timedelta, timezone
+    from zoneinfo import ZoneInfo
+    from . import engine, pulsar, when
+    now = at or datetime.now(timezone.utc)
+    if rule.get("only") == "quiet" and not pulsar.is_quiet(app, now):
+        return False
+    local = now.astimezone(ZoneInfo(engine.tz_name(app)))
+    day, t = local.date(), local.time()
+    if rule.get("only") == "quiet" and not rule.get("window"):     # a night's quiet hours belong to the day they began
+        q = re.fullmatch(r"(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})", str(pulsar.quiet_spec(app) or "").replace(" ", ""))
+        if q:
+            qa, qb = dtime(int(q.group(1)), int(q.group(2))), dtime(int(q.group(3)), int(q.group(4)))
+            if qa > qb and t < qb:
+                day = day - timedelta(days=1)
+    w = rule.get("window") or None
+    if w:
+        a = dtime.fromisoformat(w["from"]) if w.get("from") else dtime(0, 0)
+        b = dtime.fromisoformat(w["to"]) if w.get("to") else None          # None: until midnight
+        if b is None:
+            inside = t >= a
+        elif a < b:
+            inside = a <= t < b
+        else:                                                              # overnight
+            inside = t >= a or t < b
+            if inside and t < b:
+                day = day - timedelta(days=1)
+        if not inside:
+            return False
+    if rule.get("days"):
+        if when.ABBR[day.weekday()] not in rule["days"]:
+            return False
+    return True
+
+
+def say_conditions(rule: dict) -> str:
+    """' during quiet hours', ' between 5:00 PM and 6:00 PM on weekdays' (empty when it always may)."""
+    from . import when
+    out = ""
+    if rule.get("only") == "quiet":
+        out += " during quiet hours"
+    w = rule.get("window") or None
+    if w:
+        if w.get("from") and w.get("to"):
+            out += f" between {when._clock12(w['from'])} and {when._clock12(w['to'])}"
+        elif w.get("from"):
+            out += f" after {when._clock12(w['from'])}"
+        elif w.get("to"):
+            out += f" before {when._clock12(w['to'])}"
+    ds = rule.get("days") or []
+    if ds:
+        if set(ds) == set(when.ABBR[:5]):
+            out += " on weekdays"
+        elif set(ds) == set(when.ABBR[5:]):
+            out += " on weekends"
+        else:
+            names = [when.DAYS[when.ABBR.index(d)].capitalize() + "s" for d in when.ABBR if d in ds]
+            out += " on " + (names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1])
+    return out
 
 
 def says(rule: dict) -> str | None:
     """How an event automation repeats, in his words ('when Front Door unlocks during quiet hours')."""
     on = rule.get("on")
-    q = " during quiet hours" if rule.get("only") == "quiet" else ""
+    q = say_conditions(rule)
     if on == "state":
         who = rule.get("entity_name") or "it"
         return f"when {'you' if who == 'you' else who} {rule.get('say') or 'changes'}{q}"

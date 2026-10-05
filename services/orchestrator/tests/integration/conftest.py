@@ -65,7 +65,7 @@ def stack(tmp_path_factory):
         "  remember: {tier: act}\n  forget: {tier: change}\n  history: {tier: reference}\n  roadmap: {tier: reference}\n  budget: {tier: reference}\n"
         "rules:\n  quiet_minutes: 30\n  every_minutes: 600\n  exclude_tools: [testfn.switch]\n  max_facts: 6\n"
         "  max_core: 2\n  recall_min_score: 0.1\n")
-    (tmp / "gov" / "functions" / "orbit.yaml").write_text("function: orbit\ntools:\n  tv_app: {tier: act}\n  tv_input: {tier: act}\n")
+    (tmp / "gov" / "functions" / "orbit.yaml").write_text("function: orbit\ntools:\n  status: {tier: reference}\n  tv_app: {tier: act}\n  tv_input: {tier: act}\n")
     (tmp / "gov" / "functions" / "quasar.yaml").write_text(
         "function: quasar\nrate_limit_per_minute: 1000\ntools:\n  find: {tier: reference}\n  play: {tier: act}\n  youtube: {tier: read}\n  spotify: {tier: act}\n  speaker: {tier: change}\n")
     (tmp / "gov" / "functions" / "admiral.yaml").write_text(
@@ -102,7 +102,7 @@ def stack(tmp_path_factory):
         "  look: {tier: read}\n  click: {tier: act}\n  type: {tier: act}\n  press: {tier: act}\n  scroll: {tier: act}\n"
         "  back: {tier: act}\n  media: {tier: act}\n  submit: {tier: change}\n"
         "  health: {tier: reference}\n  list_processes: {tier: reference}\n  close_process: {tier: act}\n"
-        "  kill_process: {tier: change}\n  sign_in: {tier: change}\n  logins: {tier: reference}\n  send: {tier: act}\n  clear: {tier: act}\n  notify: {tier: act}\n  screens: {tier: reference}\n  diagnose: {tier: read}\n  power: {tier: act}\n  restart: {tier: change}\n  wake: {tier: act}\n  sound: {tier: act}\n  watch: {tier: read}\n  install: {tier: act}\n  install_package: {tier: change}\n  uninstall: {tier: act}\n  remove_package: {tier: change}\n  clipboard: {tier: reference}\n  copy: {tier: act}\n  paste: {tier: act}\n  mode: {tier: act}\n"
+        "  kill_process: {tier: change}\n  sign_in: {tier: change}\n  logins: {tier: reference}\n  send: {tier: act}\n  show: {tier: act}\n  clear: {tier: act}\n  notify: {tier: act}\n  screens: {tier: reference}\n  diagnose: {tier: read}\n  power: {tier: act}\n  restart: {tier: change}\n  wake: {tier: act}\n  sound: {tier: act}\n  watch: {tier: read}\n  install: {tier: act}\n  install_package: {tier: change}\n  uninstall: {tier: act}\n  remove_package: {tier: change}\n  clipboard: {tier: reference}\n  copy: {tier: act}\n  paste: {tier: act}\n  mode: {tier: act}\n"
         "rules:\n  screen:\n    confirm_before: [buy, place order, pay, send, delete]\n"
         "  screens:\n    - {computer: Den PC, tv: Den TV, input: HDMI 2}\n    - {computer: Attic PC, tv: Attic TV, input: ''}\n")
     (tmp / "aurelia.yaml").write_text(

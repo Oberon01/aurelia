@@ -188,10 +188,11 @@ _EV = (r"(?P<ev>comes?\s+(?:back\s+)?(?:online|on)|is\s+(?:back\s+)?(?:online|on
        r"boots?(?:\s+up)?|starts?(?:\s+up)?|goes\s+(?:offline|off|to\s+sleep)|turns?\s+off|shuts?\s+down|"
        r"is\s+(?:offline|off)|opens|is\s+opened|gets\s+opened)")
 _WHEN = r"(?:when(?:ever)?|each\s+time|every\s+time|any\s+time)"
+from .happenings import _COND as _EV_COND           # "between 5pm and 6pm", "on weekdays", "during quiet hours"
 EVENT_FIRST = re.compile(rf"^{_WHEN}\s+(?:i\s+open\s+(?:the\s+|my\s+)?(?P<dev2>[\w' -]+?)|(?:the\s+|my\s+)?(?P<dev>[\w' -]+?)\s+{_EV})"
-                         r"\s*,?\s+(?P<what>.+)$", re.I)
+                         rf"{_EV_COND}\s*,?\s+(?P<what>.+)$", re.I)
 EVENT_LAST = re.compile(rf"^(?P<what>.+?)\s+{_WHEN}\s+(?:i\s+open\s+(?:the\s+|my\s+)?(?P<dev2>[\w' -]+?)|"
-                        rf"(?:the\s+|my\s+)?(?P<dev>[\w' -]+?)\s+{_EV})$", re.I)
+                        rf"(?:the\s+|my\s+)?(?P<dev>[\w' -]+?)\s+{_EV}){_EV_COND}$", re.I)
 
 
 def _event_kind(ev: str | None) -> str:
@@ -257,6 +258,17 @@ async def _command(app, what: str, verbs: bool = False) -> tuple[str, dict, str]
         if tier == "never":
             raise ValueError(f"\"{t}\" is never allowed, so I won't automate it.")
         return tool, fastpath.coerce(m.args, resolved.tool.input_schema or {}), _sentence(t)
+    from .assistant import _lookup_elsewhere          # "send my youtube to my phone": a look-up on another display
+    away = None
+    for c in cands:                                    # ("that sends my youtube …" too)
+        away = await _lookup_elsewhere(app, c)
+        if away is not None:
+            break
+    if away is not None:
+        look, largs, to, what = away
+        if await registry.resolve(app.state.redis, "constellation.show") is None:
+            raise ValueError("Showing things on another display isn't available right now, so I can't set that up.")
+        return "constellation.show", {"tool": look, "args": largs, "to": to, "what": what}, _sentence(t)
     raise ValueError(f"I can't tell exactly which command \"{t}\" is. Say it the way you'd ask me right now "
                      "(like \"lock the front door\").")
 
@@ -327,7 +339,7 @@ async def parse(app, say: str, user: str = "owner") -> dict:
         if home:
             rule, what = home
         elif m:
-            rule = {"on": kind_ev, "device": dev_id, "device_name": dev_name}
+            rule = {"on": kind_ev, "device": dev_id, "device_name": dev_name, **happenings.conditions(m.group("cond"))}
             what = m.group("what")
         else:
             rm = _REMIND.match(t)
@@ -338,6 +350,11 @@ async def parse(app, say: str, user: str = "owner") -> dict:
                 rule, what, _ = when.split_recurring(t)
     except when.Unclear as exc:
         raise ValueError(str(exc))
+    if rule.get("on"):                          # an event automation: when it may run is said right after the event
+        stray = happenings.condition_in(what)
+        if stray:
+            raise ValueError(f"Say when it may run right after what happens, not in what to do: for example "
+                             f"“when the front door unlocks {stray}, …”.")
     r = rules(app)
     if rule.get("every_minutes") and float(rule["every_minutes"]) < float(r["min_every_minutes"]):
         raise ValueError(f"That's too often: at most every {r['min_every_minutes']} minutes.")
@@ -920,7 +937,7 @@ async def _every(app, name: str, minutes: float) -> bool:
 async def events_step(app, spec: dict) -> dict | None:
     """A look at what I can see happen: computers coming online or going offline, displays opening. An armed
     automation waiting for that runs (after its heads-up), at most once per cooldown."""
-    from . import engine, nodes
+    from . import engine, happenings, nodes
     from .constellation import DISPLAY_SEEN
     redis = app.state.redis
     seen_now: dict[str, str] = {}
@@ -950,9 +967,11 @@ async def events_step(app, spec: dict) -> dict | None:
     cool = float(rules(app)["event_cooldown_minutes"]) * 60
     fired = 0
     for ev, dev in happened:
-        for j in await db.pool().fetch("SELECT id, title, last_run_at FROM jobs WHERE status='armed' AND rule->>'on'=$1 "
+        for j in await db.pool().fetch("SELECT id, title, rule, last_run_at FROM jobs WHERE status='armed' AND rule->>'on'=$1 "
                                        "AND rule->>'device'=$2", ev, str(dev)):
             if j["last_run_at"] and (engine.now() - j["last_run_at"]).total_seconds() < cool:
+                continue
+            if not happenings.allowed(app, engine._j(j["rule"])):      # its time window, days, quiet hours
                 continue
             fired += await engine.fire(app, j["id"], f"{ev} {dev}")
     return {"note": f"{len(happened)} event(s), {fired} automation(s) started"} if happened else None

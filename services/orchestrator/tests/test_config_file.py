@@ -214,6 +214,8 @@ GOVERNANCE = CONFIG.parent / "governance" / "functions"
 NO_FAST_PATH = {
     "nebula.youtube": "covered by quasar.youtube (\"youtube X\" searches through it)",
     "orbit.tv_play": "covered by quasar.play, which plays a title on a Roku TV through it",
+    "constellation.show": "a routine's or automation's step; said aloud, \"send my youtube to my phone\" does the "
+                          "same by fast path (a look-up shown on another display)",
     # Planned in governance, not built yet: when one is built, it needs a fast path (this test says so).
     "constellation.search_files": "planned (Kuiper)", "constellation.browser_history": "planned",
     "constellation.read_file": "planned (Kuiper)", "constellation.launch": "planned",
@@ -442,3 +444,24 @@ def test_connection_phrases(said, tool, args):
         return
     assert m and m.pattern.tool == tool, (said, m and m.pattern.tool)
     assert {k: m.args.get(k) for k in args} == args, (said, m.args)
+
+
+# An event automation's conditions reach the drafter whole: a window dropped here would be saved without it.
+@pytest.mark.skipif(not CONFIG.exists(), reason="the repo's config isn't in the test image")
+@pytest.mark.parametrize("said", [
+    "turn on the lights when the tv pc comes online on weekdays",
+    "turn on the lights when the tv pc comes online between 5pm and 6pm",
+    "turn on the hall light when the front door opens after 9pm",
+    "flip the porch light when the front door unlocks between 3pm and 4pm",
+    "turn on the light when I get home before 7am on weekends",
+    "turn on the porch light when the front door unlocks during quiet hours",
+    "when the den pc comes online between 5pm and 6pm, open youtube on the den pc",
+    "when the front door unlocks between 5pm and 6pm, run coming home",
+])
+def test_an_event_automation_keeps_its_conditions(said):
+    from app import fastpath
+    from app.config import RuntimeConfig
+    cfg = RuntimeConfig.model_validate(yaml.safe_load(CONFIG.read_text()))
+    m = fastpath.match(said, cfg.fastpath.patterns)
+    assert m and m.pattern.tool == "pulsar.automate", (said, m and m.pattern.name)
+    assert m.args["say"] == said, (said, m.args)
