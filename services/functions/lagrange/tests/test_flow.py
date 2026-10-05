@@ -204,9 +204,13 @@ async def test_a_local_server_from_the_form_to_its_first_use(env):
     assert f.out["headline"] == "Gitea: 2 new or changed, waiting for your OK"
     assert {t["name"] for t in f.out["connection"]["pending"]} == {"list_repos", "delete_repo"}
     assert [t["name"] for t in net.registered["gitea"]["tools"]] == ["create_issue", "env"]   # held ones aren't offered
+    v = await run(M.t_connection, {"name": "gitea"})                      # its panel: counted in the headline, listed below
+    assert v.out["headline"] == "Gitea: 2 tools · 2 waiting for your OK", v.out["headline"]
+    assert [t["name"] for t in v.out["connection"]["tools"]] == ["create_issue", "env"]
     a = await run(M.t_approve, {"name": "gitea"})
     assert a.error is None and sorted(t["name"] for t in net.registered["gitea"]["tools"]) == \
         ["create_issue", "delete_repo", "env", "list_repos"]
+    assert (await run(M.t_connection, {"name": "gitea"})).out["headline"] == "Gitea: 4 tools"
     assert (await run(M.t_approve, {"name": "gitea"})).error.startswith("Gitea has no tools waiting")
 
     off = await run(M.t_turn_off, {"name": "gitea"})

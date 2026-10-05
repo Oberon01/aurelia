@@ -444,8 +444,9 @@ async def t_connection(ctx: TaskContext) -> None:
     conn = find(await store().all(), str(ctx.args.get("name", "")))
     d = await detail(conn)
     c = d["connection"]
-    d["headline"] = (f"{c['label']}: {c['tools']} tool{'s' if c['tools'] != 1 else ''}"
-                     f"{f' · {c['pending']} waiting for your OK' if c['pending'] else ''}"
+    n, held = len(c["tools"]), len(c["pending"])            # the detail lists them; the headline counts them
+    d["headline"] = (f"{c['label']}: {n} tool{'s' if n != 1 else ''}"
+                     f"{f' · {held} waiting for your OK' if held else ''}"
                      f"{' · ' + c['status'].replace('_', ' ') if c['status'] != 'connected' else ''}")
     await ctx.result(d)
 
