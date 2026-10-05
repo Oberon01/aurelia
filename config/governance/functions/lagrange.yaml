@@ -1,0 +1,23 @@
+# Lagrange — connections to other services with no new code: MCP servers, Home Assistant, webhooks in and out.
+#
+# Each connected service is a function of its own ("gitea", "home_assistant"). It has no rules file until you
+# write one (config/governance/functions/<name>.yaml, with "connection: true"), so every one of its tools is
+# change-tier: it asks you first. A connection's panel drafts that file for you to copy. Keys and tokens are
+# entered on the connect form, which posts straight to Lagrange, and kept in its vault: never in the
+# conversation, the record, a log, or anything the model sees.
+function: lagrange
+enabled: true
+
+tools:
+  connections:  { tier: reference }   # what's connected
+  connection:   { tier: reference }   # one in detail: its tools, ones waiting for your OK, its rules draft
+  connect_form: { tier: reference }   # the form (you type any key there)
+  connect:      { tier: act }         # a draft you made on the form and pressed Connect on (never the model)
+  disconnect:   { tier: change }      # removes it and deletes its keys
+  turn_off:     { tier: act }
+  turn_on:      { tier: act }         # never the model
+  refresh:      { tier: read }        # asks the service for its tools again; new or changed ones wait
+  approve:      { tier: change }      # tools a service added or changed (never the model)
+  sign_in:      { tier: act }         # a new sign-in link
+
+rate_limit_per_minute: 30

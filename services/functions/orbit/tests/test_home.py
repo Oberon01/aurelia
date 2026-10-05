@@ -114,3 +114,25 @@ def test_library_prompt_is_replaced():
             pass
         await api.client._aiohttp_session.close()
     asyncio.run(go())
+
+
+def test_a_device_changing_is_reported_to_pulsar():
+    """SmartRent's live update for a device reaches whoever listens (Orbit tells Pulsar); a failing report
+    never breaks SmartRent's updates."""
+    redis = fakeredis.aioredis.FakeRedis()
+    heard = []
+
+    async def on_change(device):
+        heard.append(device.get_name())
+        if len(heard) == 2:
+            raise RuntimeError("orchestrator down")
+
+    home = Home("me@example.com", "pw", redis, api_factory=lambda e, p: FakeAPI(FakeClient(needs_tfa=False)),
+                on_change=on_change)
+    asyncio.run(home.start())
+    assert home.state == "ready"
+    lock = next(d for d in home.devices() if d.get_name() == "Front Door")
+    assert len(lock.callbacks) == 1
+    asyncio.run(lock.callbacks[0]())
+    asyncio.run(lock.callbacks[0]())                         # the report fails: logged, nothing raised
+    assert heard == ["Front Door", "Front Door"]

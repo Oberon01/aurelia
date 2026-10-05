@@ -109,6 +109,78 @@ fastpath:
       tool: pulsar.automate
       args: { say: "{say|}{say2|}" }
       reply: "Here''s the automation."
+    # Home events (Lagrange and Orbit): a device changing state, me coming or going, a webhook in being called.
+    - name: automate-home
+      match: '^(?P<say>(?:when(?:ever)?|each\s+time|every\s+time|any\s+time)\s+(?:i\s+(?:get|come|arrive)\s+(?:back\s+)?home|i\s+arrive|i\s+get\s+back|i''?m\s+home|i\s+am\s+home|i\s+leave(?:\s+home|\s+the\s+house)?|i\s+go\s+out|i''?m\s+away|(?:the\s+|my\s+)?[\w'' -]+?\s+(?:(?:web)?hook\s+(?:is\s+called|gets\s+called|fires|is\s+triggered|goes\s+off|rings)|unlocks|is\s+unlocked|gets\s+unlocked|is\s+left\s+unlocked|locks|is\s+locked|gets\s+locked|closes|is\s+closed|gets\s+closed|shuts|is\s+open|detects\s+(?:water|a\s+leak|motion|movement)|gets\s+wet|is\s+wet|finds\s+water|sees\s+(?:motion|movement|someone)|gets\s+(?:back\s+)?home|arrives(?:\s+home)?|comes\s+home|is\s+home|leaves(?:\s+home)?|goes\s+out|is\s+away|is\s+turned\s+(?:on|off)|comes\s+on|goes\s+on|switches\s+(?:on|off)))(?:\s+(?:during|in)\s+(?:the\s+)?quiet\s+hours|\s+at\s+night|\s+overnight)?\s*,?\s+.+)$|^(?!(?:what|when|where|who|why|how|is|are|was|were|do|does|did|can|could|will|would|should|which|tell|check|show)\b)(?P<say2>.+\s+(?:when(?:ever)?|each\s+time|every\s+time|any\s+time)\s+(?:i\s+(?:get|come|arrive)\s+(?:back\s+)?home|i\s+arrive|i\s+get\s+back|i''?m\s+home|i\s+am\s+home|i\s+leave(?:\s+home|\s+the\s+house)?|i\s+go\s+out|i''?m\s+away|(?:the\s+|my\s+)?[\w'' -]+?\s+(?:(?:web)?hook\s+(?:is\s+called|gets\s+called|fires|is\s+triggered|goes\s+off|rings)|unlocks|is\s+unlocked|gets\s+unlocked|is\s+left\s+unlocked|locks|is\s+locked|gets\s+locked|closes|is\s+closed|gets\s+closed|shuts|is\s+open|detects\s+(?:water|a\s+leak|motion|movement)|gets\s+wet|is\s+wet|finds\s+water|sees\s+(?:motion|movement|someone)|gets\s+(?:back\s+)?home|arrives(?:\s+home)?|comes\s+home|is\s+home|leaves(?:\s+home)?|goes\s+out|is\s+away|is\s+turned\s+(?:on|off)|comes\s+on|goes\s+on|switches\s+(?:on|off)))(?:\s+(?:during|in)\s+(?:the\s+)?quiet\s+hours|\s+at\s+night|\s+overnight)?)$'
+      tool: pulsar.automate
+      args: { say: "{say|}{say2|}" }
+      reply: "Here''s the automation."
+    # Lagrange: connections to other services (before the home's "turn off the …" and "show …" phrases).
+    - name: lagrange-list
+      match: '^(?:(?:show|list|open)(?: me)?\s+(?:my\s+|the\s+|all\s+)?(?:connections|connected\s+services|integrations|webhooks)|what(?:''s|\s+is|\s+are)\s+(?:you\s+)?connected(?:\s+to)?|what\s+(?:services\s+)?(?:are\s+you|am\s+i)\s+connected\s+to|(?:my\s+)?connections)\??$'
+      tool: lagrange.connections
+      args: {}
+      reply: "Here's what's connected."
+    - name: lagrange-form-ha
+      match: '^(?:connect|add|set\s+up|link)\s+(?:to\s+)?(?:my\s+)?(?:home\s*assistant|ha)$'
+      tool: lagrange.connect
+      args: { name: "home assistant" }
+      reply: "Connecting Home Assistant."
+    - name: lagrange-form-hook
+      match: '^(?:connect|add|set\s+up|make|create)\s+(?:a\s+|an\s+|another\s+|a\s+new\s+|new\s+)?(?:incoming\s+|outgoing\s+)?web\s*hook$'
+      tool: lagrange.connect_form
+      args: { kind: hook_in }
+      reply: "Here's the form."
+    - name: lagrange-form
+      match: '^(?:connect|add|set\s+up|link)\s+(?:a\s+|an\s+|another\s+|a\s+new\s+|new\s+)(?:service|integration|connection|mcp\s+server|server|app)$|^(?:open\s+)?(?:the\s+)?connect(?:ion)?\s+form$'
+      tool: lagrange.connect_form
+      args: {}
+      reply: "Here's the form."
+    - name: lagrange-tools
+      match: '^(?:(?:show|open|list)(?: me)?\s+(?:the\s+|my\s+)?(?P<name>[\w'' -]+?)\s+connection|what\s+can\s+(?:the\s+|my\s+)?(?P<name2>[\w'' -]+?)\s+connection\s+do)\??$'
+      tool: lagrange.connection
+      args: { name: "{name}{name2}" }
+      reply: "Here it is."
+    - name: lagrange-approve
+      match: '^approve\s+(?:the\s+)?(?:new\s+|changed\s+|new\s+or\s+changed\s+)?(?P<name>[\w'' -]+?)\s+tools$'
+      tool: lagrange.approve
+      args: { name: "{name}" }
+      reply: "Approving them."
+    - name: lagrange-refresh
+      match: '^(?:refresh\s+(?:the\s+)?(?P<name>[\w'' -]+?)\s+connection|check\s+(?:the\s+)?(?P<name2>[\w'' -]+?)\s+(?:connection\s+)?for\s+new\s+tools)$'
+      tool: lagrange.refresh
+      args: { name: "{name}{name2}" }
+      reply: "Asking it."
+    - name: lagrange-disconnect
+      match: '^(?:disconnect|remove\s+the\s+connection\s+to|forget\s+the\s+connection\s+to)\s+(?!.*\b(?:from|to|tv|pc|computer|laptop|desktop|speakers?|bluetooth|headphones|headset|airpods|wi-?fi|vpn|projector|monitor|display|screen|phone|iphone|spotify|internet|network)\b)(?:the\s+|my\s+)?(?P<name>[\w'' -]+?)(?:\s+connection)?$'
+      tool: lagrange.disconnect
+      args: { name: "{name}" }
+      reply: "Disconnecting it."
+    - name: lagrange-off
+      match: '^(?:turn|switch)\s+off\s+(?:the\s+|my\s+)?(?P<name>[\w'' -]+?)\s+connection$|^(?:turn|switch)\s+(?:the\s+|my\s+)?(?P<name2>[\w'' -]+?)\s+connection\s+off$|^stop\s+using\s+(?:the\s+|my\s+)?(?P<name3>[\w'' -]+?)\s+connection$'
+      tool: lagrange.turn_off
+      args: { name: "{name}{name2}{name3}" }
+      reply: "Turning it off."
+    - name: lagrange-on
+      match: '^(?:turn|switch)\s+on\s+(?:the\s+|my\s+)?(?P<name>[\w'' -]+?)\s+connection$|^(?:turn|switch)\s+(?:the\s+|my\s+)?(?P<name2>[\w'' -]+?)\s+connection\s+(?:back\s+)?on$|^start\s+using\s+(?:the\s+|my\s+)?(?P<name3>[\w'' -]+?)\s+(?:connection\s+)?again$'
+      tool: lagrange.turn_on
+      args: { name: "{name}{name2}{name3}" }
+      reply: "Turning it on."
+    - name: lagrange-sign-in
+      match: '^sign\s+(?:in|back\s+in)\s+to\s+(?!.*\s(?:on|in)\s)(?:the\s+|my\s+)?(?P<name>[\w'' -]+?)\s+(?:connection(?:\s+again)?|again)$'
+      tool: lagrange.sign_in
+      args: { name: "{name}" }
+      reply: "Here's the sign-in."
+    - name: lagrange-connect-draft
+      match: '^connect\s+the\s+(?P<name>[\w'' -]+?)\s+draft$'
+      tool: lagrange.connect
+      args: { name: "{name}" }
+      reply: "Connecting it."
+    - name: lagrange-connect
+      match: '^connect\s+(?!.*\b(?:to|with|tv|pc|computer|laptop|desktop|speakers?|bluetooth|headphones|headset|airpods|wi-?fi|vpn|projector|monitor|display|screen|phone|iphone|spotify)\b)(?:the\s+|my\s+)?(?P<name>[\w'' -]+?)(?:\s+draft)?$'
+      tool: lagrange.connect
+      args: { name: "{name}" }
+      reply: "Connecting it."
     - name: routine-make
       match: '^(?P<say>(?:make|create|add|set\s+up|save|build)\s+(?:me\s+)?(?:a\s+|an\s+|the\s+|my\s+)?(?:new\s+)?(?:[\w''" -]+?\s+)?routine\b.+)$'
       tool: pulsar.routine

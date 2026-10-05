@@ -27,9 +27,10 @@ def _no_prompt(*_args, **_kwargs):
 
 
 class Home:
-    def __init__(self, email: str | None, password: str | None, redis, api_factory=None):
+    def __init__(self, email: str | None, password: str | None, redis, api_factory=None, on_change=None):
         self.email, self.password, self.redis = email, password, redis
         self._api_factory = api_factory
+        self._on_change = on_change          # a device's live change -> Pulsar (an event an automation can wait for)
         self.api = None
         self.state = "starting"          # starting | no_credentials | needs_2fa | ready | error
         self.message = ""
@@ -112,7 +113,17 @@ class Home:
         await self.api.async_fetch_devices()
         for d in self.api.get_device_list():
             d.start_updater()                    # live updates over SmartRent's websocket
+            if self._on_change is not None:
+                d.set_update_callback(self._changed(d))
         self._set("ready", f"{len(self.api.get_device_list())} device(s) connected.")
+
+    def _changed(self, device):
+        async def changed() -> None:
+            try:
+                await self._on_change(device)
+            except Exception as exc:              # never let a report break SmartRent's updates
+                log.warning("couldn't report %s's change: %s", getattr(device, "_name", "a device"), exc)
+        return changed
 
     # ---- tokens ------------------------------------------------------------------------
 

@@ -28,6 +28,7 @@ space-themed name. Tools are addressed as `<function>.<tool>`.
 | `kuiper` | Files and storage | | Planned |
 | `swallowtail` | Field checks of each release, run in your home after it goes live (part of Aurelia, served by the orchestrator) | `swallowtail.checks`, `swallowtail.run`, `swallowtail.start` | Built |
 | `pulsar` | Automations and routines in your words, and what's worth interrupting you for (part of Aurelia, served by the orchestrator) | `pulsar.automate`, `pulsar.routine`, `pulsar.automations`, `pulsar.pause`, `pulsar.resume`, `pulsar.skip`, `pulsar.delete`, `pulsar.forget_routine`, `pulsar.notices` | Built |
+| `lagrange` | Connections to other services with no new code: MCP servers, Home Assistant, webhooks in and out. Each connected service becomes a function of its own (`gitea.list_my_repos`) | `lagrange.connections`, `lagrange.connection`, `lagrange.connect_form`, `lagrange.connect`, `lagrange.disconnect`, `lagrange.turn_off`, `lagrange.turn_on`, `lagrange.refresh`, `lagrange.approve`, `lagrange.sign_in` | Built |
 | `parallax` | Analytics on task history: habits, what matters most, timing; proposes to the mailbox | `parallax.analyze`, `parallax.mailbox`, `parallax.digest` | Built |
 | `quasar` | Media and entertainment | | Planned |
 
@@ -1443,8 +1444,8 @@ Admiral's engine. Policy: `config/governance/functions/pulsar.yaml`. Code:
   and the run counted as missed, never run late.
 - **Events.** "When the TV PC comes online, open YouTube on the TV PC", "lock
   the front door when the desk goes offline", "when I open my phone, show the
-  weather": at most once per `event_cooldown_minutes`. Doors, lights and
-  arrivals as triggers come with the Home Assistant bridge (Lagrange).
+  weather": at most once per `event_cooldown_minutes`. Doors, lights, sensors,
+  arrivals and webhooks as triggers: see Lagrange (Phase 11), below.
 - **What she watches for you** ("any alerts", "what are you watching for"): a
   door unlocked during quiet hours, a water leak, low batteries, the server's
   disk, a server-role computer (or one in `watch.always_on`) down, a failed
@@ -1499,6 +1500,108 @@ run afterwards, on the live system, the way you'd use it. Code:
 - **On demand:** "run the checks" (the latest release's), "run the pulsar
   checks", "run all the checks", "start the checks".
 
+## Lagrange: connections to other services (Phase 11)
+
+Lagrange connects a service from your display with no new code. Each
+connection registers as a function of its own, named the way you named it
+(`gitea`, `home_assistant`), so its tools are addressed and governed like
+mine. Code: `services/functions/lagrange/`; policy:
+`config/governance/functions/lagrange.yaml`; tables:
+`migrations/0023_lagrange.sql`.
+
+**Kinds.**
+- **An MCP server at an address** (streamable HTTP): no sign-in, a token, a
+  header, or a sign-in (OAuth 2.1 with PKCE: I find where to sign in,
+  register myself as a client, and keep the tokens fresh). Legacy SSE-only
+  servers aren't supported.
+- **An MCP server from npm or PyPI**, run inside Lagrange's container at an
+  exact version (`npm:@scope/server@1.2.3`, `pypi:server==1.2.3`). It never
+  updates by itself. Each runs as its own user (20000 + its connection's
+  number), with only the settings you give it and its own home, and is fenced
+  off (iptables, which is why Lagrange has `NET_ADMIN`) from my stack's
+  network and from Lagrange itself: it can reach the internet and your home
+  network, never the orchestrator, Postgres, Redis or my functions. If the
+  fence can't be put up, local servers don't run.
+- **Home Assistant**: its address and a long-lived token. Two tools: `states`
+  (what it reports) and `call` (one of its services, checked by what it
+  reports afterwards: "done" only when the entity shows the state asked
+  for). Its live changes go to Pulsar.
+- **A webhook in**: an address with its own secret. When something calls it
+  (an iPhone Shortcut, Gitea, Uptime Kuma), automations waiting for it start.
+  What it sends is data.
+- **A webhook out**: one tool, `send`, to the one address you saved.
+
+**Connecting.** "Connect a service" (or "connect home assistant", "connect a
+webhook") opens the form. Keys and tokens you type there post straight to
+Lagrange (`/lagrange/drafts`, through the proxy with your display's key):
+they never pass through the orchestrator, the conversation, the record, a log
+or the model. "Check it" shows what the service offers (an MCP server's
+tools, Home Assistant's entities, a webhook's address); "Connect" (or
+"connect the gitea draft") connects it. A draft you don't connect is
+deleted, with its keys, after 30 minutes.
+
+**The vault.** Secrets are encrypted (AES-256-GCM) in Postgres, each bound to
+its connection and slot. A connection's address is kept there too (a webhook's
+or a server's path can hold its key); panels show only its host. The key is `data/lagrange/vault.key`, made the first
+time Lagrange starts, in a folder only Lagrange mounts. Lose it and you enter
+the keys again. Anything a service sends back that contains a stored secret
+has it cut out before it leaves Lagrange, errors included. Lagrange keeps no
+access log (a webhook's address is its key), and its API answers only my own
+stack's network: not your home-lab network (which it joins to reach your
+services), not a local server running inside it.
+
+**Asking first.** A connected service has no rules file until you write one,
+so every one of its tools is change-tier: it asks you first. The connection's
+panel ("show the gitea connection") drafts the file
+(`config/governance/functions/gitea.yaml`, with `connection: true`) for you to
+copy and lower the tools you're happy to let run. A connection never takes
+one of my own functions' names. Connecting, approving tools and turning a
+connection back on are yours only (never the model's), and never earned by
+trust.
+
+**Pinned tools.** An MCP server's tools are pinned when you connect it. If it
+adds a tool or changes what it says about one later ("check gitea for new
+tools", or "refresh the gitea connection"), that tool waits for your OK ("approve the new gitea
+tools") and isn't offered meanwhile. What a tool returns is data, never
+instructions.
+
+**Using it.** "Gitea list my repos" runs that tool by its own words when it
+needs nothing else (after asking you, unless your rules say otherwise).
+Anything more goes to the model, which then sees only that service's tools.
+
+**Home events.** Pulsar now waits for the home itself, read by code:
+- "When the front door unlocks during quiet hours, turn on the hall light",
+  "turn off the lights when the garage door closes", "when the sink leak
+  sensor detects water, …": Orbit reports SmartRent's live changes and
+  Lagrange reports Home Assistant's. I keep the last state I heard, so the
+  same state reported twice (or by two copies of me) starts nothing twice.
+  "During quiet hours" (or "at night") limits it to quiet hours.
+- "Turn on the porch light when I get home", "when I leave, lock the front
+  door": your person in Home Assistant (its phone app tracks you).
+- "When the arrive home webhook is called, …": a webhook in.
+
+**Phrases.** "Show my connections", "what's connected", "connect a service",
+"connect home assistant", "connect a webhook", "show the gitea connection",
+"check gitea for new tools", "approve the new gitea tools", "turn off the
+gitea connection", "turn on the gitea connection", "sign in to gitea again",
+"connect the gitea draft", "disconnect gitea".
+
+**Networks.** Lagrange joins your home-lab network to reach your services,
+and so does the orchestrator (for Jellyfin). Neither answers anything there:
+both answer only my own stack's network (and the orchestrator its own health
+check), with `STACK_GUARD=1` set so a look-up that fails refuses rather than
+lets in. Services on both networks reach each other by names that exist only
+on mine (`aurelia-core`, `lagrange-core`). Registering a function also never
+works through the proxy.
+
+**Gitea.** Its official MCP server ships as a container, not an npm or PyPI
+package: run `docker.gitea.com/gitea-mcp-server` with `-t http` next to Gitea
+on your home-lab network, then connect it by address
+(`http://<its name>:8080/mcp`) with a Gitea access token. Lagrange joins the
+home-lab network, so it reaches it (and Home Assistant) by name or address. A
+local server can't reach the home-lab network (it can reach published ports on
+your LAN address).
+
 ## Known gaps (by design, for later phases)
 
 - A task running inside a function container that gets replaced is cut off
@@ -1531,7 +1634,9 @@ services/functions/orbit/    smart home (SmartRent, Roku TV)
 services/functions/parallax/ analytics on task history → mailbox proposals, morning digest
 services/functions/nebula/   the web: search, YouTube, read, download, open
 services/functions/kepler/   research and learning: library, topics, explain, quiz, Trilium
+services/functions/lagrange/ connections: MCP servers, Home Assistant, webhooks; the vault
 data/downloads/              Nebula's downloads (not in git)
+data/lagrange/               the vault's key (not in git; only Lagrange mounts it)
 data/files/                  where Kepler looks if AURELIA_FILES isn't set (not in git)
 services/core/chrysalis/     update system (protected core)
 config/chrysalis.yaml        Chrysalis settings: dry run, polling, held authors, checks
