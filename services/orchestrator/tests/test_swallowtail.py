@@ -136,3 +136,6 @@ def test_a_device_is_found_the_way_orbit_finds_it():
     item, why = S._named(two, "name", "island kitchen", [])
     assert item["name"] == "Kitchen Island"
     assert S._reported_names({"tools": [{"result": {"name": "Kitchen", "kind": "light", "on": True}}]}) == ["Kitchen"]
+    many = {"tools": [{"result": {"devices": [{"name": "Bathroom Sink - Leak Sensor"}, {"name": "Front Door"}]}}]}
+    assert S._reported_names(many) == []                                  # a list of devices names none of them
+    assert S._named(devices, "name", "front door", S._reported_names(many))[0]["name"] == "Front Door Lock"

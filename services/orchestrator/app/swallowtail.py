@@ -60,6 +60,7 @@ class Verify(BaseModel):
     find: dict[str, Any] = {}              # {"list": "devices", "name": "{light}"}: which item of the result
     field: str | None = None
     equals: Any = None
+    equals_any: list[Any] | None = None    # any of these (e.g. a lock reports locked: true or false, either is fine)
     automation: str | None = None          # or: words in one of his automations' titles…
     outcome: str = "done"                  # …and how its run since the check started must have ended
     within: str | int = "30s"
@@ -373,24 +374,17 @@ def _norm(name: Any) -> str:
 
 
 def _reported_names(actual: dict) -> list[str]:
-    """The device names the check's own action reported (Orbit answers with the real one: "Kitchen")."""
+    """The one device the check's own action acted on, by the name it reported (Orbit answers "Kitchen" for
+    "kitchen light"). Only a result about one device counts: a look-up that lists many names none of them."""
     out: list[str] = []
-
-    def walk(v, depth=0):
-        if depth > 4:
-            return
-        if isinstance(v, dict):
-            for k in ("name", "device"):
-                if isinstance(v.get(k), str):
-                    out.append(v[k])
-            for x in v.values():
-                walk(x, depth + 1)
-        elif isinstance(v, list):
-            for x in v[:20]:
-                walk(x, depth + 1)
     for t in (actual or {}).get("tools") or []:
-        walk(t.get("result"))
-    return out
+        r = t.get("result")
+        if isinstance(r, dict) and not any(isinstance(v, list) for v in r.values()):
+            for k in ("name", "device"):
+                if isinstance(r.get(k), str):
+                    out.append(r[k])
+                    break
+    return out if len(set(x.lower() for x in out)) == 1 else []
 
 
 def _named(items: list, key: str, wanted: Any, reported: list[str]) -> tuple[dict | None, str]:
@@ -441,7 +435,8 @@ async def _verify(app, v: Verify, names: dict, mode: str, since: datetime, found
         return [_line(f"your automation \"{words}\" ran", v.outcome, actual,
                       got is not None and got["outcome"] == v.outcome)]
     tool, args, find = v.tool, fill(app, v.args, names), fill(app, v.find, names)
-    want = fill(app, v.equals, names)
+    want = fill(app, v.equals, names) if v.equals_any is None else fill(app, v.equals_any, names)
+    hits = (lambda x: any(_same(x, w) for w in want)) if v.equals_any is not None else (lambda x: _same(x, want))
     seen: Any = "no answer"
     matched = None
     while True:
@@ -464,7 +459,7 @@ async def _verify(app, v: Verify, names: dict, mode: str, since: datetime, found
         elif item is not None:
             matched = item.get("name")
             seen = _path(item, v.field)
-            if _same(seen, want):
+            if hits(seen):
                 break
         if time.monotonic() > deadline:
             break
@@ -473,7 +468,8 @@ async def _verify(app, v: Verify, names: dict, mode: str, since: datetime, found
     said = crit.get("name") if crit else tool
     shown = f"{said} ({matched})" if matched and str(matched).lower() != str(said).lower() else said   # "kitchen light (Kitchen)"
     label = f"{shown}: {v.field}" if v.field else str(tool)
-    return [_line(f"{label} (as it reports)", want, seen, _same(seen, want))]
+    return [_line(f"{label} (as it reports)", " or ".join(map(str, want)) if v.equals_any is not None else want, seen,
+                  seen is not None and hits(seen))]
 
 
 # ---- runs: a release's checks (or the ones he asked for) --------------------------------------------------
@@ -537,7 +533,7 @@ def _expected_of(c: Check, filled: dict) -> dict:
     if c.verify:
         v = filled.get("verify") or {}
         out["verify"] = ({"automation": v.get("automation"), "outcome": v.get("outcome")} if v.get("automation") else
-                         {"tool": v.get("tool"), "find": v.get("find"), "field": v.get("field"), "equals": v.get("equals")})
+                         {"tool": v.get("tool"), "find": v.get("find"), "field": v.get("field"), "equals": v.get("equals") if v.get("equals_any") is None else v.get("equals_any")})
     if c.question:
         out["you answer"] = "yes"
     return out

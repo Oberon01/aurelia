@@ -8,9 +8,9 @@ checks:
     expect: { tool: orbit.status, status: completed }
     verify:
       tool: orbit.status
-      find: { list: devices, name: "{lock}" }
-      field: kind
-      equals: lock
+      find: { list: devices, kind: lock, name: "{lock}" }
+      field: locked
+      equals_any: [true, false]
 
   - id: unlock-asks
     name: Unlocking always asks you first
