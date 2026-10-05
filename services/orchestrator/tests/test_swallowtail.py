@@ -35,6 +35,21 @@ def test_judging_each_expectation_against_what_happened():
     assert S.judge({"route": "llm", "tool": "none"}, act(route="llm"))[1]["ok"] is True
 
 
+def test_looks_only_allows_look_ups_and_nothing_that_acts():
+    """"when the front door unlocks between 5 and 6, …": the model may look up the home's devices to ask a better
+    question (orbit.status), but nothing may act, run or held."""
+    look = act(route="llm", tools=[{"tool": "orbit.status", "tier": "reference", "status": "completed"}])
+    [line] = S.judge({"tool": "looks only"}, look)
+    assert line["ok"] and line["actual"] == "orbit.status (reference)", line
+    assert S.judge({"tool": "looks only"}, act(route="llm"))[0]["ok"]                  # nothing at all is fine too
+    ran = act(tools=[{"tool": "orbit.status", "tier": "reference"}, {"tool": "orbit.light", "tier": "act"}])
+    assert not S.judge({"tool": "looks only"}, ran)[0]["ok"]
+    held = act(tools=[{"tool": "orbit.status", "tier": "reference"}], would_act=["orbit.light"])
+    [line] = S.judge({"tool": "looks only"}, held)
+    assert not line["ok"] and "tried to act: orbit.light" in line["actual"]
+    assert not S.judge({"tool": "looks only"}, act(tools=[{"tool": "x.y", "tier": None}]))[0]["ok"]   # unknown: not a look
+
+
 def test_confirmed_means_the_result_says_it_happened():
     ok = act(tools=[{"tool": "x.open", "status": "completed", "result": {"opened": True}}])
     no = act(tools=[{"tool": "x.open", "status": "completed", "result": {"did": {"unconfirmed": True}}}])
@@ -101,7 +116,8 @@ def test_every_checks_file_in_the_repo_is_valid_and_each_says_reaches_its_tool()
             for k in S.VAR.findall(c.model_dump_json()):
                 assert k in names or __import__("re").fullmatch(r"in_\d+_minutes?", k), (p.name, k)
             want = c.expect.get("tool")
-            if c.say and want and want != "none" and not c.say.startswith("send "):   # (a send is a look-up sent elsewhere)
+            if c.say and want and want not in ("none", S.LOOKS_ONLY) and not c.say.startswith("send "):
+                # (a send is a look-up sent elsewhere; "looks only" names no single tool)
                 text = S.VAR.sub(lambda m: names[m.group(1)], c.say)
                 m = fastpath.match(text, cfg.fastpath.patterns)
                 assert m is not None and m.pattern.tool == want, (p.name, c.id, m and m.pattern.tool)

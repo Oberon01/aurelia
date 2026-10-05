@@ -70,14 +70,15 @@ checks:
     say: "when the {lock} unlocks between 5 and 6, turn on the {light}"
     expect:
       route: "not fastpath"
-      tool: none
+      tool: looks only                 # it may look up your devices to ask a better question; nothing acts
+      asks_to_confirm: false           # never a guessed "5pm" offered to save
 
   - id: condition-never-now
     name: A condition I can't read is never done right now
     say: "turn on the {light} when the {lock} unlocks if it's dark"
     expect:
       route: "not fastpath"
-      tool: none
+      tool: looks only                 # it may look up your devices to ask a better question; nothing acts
 
   - id: routine-show-readback
     name: A routine step can show a look-up on another display
