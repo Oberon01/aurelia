@@ -1,0 +1,31 @@
+# Field checks for the HUD (part of Phase 7's display): the visor, the day tape and the spot for what's playing,
+# on the displays that talk to me. The presentation displays stay as they were.
+release: The HUD (Phase 7)
+phase: 7
+checks:
+  - id: tape-automations
+    name: A tape marker for an automation opens my automations
+    say: "show my automations"
+    expect: { route: fastpath, tool: pulsar.automations, status: completed }
+
+  - id: tape-scheduled
+    name: A tape marker for a reminder or command opens what's scheduled
+    say: "what's scheduled"
+    expect: { route: fastpath, tool: admiral.scheduled, status: completed }
+
+  - id: tape-shows-the-day
+    name: The day tape shows what will run, where it falls
+    needs_you: "Open me on a computer or phone that talks to me (not the TV). If nothing is scheduled today, say “remind me in 2 hours to stretch” and confirm it."
+    question: "Does the tape across the top show NOW at the cursor and the reminder (or your next automation) about where its time falls, with quiet hours shaded?"
+    after:
+      - say: "cancel my reminder to stretch"
+
+  - id: player-spot
+    name: What's playing has its own spot, and its buttons work
+    needs_you: "Play something: Spotify, or a video on the {tv_computer}."
+    question: "Does it show in the spot on the right (just above where you type, on a phone) with its time moving, and does that spot's pause button pause it?"
+
+  - id: presentation-unchanged
+    name: The presentation displays look as they did
+    needs_you: "Glance at the TV (or another presentation display)."
+    question: "Does it look the way it did before: no tape and no visor corners?"

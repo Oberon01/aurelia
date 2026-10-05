@@ -506,9 +506,137 @@ body.screen .panel.present .headline{font-size:clamp(26px,2.6vw,40px)}
 .answer p{margin:0}.answer ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
 body.screen .answer{font-size:22px}
 .note-text{font-size:20px;line-height:1.45;color:var(--ink-strong);white-space:pre-wrap;overflow-wrap:anywhere}
+
+/* ==== the heads-up display: the displays you talk to (your desk, browsers, your phone) ====
+   A visor's frame, panels with bracket corners, the day tape across the top, what's running and waiting
+   down the left edge, what's playing and what's worth a glance down the right. Presentation displays
+   (body.screen) never get this: they look exactly as before. */
+.visor,.tape,.edge,.nowslot{display:none}
+body.hud:not(.screen){grid-template-rows:auto 50px 84px minmax(0,1fr) auto}
+body.hud:not(.screen) .visor{display:block;position:fixed;inset:14px;pointer-events:none;z-index:1}
+.visor i{position:absolute;width:46px;height:46px;border:0 solid rgba(95,212,230,.7)}
+.visor i:nth-child(1){left:0;top:0;border-left-width:2px;border-top-width:2px}
+.visor i:nth-child(2){right:0;top:0;border-right-width:2px;border-top-width:2px}
+.visor i:nth-child(3){left:0;bottom:0;border-left-width:2px;border-bottom-width:2px}
+.visor i:nth-child(4){right:0;bottom:0;border-right-width:2px;border-bottom-width:2px}
+body.hud:not(.screen) .top{padding:22px 72px 6px}
+/* the day tape */
+body.hud:not(.screen) .tape{display:block;position:relative;margin:0 72px;min-width:0;border-bottom:1px solid rgba(95,212,230,.22);overflow:hidden}
+.tape .tick{position:absolute;top:0;width:1px;height:9px;background:rgba(95,212,230,.35)}
+.tape .tick.h6{height:12px;background:rgba(95,212,230,.55)}
+.tape .hl{position:absolute;top:12px;font-family:var(--mono);font-size:10px;color:var(--ink-faint);transform:translateX(-50%);white-space:nowrap}
+.tape .quiet{position:absolute;bottom:3px;height:5px;background:rgba(127,167,174,.18)}
+.tape .mk{position:absolute;bottom:8px;display:flex;align-items:flex-end;gap:6px;max-width:220px;padding:0;border:0;background:transparent;color:var(--ink-strong);font-family:var(--mono);font-size:11px;white-space:nowrap;cursor:pointer}
+.tape .mk::before{content:"";flex:none;width:2px;height:18px;background:var(--cyan)}
+.tape .mk.r2{bottom:26px}.tape .mk.r2::before{height:9px}
+.tape .mk span{overflow:hidden;text-overflow:ellipsis;padding-bottom:1px}
+.tape .mk.auto span{color:var(--ink-dim)}
+.tape .mk.waiting{color:var(--warn)}.tape .mk.waiting::before{background:var(--warn)}
+.tape .mk:hover span{color:var(--cyan)}
+.tape .now{position:absolute;top:0;bottom:0;width:2px;background:var(--cyan);box-shadow:0 0 10px var(--cyan)}
+.tape .nowl{position:absolute;bottom:8px;font-family:var(--mono);font-size:11px;color:var(--cyan);white-space:nowrap}
+.tape .empty{position:absolute;right:0;bottom:8px;font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
+/* the floor: left edge, the stage, right edge */
+body.hud:not(.screen) .floor,body.hud:not(.screen) .floor.has-queue{margin:0 72px;grid-template-columns:220px minmax(0,1fr) 248px;gap:28px}
+body.hud:not(.screen) .edge{display:flex;flex-direction:column;gap:22px;min-height:0;overflow-y:auto;padding-top:8px;scrollbar-width:none}
+body.hud:not(.screen) .edge::-webkit-scrollbar{display:none}
+.edge .glance:not(:empty)::before{content:attr(data-head);font-family:var(--mono);font-size:11px;letter-spacing:3px;color:var(--ink-dim);margin-bottom:4px}
+.edge .glance{font-size:12px;gap:8px}
+.edge-l .glance.right{align-items:flex-start;text-align:left}
+.edge-l .glance.right .gl{flex-direction:row}
+.edge-r .glance{align-items:flex-end;text-align:right}
+.edge-r .glance .gl{flex-direction:row-reverse}
+.edge .rail{padding:0}
+.edge .rail-head{font-size:11px;letter-spacing:3px;color:var(--ink-dim)}
+/* panels: bracket corners instead of a box */
+body.hud:not(.screen) .panel{--bk:var(--cyan-line);border-color:transparent;border-radius:2px;
+  background-image:linear-gradient(var(--bk),var(--bk)),linear-gradient(var(--bk),var(--bk)),linear-gradient(var(--bk),var(--bk)),linear-gradient(var(--bk),var(--bk)),
+    linear-gradient(var(--bk),var(--bk)),linear-gradient(var(--bk),var(--bk)),linear-gradient(var(--bk),var(--bk)),linear-gradient(var(--bk),var(--bk));
+  background-repeat:no-repeat;
+  background-size:22px 1px,1px 22px,22px 1px,1px 22px,22px 1px,1px 22px,22px 1px,1px 22px;
+  background-position:left top,left top,right top,right top,left bottom,left bottom,right bottom,right bottom}
+body.hud:not(.screen) .panel.reading,body.hud:not(.screen) .panel.focused,body.hud:not(.screen) .panel.lit{--bk:var(--cyan)}
+body.hud:not(.screen) .panel.asking{--bk:var(--warn)}
+body.hud:not(.screen) .panel.failed{--bk:var(--bad)}
+body.hud:not(.screen) .panel[data-n]::before{border-radius:0;top:-1px}
+body.hud:not(.screen) .panel.focused{box-shadow:0 0 48px rgba(95,212,230,.16)}
+body.hud:not(.screen) .qchip{border-radius:2px}
+/* the command reticle */
+body.hud:not(.screen) .bottom{grid-template-columns:minmax(0,1fr) minmax(0,600px) minmax(0,1fr);padding:10px 72px 34px}
+body.hud:not(.screen) .bottom::before,body.hud:not(.screen) .bottom::after{content:"";grid-row:1;align-self:center;height:1px;background:var(--cyan-soft)}
+body.hud:not(.screen) .bottom::before{grid-column:1}
+body.hud:not(.screen) .bottom::after{grid-column:3}
+body.hud:not(.screen) .bar-wrap{grid-column:2;grid-row:1}
+body.hud:not(.screen) .cmd{border-color:var(--cyan-line);border-radius:26px;background:rgba(95,212,230,.06) no-repeat 18px 50%/20px url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%235fd4e6' stroke-width='1.4'%3E%3Ccircle cx='10' cy='10' r='7'/%3E%3Cpath d='M10 1v4M10 15v4M1 10h4M15 10h4'/%3E%3C/svg%3E");padding-left:50px}
+body.hud:not(.screen) .cmd:focus{border-color:var(--cyan);background-color:rgba(95,212,230,.1)}
+/* what's playing: its own spot at the top of the right edge */
+body.hud:not(.screen) .nowslot:not([hidden]){display:flex}
+.nowslot{flex-direction:column;gap:10px;padding:14px;background:rgba(95,212,230,.05) no-repeat;
+  background-image:linear-gradient(var(--cyan),var(--cyan)),linear-gradient(var(--cyan),var(--cyan)),linear-gradient(var(--cyan),var(--cyan)),linear-gradient(var(--cyan),var(--cyan));
+  background-size:14px 1px,1px 14px,14px 1px,1px 14px;background-position:left top,left top,right bottom,right bottom}
+.ns-head{display:flex;justify-content:space-between;gap:8px;font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--ink-dim)}
+.ns-head b{font-weight:500;color:var(--cyan);letter-spacing:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ns-art{position:relative;aspect-ratio:16/9;background:#0b1820;border:1px solid rgba(95,212,230,.18);overflow:hidden}
+.ns-art.sq{aspect-ratio:1/1;max-height:180px;align-self:center;width:180px}
+.ns-art img{width:100%;height:100%;object-fit:cover;display:block}
+.ns-title{font-size:14px;line-height:1.35;color:var(--ink-strong);overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.ns-bar{height:3px;background:var(--cyan-track)}.ns-bar span{display:block;height:100%;width:0;background:var(--cyan)}
+.ns-line{display:flex;justify-content:space-between;gap:8px;font-family:var(--mono);font-size:11px;color:var(--ink-dim)}
+.ns-ctl{display:flex;gap:6px}
+.ns-ctl button{flex:1;min-height:44px;border:1px solid var(--cyan-soft);border-radius:4px;background:transparent;color:var(--ink);display:flex;align-items:center;justify-content:center}
+.ns-ctl button.main{border-color:var(--cyan);background:rgba(95,212,230,.12)}
+.ns-ctl button:hover{border-color:var(--cyan);background:var(--cyan-track)}
+.ns-ctl button:disabled{opacity:.5}
+.ns-ctl svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.5}
+.ns-other{display:flex;align-items:center;gap:8px;padding-top:8px;border-top:1px solid rgba(95,212,230,.14);font-size:12px;color:var(--ink-dim);min-width:0}
+.ns-other span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ns-other button{flex:none;width:36px;height:36px;border:1px solid var(--cyan-soft);border-radius:4px;background:transparent;color:var(--ink);display:flex;align-items:center;justify-content:center}
+.ns-other svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.5}
+/* a narrower desk: one edge on the right, the left edge's lists under the player and glance */
+@media (max-width:1180px) and (min-width:641px){
+  body.hud:not(.screen) .floor,body.hud:not(.screen) .floor.has-queue{grid-template-columns:minmax(0,1fr) 240px;grid-template-rows:auto minmax(0,1fr);margin:0 56px}
+  body.hud:not(.screen) .stage{grid-column:1;grid-row:1 / span 2}
+  body.hud:not(.screen) .edge-r{grid-column:2;grid-row:1}
+  body.hud:not(.screen) .edge-l{grid-column:2;grid-row:2}
+  body.hud:not(.screen) .tape,body.hud:not(.screen) .top{margin-left:56px;margin-right:56px}
+  body.hud:not(.screen) .top{padding-left:0;padding-right:0}
+}
+/* the phone: the next 12 hours of tape, one column, a mini-player just above where you talk */
+@media (max-width:640px){
+  body.hud:not(.screen){grid-template-rows:auto 40px 72px minmax(0,1fr) auto}
+  .visor i{width:26px;height:26px}
+  body.hud:not(.screen) .visor{inset:8px}
+  body.hud:not(.screen) .top{padding:16px 28px 4px}
+  body.hud:not(.screen) .tape{margin:0 20px}
+  .tape .hl{font-size:9px}.tape .mk{font-size:10px;max-width:130px}
+  body.hud:not(.screen) .floor,body.hud:not(.screen) .floor.has-queue{margin:0 16px;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto auto;gap:10px}
+  body.hud:not(.screen) .stage{grid-row:1}
+  body.hud:not(.screen) .edge{overflow:visible;padding:0;gap:8px}
+  body.hud:not(.screen) .edge-l{grid-row:2}
+  body.hud:not(.screen) .edge-r{grid-row:3}
+  body.hud:not(.screen) .edge-l .glance{display:none}
+  body.hud:not(.screen) .edge-r .glance{flex-direction:row;flex-wrap:wrap;gap:4px 14px;align-items:baseline;text-align:left}
+  body.hud:not(.screen) .edge-r .glance::before{display:none}
+  body.hud:not(.screen) .edge-r .glance .gl{flex-direction:row}
+  body.hud:not(.screen) .edge-r .glance .gl:nth-child(n+3){display:none}
+  .nowslot{flex-direction:row!important;align-items:center;gap:12px;padding:8px}
+  .nowslot .ns-head,.nowslot .ns-ctl,.nowslot .ns-other,.nowslot .ns-line .ns-n{display:none}
+  .nowslot .ns-art{flex:0 0 64px;aspect-ratio:16/10}
+  .nowslot .ns-art.sq{width:44px;flex-basis:44px;max-height:none}
+  .nowslot .ns-mid{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+  .nowslot .ns-title{font-size:13px;-webkit-line-clamp:1}
+  .nowslot .ns-mini{display:flex!important}
+  body.hud:not(.screen) .bottom{grid-template-columns:minmax(0,1fr);padding:8px 16px 14px}
+  body.hud:not(.screen) .bottom::before,body.hud:not(.screen) .bottom::after{display:none}
+  body.hud:not(.screen) .bar-wrap{grid-column:1}
+}
+.ns-mid{display:contents}
+.ns-mini{display:none;flex:none;width:44px;height:44px;border:1px solid var(--cyan);border-radius:4px;background:rgba(95,212,230,.12);color:var(--ink-strong);align-items:center;justify-content:center}
+.ns-mini svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.6}
 </style>
 </head>
 <body>
+<div class="visor" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
 <header class="top">
   <div class="brand"><div class="mark">AURELIA</div><div class="clock" id="clock"></div><div class="weather" id="weather"></div></div>
   <div class="said" id="said"></div>
@@ -518,19 +646,22 @@ body.screen .answer{font-size:22px}
     <div class="conn" id="conn" role="status"><span class="dot"></span><span id="connText">Connecting…</span></div>
   </div>
 </header>
+<div class="tape" id="tape" aria-label="The next day"></div>
 <div class="slot"><div class="reply quiet" id="reply" aria-live="polite"></div><button type="button" class="morebtn" id="more" hidden>MORE</button></div>
 <div class="floor" id="floor">
+  <div class="edge edge-l" id="edgeL"></div>
   <main class="stage n0" id="stage" aria-label="Panels"></main>
   <aside class="rail" id="rail" aria-label="Waiting panels" hidden></aside>
+  <div class="edge edge-r" id="edgeR"><section class="nowslot" id="nowslot" aria-label="Now playing" hidden></section></div>
 </div>
 <div class="bottom">
-<aside class="glance" id="glanceL" aria-label="Worth a glance"></aside>
+<aside class="glance" id="glanceL" aria-label="Worth a glance" data-head="GLANCE"></aside>
 <form class="bar-wrap" id="form" autocomplete="off">
   <label class="sr" for="cmd">Talk to Aurelia</label>
   <button type="button" class="focuschip" id="focuschip" hidden title="Stop focusing this panel"></button>
   <input class="cmd" id="cmd" placeholder="Press / to talk to Aurelia" spellcheck="false">
 </form>
-<aside class="glance right" id="glanceR" aria-label="Running"></aside>
+<aside class="glance right" id="glanceR" aria-label="Running" data-head="RUNNING"></aside>
 </div>
 
 <script>
@@ -544,10 +675,163 @@ async function _fetchMe() {
   try {
     const me = await (await window.fetch("/view/me", { cache: "no-store" })).json();
     if (me && me.role === "presentation" && !document.body.classList.contains("screen")) {
+      hudMode(false);                           // a presentation display: no heads-up display, as before
       document.body.classList.add("screen", "ambient"); tick(); relayout(); loadAmbient();
     }
   } catch (e) { /* the normal display, then */ }
 }
+// ---- the heads-up display: every display you talk to (presentation displays never) ------------------
+// The page is the same; on these displays the side lists move into the edges: what's running and waiting on
+// the left, what's playing and what's worth a glance on the right. The day tape runs under the top line.
+const nowItems = new Map();                    // what's playing, by player: {n, t0, heard, started}
+function isHud() { return document.body.classList.contains("hud") && !document.body.classList.contains("screen"); }
+function hudMode(on) {
+  const gl = document.getElementById("glanceL"), gr = document.getElementById("glanceR"), rail = document.getElementById("rail");
+  const L = document.getElementById("edgeL"), R = document.getElementById("edgeR"), form = document.getElementById("form");
+  document.body.classList.toggle("hud", on);
+  if (on) { L.append(gr, rail); R.append(gl); }
+  else {
+    form.parentElement.insertBefore(gl, form); form.parentElement.append(gr); document.getElementById("stage").after(rail);
+    nowItems.clear(); renderNowSlot();
+  }
+}
+if (!SCREEN) hudMode(true);
+
+// What's playing: its own spot. The buttons say what you'd say ("pause on the TV PC"), so they go through
+// the same commands, checked the same way, and you see them in the conversation.
+function nowWords(key, n, what) {
+  if (key === "spotify") return { pause: "pause on spotify", play: "resume on spotify", next: "next on spotify",
+                                   back: "previous on spotify" }[what];
+  return { pause: `pause on the ${n.node}`, play: `play on the ${n.node}`, next: `play the next one on the ${n.node}`,
+           back: `rewind 10 seconds on the ${n.node}` }[what];
+}
+const NOW_ICON = { back: '<path d="M8 4L3 9l5 5M15 4l-5 5 5 5"/>', pause: '<path d="M6 4v10M12 4v10"/>',
+                   play: '<path d="M5 3l10 6-10 6z"/>', next: '<path d="M4 4l6 5-6 5zM14 4v10"/>' };
+function nowIcon(name) {
+  const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  s.setAttribute("viewBox", "0 0 18 18"); s.setAttribute("aria-hidden", "true"); s.innerHTML = NOW_ICON[name];
+  return s;
+}
+function nowClock(s) {
+  s = Math.max(0, Math.floor(s || 0)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}` : `${m}:${String(x).padStart(2, "0")}`;
+}
+async function nowControl(btn, key, n, what) {
+  btn.disabled = true;
+  try { await ask(nowWords(key, n, what)); } finally { btn.disabled = false; }
+}
+function nowButton(cls, key, n, what, label) {
+  const b = el("button", cls); b.type = "button"; b.setAttribute("aria-label", label); b.append(nowIcon(what));
+  b.addEventListener("click", () => nowControl(b, key, n, what));
+  return b;
+}
+function renderNowSlot() {
+  const slot = document.getElementById("nowslot");
+  const list = [...nowItems.entries()].sort((a, b) => b[1].started - a[1].started);
+  slot.hidden = !list.length;
+  slot._draw = null;
+  if (!list.length) { slot.replaceChildren(); return; }
+  const [key, it] = list[0], n = it.n, spotify = key === "spotify";
+  const head = el("div", "ns-head");
+  head.append(el("span", null, "NOW PLAYING"), el("b", null, spotify ? `Spotify${n.node ? " · " + n.node : ""}` : (n.node || "")));
+  const parts = [head];
+  if (n.art) {
+    const a = el("div", "ns-art" + (spotify || n.kind === "audio" ? " sq" : "")), img = new Image();
+    img.alt = ""; img.src = n.art; img.onerror = () => a.remove(); a.append(img); parts.push(a);
+  }
+  const mid = el("div", "ns-mid"), bar = el("div", "ns-bar"), fill = el("span"), line = el("div", "ns-line"), pos = el("span");
+  bar.append(fill);
+  line.append(pos, el("span", "ns-n", n.paused ? "paused" : n.count > 1 ? `${(n.index || 0) + 1} of ${n.count}` : ""));
+  mid.append(el("div", "ns-title", n.title || "Playing"), bar, line);
+  parts.push(mid);
+  const ctl = el("div", "ns-ctl");
+  ctl.append(nowButton(null, key, n, "back", spotify ? "Previous" : "Back 10 seconds"),
+             nowButton("main", key, n, n.paused ? "play" : "pause", n.paused ? "Play" : "Pause"),
+             nowButton(null, key, n, "next", "Next"));
+  parts.push(ctl, nowButton("ns-mini", key, n, n.paused ? "play" : "pause", n.paused ? "Play" : "Pause"));
+  list.slice(1, 3).forEach(([k2, it2]) => {
+    const o = el("div", "ns-other"), n2 = it2.n;
+    o.append(el("span", null, `${k2 === "spotify" ? "Spotify" : n2.node} · ${n2.title || "playing"}${n2.paused ? " · paused" : ""}`),
+             nowButton(null, k2, n2, n2.paused ? "play" : "pause", n2.paused ? "Play" : "Pause"));
+    parts.push(o);
+  });
+  slot.replaceChildren(...parts);
+  slot._draw = () => {
+    const at = (n.position || 0) + (n.paused ? 0 : (Date.now() - it.t0) / 1000), end = n.duration || 0;
+    const t = end ? Math.min(at, end) : at;
+    fill.style.width = end ? (t / end * 100).toFixed(1) + "%" : "0%";
+    pos.textContent = end ? `${nowClock(t)} / ${nowClock(end)}` : nowClock(t);
+  };
+  slot._draw();
+}
+setInterval(() => {
+  const slot = document.getElementById("nowslot");
+  if (slot && !slot.hidden && slot._draw) slot._draw();
+  let gone = false;                             // a player that went quiet without saying it stopped
+  for (const [k, it] of nowItems) if (Date.now() - it.heard > 90000) { nowItems.delete(k); gone = true; }
+  if (gone) renderNowSlot();
+}, 1000);
+
+// The day tape: the next day (12 hours on a phone), now at the cursor, quiet hours shaded, and each
+// scheduled thing where it falls. It's read from the engine's own jobs, so what's on it is what will run.
+let tapeData = null, tapeTimer = null;
+async function loadTape() {
+  clearTimeout(tapeTimer); tapeTimer = setTimeout(loadTape, 60000);
+  if (!isHud()) return;
+  try { const r = await fetch("/view/tape", { cache: "no-store" }); if (r.ok) tapeData = await r.json(); } catch (e) {}
+  drawTape();
+}
+function tapeSoon() { if (!isHud()) return; clearTimeout(tapeTimer); tapeTimer = setTimeout(loadTape, 1500); }
+function hourLabel(h) { return h === 0 ? "12A" : h === 12 ? "12P" : h < 12 ? `${h}A` : `${h - 12}P`; }
+function drawTape() {
+  const t = document.getElementById("tape");
+  if (!isHud() || !t.clientWidth) return;
+  const phone = matchMedia("(max-width:640px)").matches;
+  const span = (phone ? 12 : 24) * 3600e3, lead = (phone ? 0.5 : 2) * 3600e3, now = Date.now(), start = now - lead;
+  const W = t.clientWidth, x = ms => (ms - start) / span * W, kids = [];
+  const first = new Date(start); first.setMinutes(0, 0, 0);
+  for (let h = first.getTime() + 3600e3; h < start + span; h += 3600e3) {
+    const hr = new Date(h).getHours(), tk = el("div", "tick" + (hr % 6 === 0 ? " h6" : ""));
+    tk.style.left = x(h) + "px"; kids.push(tk);
+    if (hr % 3 === 0 && x(h) > 30 && x(h) < W - 20) { const lb = el("div", "hl", hourLabel(hr)); lb.style.left = x(h) + "px"; kids.push(lb); }
+  }
+  const q = /^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/.exec(String((tapeData && tapeData.quiet) || "").replace(/\s/g, ""));
+  if (q) {
+    for (let d = -1; d <= 2; d++) {
+      const day = new Date(start); day.setHours(0, 0, 0, 0); day.setDate(day.getDate() + d);
+      const a = new Date(day), b = new Date(day);
+      a.setHours(+q[1], +q[2]); b.setHours(+q[3], +q[4]); if (b <= a) b.setDate(b.getDate() + 1);
+      const l = Math.max(0, x(a.getTime())), r = Math.min(W, x(b.getTime()));
+      if (r > l) { const qd = el("div", "quiet"); qd.style.left = l + "px"; qd.style.width = (r - l) + "px"; kids.push(qd); }
+    }
+  }
+  const marks = ((tapeData && tapeData.items) || []).map(i => ({ ...i, ms: Date.parse(i.at) }));
+  if (tapeData && tapeData.digest) {
+    const dg = new Date(now); dg.setHours(tapeData.digest.hour, 0, 0, 0); if (dg.getTime() < start) dg.setDate(dg.getDate() + 1);
+    marks.push({ ms: dg.getTime(), title: "Digest", kind: "digest" });
+  }
+  marks.sort((a, b) => a.ms - b.ms);
+  let lastRight = -Infinity;
+  marks.filter(m => m.ms >= start && m.ms < start + span).forEach(m => {
+    const mk = el("button", "mk" + (m.automation ? " auto" : "") + (m.waiting ? " waiting" : ""));
+    mk.type = "button";
+    const at = new Date(m.ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    mk.title = `${at} · ${m.title}${m.repeats ? " · " + m.repeats : ""}${m.waiting ? " · waiting for your OK" : ""}`;
+    mk.setAttribute("aria-label", mk.title);
+    const left = x(m.ms) - 1, label = el("span", null, m.title);
+    mk.style.left = left + "px";
+    const right = left + Math.min(phone ? 130 : 220, 7 * m.title.length + 14), nowL = x(now) + 2, nowR = x(now) + 36;
+    if (left > lastRight + 8 && left < W - 60 && (right < nowL || left > nowR)) { mk.append(label); lastRight = right; }
+    mk.addEventListener("click", () => ask(m.kind === "digest" ? "show my digest" : m.automation ? "show my automations" : "what's scheduled"));
+    kids.push(mk);
+  });
+  const cur = el("div", "now"); cur.style.left = x(now) + "px"; kids.push(cur);
+  const nl = el("div", "nowl", "NOW"); nl.style.left = (x(now) + 6) + "px"; kids.push(nl);
+  if (!marks.some(m => m.kind !== "digest")) kids.push(el("div", "empty", "Nothing scheduled"));
+  t.replaceChildren(...kids);
+}
+addEventListener("resize", () => drawTape());
+
 // The ambient screen: dim (how dim is set on the server), the weather, dark at quiet hours.
 let ambientTimer = null;
 async function loadAmbient() {
@@ -863,6 +1147,19 @@ function autoClose(rec) {
 const nowDismissed = new Map();                 // key -> the title that was showing when it was closed
 function showNow(d) {
   if (!d || !d.key) return;
+  if (isHud()) {                                // the heads-up display: what's playing has its own spot
+    const n = d.now || {};
+    if (!n.active) nowItems.delete(d.key);
+    else {
+      const prev = nowItems.get(d.key);
+      nowItems.set(d.key, { n, t0: Date.now(), heard: Date.now(),
+                            started: prev && prev.n.title === n.title ? prev.started : Date.now() });
+      for (const r of recs())                   // the one-off "Playing X" answer: the spot shows it now
+        if (r.tool !== "quasar.now" && r.data && r.data.now && r.data.now.node === n.node && r.state === "reading") remove(r, 0);
+    }
+    renderNowSlot();
+    return;
+  }
   const id = "now-" + d.key, n = d.now || {};
   let rec = panels.get(id);
   if (!n.active) { nowDismissed.delete(d.key); if (rec) remove(rec, 0); return; }
@@ -3213,7 +3510,7 @@ function connect() {
     connectedBefore = true;
     catchUpOnRelease();
     fetch("/mailbox/count").then(r => r.json()).then(updateChip).catch(() => {});
-    loadGlance(); loadAmbient();
+    loadGlance(); loadAmbient(); loadTape();
     if (!document.body.classList.contains("ambient")) loadNow();
     if (!digestChecked) { digestChecked = true; fetch("/digest/check", { method: "POST" }).catch(() => {}); }
   };
@@ -3225,6 +3522,7 @@ function connect() {
   };
 }
 connect();
+if (isHud()) loadTape();
 
 // ---------------------------------------------------------------- talking
 const reply = document.getElementById("reply");
@@ -3397,6 +3695,7 @@ async function ask(text) {
   if (!r.ok) { done(out.detail ? String(out.detail) : `Something went wrong (error ${r.status}).`); return; }
   // A long answer opened as its own panel: the top line keeps just its first sentence.
   done(out.reply_panel && out.reply_short ? `${out.reply_short} ↓` : (out.reply || ""));
+  tapeSoon();                                   // something may have been scheduled (or deleted)
   (out.needs_confirmation || []).forEach(showConfirm);
 }
 

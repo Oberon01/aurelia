@@ -372,3 +372,31 @@ def test_automations_have_fast_paths_and_take_nothing_else(said, tool):
         assert got is None or not got.startswith("pulsar."), (said, got)
     else:
         assert got == tool, (said, got)
+
+
+# The HUD's own buttons (the player spot and the day tape) say what he'd say, so each one must hit its fast path:
+# no model, and the same checks as when he types it.
+@pytest.mark.skipif(not CONFIG.exists(), reason="the repo's config isn't in the test image")
+@pytest.mark.parametrize("said,tool,args", [
+    ("pause on spotify", "quasar.spotify", {"action": "pause"}),
+    ("resume on spotify", "quasar.spotify", {"action": "resume"}),
+    ("next on spotify", "quasar.spotify", {"action": "next"}),
+    ("previous on spotify", "quasar.spotify", {"action": "previous"}),
+    ("pause on the TV PC", "constellation.media", {"action": "pause", "target": "TV PC"}),
+    ("play on the TV PC", "constellation.media", {"action": "play", "target": "TV PC"}),
+    ("play the next one on the TV PC", "constellation.media", {"action": "next", "target": "TV PC"}),
+    ("rewind 10 seconds on the TV PC", "constellation.media", {"action": "back", "target": "TV PC"}),
+    ("show my automations", "pulsar.automations", {}),
+    ("what's scheduled", "admiral.scheduled", {}),
+    ("show my digest", "parallax.digest", {}),
+])
+def test_the_hud_buttons_say_what_a_fast_path_hears(said, tool, args):
+    from app import fastpath
+    from app.config import RuntimeConfig
+    cfg = RuntimeConfig.model_validate(yaml.safe_load(CONFIG.read_text()))
+    m = fastpath.match(said, cfg.fastpath.patterns)
+    assert m and m.pattern.tool == tool, (said, m and m.pattern.tool)
+    assert {k: m.args.get(k) for k in args} == args, (said, m.args)
+    view = (HERE.parents[1] / "app" / "static" / "view.html").read_text()
+    words = said.replace("TV PC", "${n.node}")
+    assert f'"{words}"' in view or f"`{words}`" in view, f"the HUD no longer says {said!r}"

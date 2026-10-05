@@ -423,6 +423,16 @@ your Jellyfin library; step 2 is your Roku TVs; step 3 is YouTube; step 4 is Spo
 | `pause spotify` / `skip the song on spotify` / `what's playing on spotify` / `spotify volume 40` | Spotify, checked with Spotify |
 | `my spotify speakers` | every Spotify Connect device Spotify knows for you |
 
+**The heads-up display.** The displays that talk to me (workstations,
+laptops, your phone) are a heads-up display: a visor frame, and a day tape
+across the top showing the next day (12 hours on a phone) from the engine's
+own jobs, so what's on it is what will run: each reminder, command, plan and
+automation where it falls (an automation at every time it runs), quiet hours
+shaded, the digest marked, NOW at the cursor. Tap a marker to open your
+automations, what's scheduled or the digest. Panels work as they did, framed
+with bracket corners; what you've glanced at and what's running sit on the
+edges. Presentation displays are unchanged. The tape reads `GET /view/tape`.
+
 **Now playing.** While anything plays, through my player on any computer or
 on Spotify anywhere, your displays show a live "Now playing" panel for it:
 what's playing, on which device, the time (it runs by itself), the poster,
@@ -431,6 +441,12 @@ player or Spotify itself reports, so it stays up exactly as long as that
 plays and goes when it stops. A display you open later shows what's playing at
 that moment. Closing it keeps it closed until something else plays there. TVs
 and other presentation screens don't get it (they're showing the thing itself).
+On the heads-up display it has a spot of its own on the right (just above
+where you type, on a phone) instead of a panel: the newest player as a card
+with Back (10 seconds, or the previous track on Spotify), Play/Pause and
+Next, others as a line each. The buttons say
+what you'd say ("pause on the TV PC", "next on spotify"), so they go through
+the same fast paths and checks.
 
 **YouTube (step 3, agent 0.7.0).** Your home feed (what YouTube recommends
 you), subscriptions, Watch Later, history and search come back as thumbnails;

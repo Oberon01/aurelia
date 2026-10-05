@@ -64,6 +64,7 @@ Built so far:
 - No ghost confirmations: sends are tried three times and confirmed only by the display's own report (and you hear when a kept one finally shows); opening a page or an app, going home and the clipboard are checked on the computer itself, and anything I couldn't see happen is called "asked", not "done".
 - Long answers open as a panel; a Raphael speaking style on trial.
 - I read my own releases and this roadmap, and harder questions (why, explain, improve, compare) use a stronger model.
+- A heads-up display on the displays that talk to me (workstations, laptops, the phone): a visor frame, a day tape across the top (the next day from the engine's own jobs, 12 hours on a phone; quiet hours shaded, the digest marked, tap a marker to open it), and a spot of its own for what's playing with its controls (they say what you'd say, so they go through the same fast paths). Panels work as before; presentation displays are unchanged. Field checks: config/checks/hud.yaml.
 - The phone app: Aurelia installs to the home screen, and notifications (Web Push, encrypted end to end) for urgent mailbox items, long requests that finished, and things kept for the phone, only when it isn't already on screen.
 Field check: done on your hardware (October 2026).
 Noted for later: my own model, trained from your data (for now I keep using Claude, with Ollama as the fallback).

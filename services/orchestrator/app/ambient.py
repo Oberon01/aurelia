@@ -5,7 +5,7 @@ GET /ambient   quiet hours and the weather (Open-Meteo, cached; only the coordin
 """
 import json
 import logging
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -142,3 +142,44 @@ async def take_queued(request: Request):
         except ValueError:
             pass
     return {"events": out}
+
+
+# ---- the day tape (the heads-up display): what's scheduled over the next day -------------------------
+
+TAPE_HOURS = 24
+TAPE_MAX = 40                                     # markers on the tape at most (the soonest)
+
+
+@router.get("/view/tape")
+async def tape(request: Request):
+    """The next day as the display's tape shows it: each scheduled reminder, command, plan and automation
+    (every time it runs in that window), when the morning digest comes, and quiet hours. All in his time
+    zone, read from the engine's own jobs: what's on the tape is what will actually run."""
+    from . import engine, pulsar
+    app = request.app
+    tz = engine.tz_name(app)
+    now = engine.now()
+    end = now + timedelta(hours=TAPE_HOURS)
+    items = []
+    rows = await db.pool().fetch(
+        "SELECT * FROM jobs WHERE created_by='owner' AND status IN ('scheduled','waiting') "
+        "AND COALESCE(planned_at, due_at) < $1 ORDER BY COALESCE(planned_at, due_at) LIMIT 200", end)
+    for r in rows:
+        job = dict(r)
+        at = engine._planned(job)
+        rule = engine._j(job["rule"])
+        rec = engine.recurring(job)
+        n = 0
+        while at is not None and at < end and n < 24:
+            if at >= now - timedelta(minutes=1):
+                items.append({"at": at.isoformat(), "title": job["title"], "kind": job["kind"], "job": job["id"],
+                              "automation": rec, "heads_up": bool(job.get("heads_up")),
+                              "waiting": job["status"] == "waiting" and n == 0,
+                              **({"repeats": engine.repeats(job)} if rec else {})})
+            n += 1
+            at = engine.next_time(rule, at, job["tz"]) if rec and not rule.get("on") else None
+    items.sort(key=lambda x: x["at"])
+    dg = app.state.config.current.digest
+    return {"tz": tz, "now": now.isoformat(), "items": items[:TAPE_MAX],
+            "quiet": pulsar.quiet_spec(app) or "",
+            "digest": {"hour": dg.hour} if dg.enabled else None}
