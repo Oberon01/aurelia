@@ -107,7 +107,7 @@ Built so far:
 - Checks for Pulsar, for Swallowtail itself, and for each finished phase's "Done when" (0-7 and 9): "run all the checks" re-tests everything.
 Field check: done on your hardware (October 2026): the checks for Pulsar, Swallowtail and the HUD ran once each release went live, the acting ones waited for your Start, and all passed.
 
-## 11. Lagrange — In progress (everything built; awaiting your field check)
+## 11. Lagrange — Done
 Builds: integrations of any kind without new code per service: an MCP client, OAuth connections, a Home Assistant bridge, webhooks in and out. Every new tool starts in the change tier; credentials sit in a vault the model never sees.
 Done when: you connect a new service from the display with no code, and the first use asks you.
 Built so far:
@@ -119,6 +119,7 @@ Built so far:
 - Pulsar's home events, read by code: a lock unlocking, a light turning on, a door opening, a leak, motion, you coming home or leaving, a webhook being called; "during quiet hours" when you say so. Orbit reports SmartRent's live changes too, so doors and lights work without Home Assistant.
 - Only my own stack's network may call me or Lagrange (not your home-lab network, which both join); local servers run each as their own user, fenced off from every Docker network here.
 - Field checks: config/checks/lagrange.yaml.
+Field check: done on your hardware (October 2026): Gitea connected from the display through its MCP server and its first use asked you; Home Assistant connected, a door unlocking turned on the light (checked by the light's own report), and a webhook started an automation.
 
 ## 12. Beacon — Not started
 Builds: communication: email (sending always confirmed), calendar, my own number, iMessage through a Mac bridge, notifications to your phone.
