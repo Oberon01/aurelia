@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
-from . import (admiral, ambient, engine, morpho, pulsar, assistant, auth, constellation, push, quasar, db, digest, glance, learning, llm_api, mailbox, memory, mnemosyne,
+from . import (admiral, ambient, engine, morpho, pulsar, swallowtail, assistant, auth, constellation, push, quasar, db, digest, glance, learning, llm_api, mailbox, memory, mnemosyne,
                nodes, registry, releases, tasks)
 from .config import ConfigStore
 from .events import CHANNEL
@@ -43,6 +43,7 @@ async def lifespan(app: FastAPI):
     plans = asyncio.create_task(admiral.register_loop(app))
     skills = asyncio.create_task(morpho.register_loop(app))
     watcher_p = asyncio.create_task(pulsar.register_loop(app))   # Pulsar: automations, routines, notices
+    checker = asyncio.create_task(swallowtail.register_loop(app))   # Swallowtail: field checks of each release
     log.info("orchestrator ready")
     try:
         yield
@@ -60,6 +61,7 @@ async def lifespan(app: FastAPI):
         plans.cancel()
         skills.cancel()
         watcher_p.cancel()
+        checker.cancel()
         await db.close()
         await app.state.redis.aclose()
         log.info("orchestrator stopped")
@@ -87,6 +89,7 @@ app.include_router(admiral.router)
 app.include_router(engine.router)
 app.include_router(morpho.router)
 app.include_router(pulsar.router)
+app.include_router(swallowtail.router)
 
 
 VIEW = Path(__file__).parent / "static" / "view.html"
@@ -218,6 +221,20 @@ async def validate_config(body: ConfigCheck):
     model = models.get(body.path)
     if model is None and re.fullmatch(r"config/governance/functions/[\w-]+\.yaml", body.path):
         model = FunctionPolicy
+    if model is None and re.fullmatch(r"config/checks/[\w.-]+\.ya?ml", body.path):     # Swallowtail's field checks
+        from . import swallowtail
+        try:
+            data = yaml.safe_load(body.content) or {}
+            if body.path.endswith("/" + swallowtail.HOME_FILE):
+                if not isinstance(data, dict) or not isinstance(data.get("vars") or {}, dict):
+                    raise ValueError("_home.yaml is vars: a name for each of your home's things")
+            else:
+                problems = swallowtail.validate(swallowtail.CheckFile.model_validate(data))
+                if problems:
+                    raise ValueError("; ".join(problems))
+        except Exception as exc:
+            return {"valid": False, "checked": True, "error": str(exc).splitlines()[0:4]}
+        return {"valid": True, "checked": True}
     if model is None:
         return {"valid": True, "checked": False}
     try:

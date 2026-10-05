@@ -84,10 +84,13 @@ async def ask(body: Ask, request: Request):
     app = request.app
     cfg = app.state.config.current
     started = time.monotonic()
-    body.device = await auth.display_of(request.headers)       # its panels open on this display only
+    from . import checkctx
+    chk = checkctx.current()                                    # one of Swallowtail's field checks
+    body.device = checkctx.DEVICE if chk is not None else await auth.display_of(request.headers)
     # First thing you ask after the digest hour brings up the morning digest (once a day), right here.
     from . import digest
-    asyncio.create_task(digest.maybe_show(app, body.user, body.device))
+    if chk is None:
+        asyncio.create_task(digest.maybe_show(app, body.user, body.device))
     request_id = str(uuid.uuid4())
     # The display makes its own session id, so two requests sent at once share one conversation.
     session_id = body.session_id if context.valid_session(body.session_id) else uuid.uuid4().hex
@@ -95,7 +98,7 @@ async def ask(body: Ask, request: Request):
 
     outcome: dict[str, Any] = {"route": "llm", "reply": "", "task_ids": [], "needs_confirmation": []}
 
-    chosen = style.switch(body.text)
+    chosen = style.switch(body.text) if chk is None else None     # a check never changes how she speaks
     fp = fastpath.match(body.text, cfg.fastpath.patterns) if cfg.fastpath.enabled and chosen is None else None
     from . import when as _when
     repeats = _when.mentions_repeat(body.text)
@@ -133,10 +136,13 @@ async def ask(body: Ask, request: Request):
         outcome = await _run_elsewhere(app, body, *elsewhere)
     elif fp and resolved:
         outcome = await _run_fastpath(app, body, fp, resolved)
+    elif chk is not None and not chk.get("model"):              # a check doesn't call the model unless it says so
+        outcome.update(route="llm", reply="", model_called=False)
     else:
         outcome = await _run_llm(app, body, history, request_id)
 
-    if outcome["route"] == "llm" and not outcome.pop("_panel_opened", False) and long_reply(outcome["reply"], cfg.display):
+    if (outcome["route"] == "llm" and not outcome.pop("_panel_opened", False) and long_reply(outcome["reply"], cfg.display)
+            and chk is None):
         try:                                       # too much for the top line: it opens as a panel to read
             outcome["reply_panel"] = await _reply_panel(app, body, outcome["reply"])
             outcome["reply_short"] = first_sentence(outcome["reply"])
@@ -145,6 +151,8 @@ async def ask(body: Ask, request: Request):
     outcome.pop("_panel_opened", None)
 
     latency = int((time.monotonic() - started) * 1000)
+    if chk is not None:                # a check: not one of his requests (never in the record or his habits)
+        return {"request_id": request_id, "session_id": session_id, "latency_ms": latency, **outcome}
     await db.pool().execute(
         "INSERT INTO ask_requests (id, session_id, user_id, text, route, reply, task_ids, latency_ms, screen) "
         "VALUES ($1, $2, $3, $4, $5, $6, $7::uuid[], $8, $9::jsonb)",
@@ -241,6 +249,12 @@ async def _lookup_elsewhere(app, text: str) -> tuple[str, dict, str, str] | None
 
 async def _run_elsewhere(app, body, qualified: str, args: dict, to: str, what: str) -> dict[str, Any]:
     out: dict[str, Any] = {"route": "fastpath", "reply": "", "task_ids": [], "needs_confirmation": []}
+    from . import checkctx
+    chk = checkctx.current()
+    if chk is not None and chk["mode"] == "auto":       # a check on its own never shows anything on his displays
+        chk["blocked"].append("constellation.send")
+        out["reply"] = "That would show something on another display, so this check waits for your Start."
+        return out
     text, err = await _run_for_display(app, body.user, qualified, args, to, getattr(body, "device", None), out)
     try:
         r = json.loads(text)
@@ -270,8 +284,9 @@ def _timed(app, text: str) -> bool:
         return False
 
 async def _run_fastpath(app, body: Ask, fp, resolved) -> dict[str, Any]:
+    from . import checkctx
     out = await _fastpath_plain(app, body, fp, resolved)
-    st = await style.current(app.state.redis, body.user)
+    st = await style.current(app.state.redis, body.user) if checkctx.current() is None else None   # checks: plain words
     if st:
         if out["needs_confirmation"]:
             out["reply"] = style.confirming(st, out["reply"], plain=out["reply"] == NEEDS_CONFIRMATION)
@@ -785,3 +800,15 @@ async def _log_llm_call(request_id: str, completion, started: float) -> None:
         completion.usage.output_tokens, completion.usage.cache_read_tokens,
         int((time.monotonic() - started) * 1000),
     )
+
+
+class _CheckRequest:
+    """What ask() needs from a request, for a field check made inside the stack (no display, no headers)."""
+    def __init__(self, app):
+        self.app = app
+        self.headers: dict[str, str] = {}
+
+
+async def ask_for_check(app, text: str, session_id: str) -> dict[str, Any]:
+    """One of Swallowtail's checks says something, exactly as he would (checkctx must be set by the caller)."""
+    return await ask(Ask(text=text, session_id=session_id), _CheckRequest(app))

@@ -55,6 +55,12 @@ async def start_task(body: StartTask, request: Request):
     if headers is not None and headers.get("x-aurelia-device"):
         # Asked from a device through the proxy: its panel goes to that display (if it is one).
         body = body.model_copy(update={"device": await auth.display_of(headers)})
+    from . import checkctx
+    chk = checkctx.current()
+    if chk is not None:                 # a field check: marked as one, shown nowhere, never confirmed
+        body = body.model_copy(update={"trigger": checkctx.TRIGGER,
+                                       "device": checkctx.DEVICE if body.device is None else body.device,
+                                       "confirmed": False})
     resolved = await registry.resolve(_redis(request), body.tool)
     if resolved is None:
         raise HTTPException(404, f"tool '{body.tool}' is not registered (use '<function>.<tool>')")
@@ -64,7 +70,7 @@ async def start_task(body: StartTask, request: Request):
     gov = request.app.state.governance
     decision = gov.decide(resolved.function, resolved.tool.name, body.user, body.confirmed)
     grant = None
-    if decision.needs_confirmation and not body.confirmed:
+    if decision.needs_confirmation and not body.confirmed and chk is None:     # (never in a check)
         from . import morpho                       # earned trust (Morpho): exactly this action, on his allow-list
         grant = await morpho.trusted(request.app, name, body.args, body.user)
         if grant:
@@ -72,6 +78,16 @@ async def start_task(body: StartTask, request: Request):
                                                    "reason": f"trusted since {grant['granted_at']:%b %d}"})
     if decision.allowed and not await _within_rate_limit(request, resolved.function, gov.rate_limit(resolved.function)):
         decision = decision.model_copy(update={"allowed": False, "reason": f"rate limit reached for '{resolved.function}'"})
+    if chk is not None and name in checkctx.NEVER:        # its steps would run outside the check (no Start, no rules)
+        chk["blocked"].append(name)
+        raise HTTPException(403, {"tier": decision.tier, "reason": f"{name} runs outside a check, so checks never use it: "
+                                                                   "try it yourself and answer the check's question."})
+    if (chk is not None and chk["mode"] == "auto" and decision.allowed
+            and (decision.tier not in checkctx.LOOK_TIERS or name in checkctx.AUTO_DENY) and name not in checkctx.AUTO_OK):
+        chk["blocked"].append(name)              # a check on its own only looks: this one waits for his Start
+        raise HTTPException(403, {"tier": decision.tier, "reason": f"{name} would act, so this check waits for your Start."})
+    if chk is not None and decision.needs_confirmation:
+        chk["holds"].append(name)
     if not decision.allowed:
         await db.pool().execute(
             "INSERT INTO governance_denials (user_id, tool, tier, reason, args) VALUES ($1, $2, $3, $4, $5::jsonb)",
@@ -108,13 +124,15 @@ async def start_task(body: StartTask, request: Request):
     # Memory: a repeated look-up shows its last panel at once (labelled with its
     # age) while this run refreshes it. Actions never restore an old result.
     if (decision.tier in memory.RESTORE_TIERS and request.app.state.config.current.memory.restore
-            and not memory.is_system_user(gov, body.user)):
+            and not memory.is_system_user(gov, body.user) and chk is None):
         try:
             snap = await memory.latest(name, body.args, body.user, resolved.tool.freshness_seconds)
             if snap:
                 open_data["snapshot"] = snap
         except Exception:
             log.exception("couldn't look up a saved panel for %s", name)
+    if chk is not None:
+        chk["tasks"].append({"id": task_id, "tool": name})
     await publish(_redis(request), PanelEvent(type="panel.open", task_id=task_id, tool=name, data=open_data,
                                               device=body.device))
     try:
@@ -255,8 +273,9 @@ async def _finish(request: Request, task_id: str, tool: str, body: Result) -> No
                                     f"it failed: {body.error or 'no reason'}"[:300])
     if body.data and body.status != "failed":
         try:
-            row = await db.pool().fetchrow("SELECT args, user_id FROM task_runs WHERE id=$1", uuid.UUID(task_id))
-            if row and not memory.is_system_user(request.app.state.governance, row["user_id"]):
+            row = await db.pool().fetchrow("SELECT args, user_id, trigger FROM task_runs WHERE id=$1", uuid.UUID(task_id))
+            if row and not memory.is_system_user(request.app.state.governance, row["user_id"]) \
+                    and row["trigger"] != "check":         # a field check's result isn't one of his panels to remember
                 args = row["args"] if isinstance(row["args"], dict) else json.loads(row["args"])
                 await memory.save(task_id, tool, args, row["user_id"], body.data, body.partial)
         except Exception:

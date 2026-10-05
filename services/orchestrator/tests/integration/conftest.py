@@ -88,6 +88,9 @@ def stack(tmp_path_factory):
         "             update_failed: low, automation_paused: low, budget_ahead: low, mailbox_waiting: low,\n"
         "             automations_ready: low, battery_low: low}\n"
         "  watch: {server_disk_free_percent: 0, computer_down_minutes: 100000, mailbox_waiting_hours: 100000}\n")
+    (tmp / "gov" / "functions" / "swallowtail.yaml").write_text(      # Swallowtail: field checks
+        "function: swallowtail\nrate_limit_per_minute: 1000\ntools:\n  checks: {tier: reference}\n  run: {tier: act}\n"
+        "  start: {tier: act}\n")
     (tmp / "gov" / "functions" / "enginefn.yaml").write_text(          # the engine's tests' stand-in function
         "function: enginefn\nrate_limit_per_minute: 1000\ntools:\n  act: {tier: act}\n  look: {tier: reference}\n"
         "  confirm: {tier: change}\n")

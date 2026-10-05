@@ -55,9 +55,9 @@ def read_roadmap() -> list[dict[str, Any]]:
         return []
     phases, cur = [], None
     for line in text.splitlines():
-        m = re.match(r"^##\s+(\d+)\.\s+(.+?)\s+[—-]+\s+(.+?)\s*$", line)
+        m = re.match(r"^##\s+(\d+(?:\.\d+)?)\.\s+(.+?)\s+[—-]+\s+(.+?)\s*$", line)     # 10, or 10.5 (one added between)
         if m:
-            cur = {"n": int(m[1]), "name": m[2].strip(), "status": m[3].strip(), "builds": "", "done_when": "",
+            cur = {"n": float(m[1]) if "." in m[1] else int(m[1]), "name": m[2].strip(), "status": m[3].strip(), "builds": "", "done_when": "",
                    "built": [], "todo": ""}
             phases.append(cur)
             continue
@@ -272,6 +272,10 @@ async def history(app, user: str, args: dict) -> dict:
         r = dict(row)
         e = _entry(r, await notes_for(app, r))
         e["commit_messages"] = [{"subject": c.get("subject"), "body": c.get("body")} for c in (_json(r.get("commits")) or [])][:20]
+        from . import swallowtail
+        checks = await swallowtail.summary_for_release(r["id"])       # its field checks, if it had any
+        if checks:
+            e["field_checks"] = checks
         return {"headline": f"Release #{r['id']}: {e['summary'] or r.get('message') or r['sha'][:8]}"[:160], "history_release": e}
 
     since = _since(args.get("since"))

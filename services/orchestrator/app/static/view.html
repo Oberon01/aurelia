@@ -613,6 +613,8 @@ const TITLES = { "aurelia.reply": "Aurelia", "quasar.now": "Now playing",
   "pulsar.automations": "Automations", "pulsar.notices": "What I'm watching", "pulsar.notice": "Worth knowing",
   "pulsar.pause": "Automation", "pulsar.resume": "Automation", "pulsar.skip": "Automation", "pulsar.delete": "Automation",
   "pulsar.forget_routine": "Routine",
+  "swallowtail.report": "Field checks", "swallowtail.checks": "Field checks", "swallowtail.run": "Field checks",
+  "swallowtail.start": "Field checks",
 };
 function titleFor(tool) {
   if (TITLES[tool]) return TITLES[tool];
@@ -1253,6 +1255,7 @@ function body(tool, d) {
   if (d.routine_draft && typeof d.routine_draft === "object") { wrap.append(routineDraftView(d.routine_draft)); used.add("routine_draft"); used.add("confirm"); }
   if (d.automation && typeof d.automation === "object" && d.automation.job) { wrap.append(scheduledView({ job: d.automation.job, note: d.automation.note })); used.add("automation"); used.add("headline"); }
   if (d.automations && Array.isArray(d.automations.items)) { wrap.append(automationsView(d.automations)); used.add("automations"); used.add("headline"); }
+  if (d.checks && Array.isArray(d.checks.items)) { wrap.append(fieldChecksView(d.checks)); used.add("checks"); used.add("headline"); }
   if (d.notices && Array.isArray(d.notices.open)) { wrap.append(noticesView(d.notices)); used.add("notices"); used.add("headline"); }
   if (d.notice && typeof d.notice === "object") { wrap.append(noticeView(d.notice)); used.add("notice"); }
   if (d.plans && Array.isArray(d.plans.items)) { wrap.append(plansView(d.plans)); used.add("plans"); used.add("headline"); }
@@ -2081,6 +2084,78 @@ function noticesView(ns) {
   const w = el("details", "mb-ev"); w.append(el("summary", null, `What I watch for (quiet hours: ${ns.quiet_hours})`));
   (ns.watching || []).forEach(x => w.append(el("div", "more", `${x.what} · ${x.level} · ${x.check}`)));
   box.append(w);
+  return box;
+}
+// Swallowtail: a release's field checks. One row each (its status and name); open a row for the input given,
+// what was expected and what actually happened. Checks that act wait for Start; some ask him something.
+const CHECK_PILL = { passed: ["online", "passed"], failed: ["offline", "failed"], error: ["offline", "broken"],
+  needs_you: ["disabled", "needs you"], needs_start: ["planned", "waits for Start"], running: ["online", "running"],
+  pending: ["planned", "to run"], skipped: ["planned", "skipped"] };
+function checkAnswer(id, yes, asking, box) {
+  box.querySelectorAll("button").forEach(x => x.disabled = true);
+  planPost(`/swallowtail/results/${id}/answer`, { yes, asking }).then(() => box.querySelectorAll("button").forEach(x => x.remove()))
+    .catch(e => { box.querySelectorAll("button").forEach(x => x.disabled = false); say(e.message); });
+}
+function checkPairs(title, obj) {
+  const keys = Object.keys(obj || {});
+  if (!keys.length) return null;
+  const box = el("div"); box.append(el("div", "facts", title));
+  keys.forEach(k => { const v = obj[k]; box.append(el("div", "more", `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`)); });
+  return box;
+}
+function fieldChecksView(c) {
+  const box = el("div"); box.style.cssText = "display:flex;flex-direction:column;gap:10px";
+  if (c.can_start) {
+    const row = el("div"); row.style.cssText = "display:flex;gap:8px;align-items:center;flex-wrap:wrap";
+    const n = c.counts.needs_start || 0;
+    row.append(el("div", "more", `${n} check${n === 1 ? "" : "s"} act in your home and wait for you.`));
+    if (c.quiet) row.append(el("div", "more", "(after quiet hours)"));
+    else {
+      const b = el("button", "btn", "Start"); b.type = "button";
+      b.addEventListener("click", () => { b.disabled = true;
+        planPost(`/swallowtail/runs/${c.run}/start`, {}).then(o => { b.remove(); row.append(el("div", "more", o.done || "Starting.")); })
+          .catch(e => { b.disabled = false; say(e.message); }); });
+      row.append(b);
+    }
+    box.append(row);
+  }
+  const list = el("div", "procs");
+  if (!c.items.length) list.append(el("div", "msg", "No checks in this run."));
+  c.items.forEach(i => {
+    const row = el("details"); row.style.cssText = "padding:6px 0;border-bottom:1px solid var(--cyan-soft)";
+    if (["failed", "error", "needs_you"].includes(i.status)) row.open = i.status === "needs_you";
+    const sum = el("summary"); sum.style.cssText = "cursor:pointer;display:flex;gap:8px;align-items:baseline";
+    const [tone, word] = CHECK_PILL[i.status] || ["planned", i.status];
+    const name = el("span", null, i.name); name.style.color = "var(--ink-strong)";
+    sum.append(statusPill(tone, word), name);
+    row.append(sum);
+    const body = el("div"); body.style.cssText = "display:flex;flex-direction:column;gap:6px;margin:6px 0 0 4px";
+    if (i.asking && i.question) {
+      const q = el("div"); q.style.cssText = "display:flex;flex-direction:column;gap:6px";
+      q.append(el("div", null, i.question));
+      if (i.asking !== "info") {
+        const bs = el("div"); bs.style.cssText = "display:flex;gap:8px";
+        const labels = i.asking === "ask" ? ["Yes", "No"] : ["Done", "Couldn't"];
+        labels.forEach((l, k) => { const b = el("button", k ? "btn quiet" : "btn", l); b.type = "button";
+          b.addEventListener("click", () => checkAnswer(i.id, k === 0, i.asking, q)); bs.append(b); });
+        q.append(bs);
+      } else q.append(el("div", "more", "I'm watching for it."));
+      body.append(q);
+    }
+    const inp = checkPairs("Input", i.input); if (inp) body.append(inp);
+    (i.lines || []).forEach(x => {
+      const l = el("div", "more", `${x.ok ? "✓" : "✗"} ${x.what}: expected ${x.expected} · got ${x.actual}`);
+      if (!x.ok) l.style.color = "var(--bad)";
+      body.append(l);
+    });
+    if (!(i.lines || []).length) { const ex = checkPairs("Expected", i.expected); if (ex) body.append(ex); }
+    if (i.actual && i.actual.reply) body.append(el("div", "more", `Reply: ${i.actual.reply}`));
+    if (i.note) body.append(el("div", "more", i.note));
+    if (i.ms) body.append(el("div", "facts", `${(i.ms / 1000).toFixed(1)} s · ${i.file}`));
+    row.append(body);
+    list.append(row);
+  });
+  box.append(list);
   return box;
 }
 function plansView(ps) {
@@ -3072,9 +3147,10 @@ async function openLinked(href) {
   const q = u.searchParams;
   let id, tool, data, closeData = { status: "completed", has_result: true };
   try {
-    if (q.get("plan") || q.get("job") || q.get("notice")) {
+    if (q.get("plan") || q.get("job") || q.get("notice") || q.get("checks")) {
       const r = await fetch(q.get("plan") ? `/admiral/plans/${encodeURIComponent(q.get("plan"))}/panel`
                           : q.get("job") ? `/admiral/jobs/${encodeURIComponent(q.get("job"))}/panel`
+                          : q.get("checks") ? `/swallowtail/runs/${encodeURIComponent(q.get("checks"))}/panel`
                           : `/pulsar/notices/${encodeURIComponent(q.get("notice"))}/panel`);
       if (!r.ok) throw new Error();
       ({ task_id: id, tool, data } = await r.json());

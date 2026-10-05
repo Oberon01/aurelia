@@ -1,0 +1,36 @@
+# Field checks for Swallowtail itself: checks run safely, in your home, after each release.
+release: Swallowtail (field checks)
+phase: "10.5"
+checks:
+  - id: report
+    name: The checks report opens
+    say: "show the checks"
+    expect: { tool: swallowtail.checks, status: completed }
+
+  - id: never-confirms
+    name: A check never confirms anything (unlocking is asked for, then declined)
+    say: "unlock the {lock}"
+    expect:
+      tool: none
+      asks_to_confirm: orbit.unlock
+
+  - id: no-model
+    name: A check doesn't call the model unless it says so
+    say: "tell me something interesting about swallowtail butterflies"
+    expect:
+      route: llm
+      tool: none
+
+  - id: acts-after-start
+    name: A check that acts waits for your Start, then the light reports it
+    say: "turn on the {light}"
+    acts: true
+    expect: { tool: orbit.light, status: completed }
+    verify:
+      tool: orbit.status
+      find: { list: devices, name: "{light}" }
+      field: "on"
+      equals: true
+      within: 30s
+    after:
+      - say: "turn off the {light}"

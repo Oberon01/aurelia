@@ -41,6 +41,7 @@ rules:
     computer_down: high                # a server-role computer (or one listed below) stopped checking in
     update_failed: high                # a release that failed or was rolled back
     automation_paused: high            # an automation paused after failing pause_after_failures times
+    release_check_failed: high         # a release's field checks that failed (Swallowtail)
     budget_ahead: normal               # the model budget running out before the month ends
     mailbox_waiting: normal            # mailbox items waiting longer than mailbox_waiting_hours
     automations_ready: normal          # automations you approved before Pulsar existed, now running

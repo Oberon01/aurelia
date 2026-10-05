@@ -3,8 +3,9 @@
 My build phases, in order: what each builds, when it counts as done, and where it stands. Kentrell
 and I work from this plan (the design doc has the full reasoning). It's written the way I'd say it
 to him: "I" is me, "you" is Kentrell. Phases are built in order (except Iris, which you moved to the end), and a phase is done only after a
-real-world check on your hardware. Keep it current: update a phase's status and its "built so far"
-list with the release that changes it.
+real-world check on your hardware: its field checks (config/checks/, run by Swallowtail once the release is
+live) passing in your home. Keep it current: update a phase's status and its "built so far" list with the
+release that changes it.
 
 Names: my functions have space names (Probe, Orbit, Nebula, Kepler, Constellation…); my own core
 parts have butterfly names (Chrysalis for updates, Mnemosyne for the record, Iris for sight, Admiral
@@ -93,6 +94,16 @@ Built so far:
 - Initiative: I watch for a door unlocked during quiet hours, a water leak, low batteries, the server's disk, a server (or a computer you list) down, a failed update, a paused automation, the model budget running ahead, and mailbox items waiting. Each kind's severity is yours in pulsar.yaml: critical (phone and every open display, even in quiet hours), high (phone now, or when quiet hours end), normal (a card, no phone), low (digest only). Told once while it lasts, repeated only on your interval, never after "got it", and its card taken back when it clears. The home checks run as Pulsar's own user, which may run Orbit's status and nothing else (an allow-list in charter.yaml, so tools added later can't slip past it). Everything is in the morning digest.
 - Suggestions: approving one of Parallax's habit cards makes the automation now; the ones you approved before Pulsar existed are running too (I'll tell you which, once).
 Everything in this phase is built. Field check: say "every day at <a few minutes from now>, turn on the living room light" (or another light), confirm the read-back, and watch it run on time with its heads-up and Cancel; then "show my automations".
+
+## 10.5. Swallowtail — In progress (built; awaiting its first run in your home)
+Builds: field checks of each release, run on the live system in your home, beside Chrysalis's tests (which run before a release deploys). Each release brings a checks file (config/checks/): the input (what you'd say, or a tool), what's expected, and how I find out what actually happened (the result, or a device's own report afterwards).
+Done when: a release's checks run once it's live, the ones that act wait for your Start, and the report panel shows each check's input, expected and actual, with failures as a notice.
+Built so far:
+- Checks files, validated (a bad one says what's wrong); your home's names in config/checks/_home.yaml ({light}, {lock}, {tv}, {tv_computer}), a check that needs an unset one is skipped and says which.
+- After a release goes live, its added or changed checks run (once, even across restarts). On their own, checks only look: nothing is confirmed (an action that asks is recorded as asked, then declined), earned trust never applies, the model isn't called, and anything that would act (a light, a computer, a send, a plan) waits for your Start, never during quiet hours. Their tasks are marked as checks: never your habits, your conversations or the record.
+- After your Start: checks that act, checks that give you something to do first and watch for what it causes, yes/no questions only you can judge, and clean-up afterwards (the test automation deleted, the light turned back off).
+- The report panel: one row per check (passed, failed, waiting for you, skipped), each with the input given, what was expected and what actually happened, line by line. Kept on the release ("how did the last release's checks go"). Failures are a notice (high by default, pulsar.yaml) with a rollback offered, never done on my own.
+- Checks for Pulsar, for Swallowtail itself, and for each finished phase's "Done when" (0-7 and 9): "run all the checks" re-tests everything.
 
 ## 11. Lagrange — Not started
 Builds: integrations of any kind without new code per service: an MCP client, OAuth connections, a Home Assistant bridge, webhooks in and out. Every new tool starts in the change tier; credentials sit in a vault the model never sees.

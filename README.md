@@ -26,6 +26,7 @@ space-themed name. Tools are addressed as `<function>.<tool>`.
 | `beacon` | Communication: messages, calls, calendar | | Planned |
 | `libra` | Bookkeeping: services and subscriptions | | Planned |
 | `kuiper` | Files and storage | | Planned |
+| `swallowtail` | Field checks of each release, run in your home after it goes live (part of Aurelia, served by the orchestrator) | `swallowtail.checks`, `swallowtail.run`, `swallowtail.start` | Built |
 | `pulsar` | Automations and routines in your words, and what's worth interrupting you for (part of Aurelia, served by the orchestrator) | `pulsar.automate`, `pulsar.routine`, `pulsar.automations`, `pulsar.pause`, `pulsar.resume`, `pulsar.skip`, `pulsar.delete`, `pulsar.forget_routine`, `pulsar.notices` | Built |
 | `parallax` | Analytics on task history: habits, what matters most, timing; proposes to the mailbox | `parallax.analyze`, `parallax.mailbox`, `parallax.digest` | Built |
 | `quasar` | Media and entertainment | | Planned |
@@ -1443,6 +1444,44 @@ Admiral's engine. Policy: `config/governance/functions/pulsar.yaml`. Code:
 - **Suggestions.** Approving one of Parallax's habit cards makes the automation
   at once; any you approved before Pulsar existed start running, and you're
   told which, once. She never creates, approves or schedules one on her own.
+
+## Swallowtail: field checks in your home (Phase 10.5)
+
+Chrysalis's tests run in a container before a release deploys. Swallowtail's
+run afterwards, on the live system, the way you'd use it. Code:
+`services/orchestrator/app/swallowtail.py`; policy:
+`config/governance/functions/swallowtail.yaml`.
+
+- **Checks files.** Each release brings one in `config/checks/` (`pulsar.yaml`,
+  `phase-07-constellation.yaml`, …): its title and a list of checks. A check is
+  the input (`say`: what you'd say, or `tool` + `args`), what's expected
+  (`expect`: `route`, `tool`, `asks_to_confirm`, `status`, `reply_starts`,
+  `reply_has`, `reply_not_has`, `reply_matches`, `result`, `result_has`,
+  `error_has`, `confirmed`), and how she finds out what actually happened:
+  the result itself, `verify` (a look-up polled until the device reports the
+  state, e.g. `orbit.status` → the light's `on` is `true`; or one of your
+  automations' runs), or a `question` only you can answer. `needs_you` gives you
+  something to do first; `after` puts things back.
+- **Your home's names** go in `config/checks/_home.yaml` (`light`, `lock`, `tv`,
+  `tv_computer`): checks say `{light}`. `{in_3_minutes}` is a time three minutes
+  from now. A check that needs a name you haven't set is skipped and says which.
+- **When they run.** Once a release has been live for 30 seconds, the checks
+  files it added or changed run (once, even across restarts). On their own they
+  only look: a check never confirms anything (an action that asks for your OK
+  is recorded as asked, then declined), earned trust never applies, the model
+  isn't called (`model: true` lets it, and waits for your Start), and anything
+  that would act waits for your **Start** on the report panel, never during
+  quiet hours. Their tasks are marked as checks: never your habits, never in
+  your conversations or the record.
+- **The report** ("show the checks", "how did the last release's checks go"):
+  one row per check (passed, failed, waits for Start, needs you, skipped); open
+  one for the input given, what was expected and what actually happened, line
+  by line. It's kept on the release, so her history of a release includes how
+  its checks went. Failures are a notice (`release_check_failed`, high by
+  default in `pulsar.yaml`) with a rollback offered; she never rolls back on her
+  own.
+- **On demand:** "run the checks" (the latest release's), "run the pulsar
+  checks", "run all the checks", "start the checks".
 
 ## Known gaps (by design, for later phases)
 

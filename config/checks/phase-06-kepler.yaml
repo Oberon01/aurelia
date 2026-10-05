@@ -1,0 +1,30 @@
+# Field checks for Phase 6: Kepler, Mnemosyne and the conversation's context.
+release: Kepler and context (Phase 6)
+phase: 6
+checks:
+  - id: research
+    name: A research question returns a cited summary (uses the model, and joins your library)
+    say: "research how monarch butterflies navigate"
+    model: true
+    expect: { tool: kepler.research, status: completed }
+    within: 180s
+
+  - id: recall
+    name: What I learned can be recalled later
+    say: "what did I learn about monarch butterflies"
+    expect: { tool: kepler.recall, status: completed }
+
+  - id: roadmap
+    name: My roadmap opens
+    say: "what's next on the roadmap"
+    expect: { tool: mnemosyne.roadmap, status: completed }
+
+  - id: budget
+    name: The model budget panel opens
+    say: "check my monthly cap"
+    expect: { tool: mnemosyne.budget, status: completed }
+
+  - id: follow-ups
+    name: Follow-ups use what's on screen
+    needs_you: "Search for something, then say “summarize panel 1”."
+    question: "Did I summarize the right panel?"

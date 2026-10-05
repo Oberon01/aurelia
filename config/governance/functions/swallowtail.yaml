@@ -1,0 +1,15 @@
+# Swallowtail — field checks of each release, run in your home after it goes live (config/checks/*.yaml).
+#
+# A check goes through governance like a request of yours, with less: it never confirms anything (an action
+# that asks for your OK is recorded as asked, then declined), earned trust never applies, and its tasks are
+# marked as checks (never your habits, never in your conversations). On its own, right after a release, a check
+# only looks; anything that would act waits for your Start, which never works during quiet hours.
+function: swallowtail
+enabled: true
+
+tools:
+  checks: { tier: reference }   # the report: input, expected, actual, status
+  run:    { tier: act }         # run checks now (the ones that only look; the rest wait for your Start)
+  start:  { tier: act }         # your Start: the checks that act
+
+rate_limit_per_minute: 30

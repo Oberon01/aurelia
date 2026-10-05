@@ -149,6 +149,27 @@ fastpath:
       tool: morpho.run
       args: { skill: "{skill}" }
       reply: "Running {skill}."
+    # Swallowtail: a release's field checks, run in your home once it's live (config/checks/).
+    - name: checks-report
+      match: '^(?:(?:show|open)\s+(?:me\s+)?)?(?:the\s+)?(?:field\s+)?(?:checks|check\s+report)$|^how\s+did\s+(?:the\s+)?(?:(?:last|latest)\s+release(?:''s)?\s+|release\s+)?(?:field\s+)?checks\s+go\??$|^did\s+the\s+(?:last|latest)\s+release\s+pass(?:\s+its\s+checks)?\??$|^what\s+failed\s+in\s+the\s+(?:last|latest)\s+release\??$'
+      tool: swallowtail.checks
+      args: {}
+    - name: checks-run-all
+      match: '^(?:run|redo|rerun|re-run)\s+all\s+(?:of\s+)?(?:the\s+)?(?:field\s+)?(?:checks|tests)(?:\s+again)?$'
+      tool: swallowtail.run
+      args: { which: "all" }
+    - name: checks-run
+      match: '^(?:run|redo|rerun|re-run)\s+(?:the\s+)?(?:field\s+)?(?:checks|tests)(?:\s+again)?$|^(?:run|redo|rerun|re-run)\s+(?:the\s+)?(?:last|latest)\s+release(?:''s)?\s+(?:field\s+)?(?:checks|tests)$'
+      tool: swallowtail.run
+      args: { which: "latest" }
+    - name: checks-run-named
+      match: '^(?:run|redo|rerun|re-run)\s+(?:the\s+|my\s+)?(?P<which>[\w'' ().-]+?)\s+(?:field\s+)?(?:checks|tests)(?:\s+again)?$'
+      tool: swallowtail.run
+      args: { which: "{which}" }
+    - name: checks-start
+      match: '^(?:start|begin)\s+(?:the\s+)?(?:field\s+)?(?:checks|tests)$|^(?:go\s+ahead\s+and\s+)?(?:run|start|do)\s+the\s+checks\s+that\s+act$'
+      tool: swallowtail.start
+      args: {}
     - name: notices
       match: '^(?:(?:show|list|open)\s+(?:me\s+)?)?(?:my\s+|the\s+|your\s+|any\s+)?(?:notices|alerts|warnings)\??$|^(?:is\s+there\s+)?any(?:thing)?\s+(?:i\s+should\s+know(?:\s+about)?|worth\s+knowing|wrong\s+at\s+home|to\s+worry\s+about)\??$|^what\s+(?:are\s+you|do\s+you)\s+watch(?:ing)?(?:\s+for)?\??$|^any\s+(?:alerts|notices|warnings)\??$'
       tool: pulsar.notices
@@ -990,7 +1011,7 @@ fastpath:
       args: {}
       reply: 'Here''s the roadmap.'
     - name: roadmap-phase
-      match: '^(?:tell\s+me\s+about|what(?:''s|s| is)\s+in)\s+phase\s+(?P<phase>\w+)\??$'
+      match: '^(?:tell\s+me\s+about|what(?:''s|s| is)\s+in)\s+phase\s+(?P<phase>\d+(?:\.\d+)?|\w+)\??$'
       tool: mnemosyne.roadmap
       args: { phase: "{phase}" }
       reply: 'Here''s phase {phase}.'

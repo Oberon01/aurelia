@@ -60,7 +60,7 @@ RULES: dict[str, Any] = {
     "quiet_hours": None,                      # None: the ambient screen's quiet hours (config/aurelia.yaml)
     "severity": {
         "door_unlocked_at_night": "critical", "water_leak": "critical", "server_disk_low": "critical",
-        "computer_down": "high", "update_failed": "high", "automation_paused": "high",
+        "computer_down": "high", "update_failed": "high", "automation_paused": "high", "release_check_failed": "high",
         "budget_ahead": "normal", "mailbox_waiting": "normal", "automations_ready": "normal",
         "battery_low": "low",
     },
@@ -75,11 +75,12 @@ WATCHING = {                                  # what each kind is, for the notic
     "computer_down": "A server (or a computer you listed as always on) down",
     "update_failed": "An update of mine that failed or was rolled back",
     "automation_paused": "An automation paused after failing",
+    "release_check_failed": "A release's field checks that failed (Swallowtail)",
     "budget_ahead": "The model budget running out before the month ends",
     "mailbox_waiting": "Mailbox items waiting more than a day",
     "battery_low": "A lock or sensor with a low battery",
 }
-ONE_SHOT = ("update_failed", "automation_paused", "automations_ready")   # events, not states: cleared after a day
+ONE_SHOT = ("update_failed", "automation_paused", "automations_ready", "release_check_failed")   # events, not states: cleared after a day
 NOT_AUTOMATED = ("admiral.", "pulsar.", "morpho.")
 _STOP = {"the", "my", "a", "an", "one", "that", "this", "automation", "automations", "routine", "routines", "next",
          "to", "for", "at", "of", "on", "run", "runs", "again", "every", "each", "tomorrow's", "today's", "tonight's",

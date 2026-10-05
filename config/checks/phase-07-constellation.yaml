@@ -1,0 +1,33 @@
+# Field checks for Phase 7: Constellation, your computers and displays.
+release: Constellation (Phase 7)
+phase: 7
+checks:
+  - id: devices
+    name: Your devices are listed
+    say: "show my devices"
+    expect: { tool: constellation.devices, status: completed }
+
+  - id: health
+    name: A computer's health is read
+    say: "how's the {tv_computer} doing"
+    expect: { tool: constellation.health, status: completed }
+    within: 30s
+
+  - id: open-on-tv
+    name: “Open YouTube on the TV PC” opens it there, on the TV's input, confirmed by the computer
+    say: "open youtube on the {tv_computer}"
+    acts: true
+    expect: { tool: constellation.open, status: completed, confirmed: true }
+    within: 60s
+    question: "Is YouTube showing on the TV?"
+    after:
+      - tool: constellation.home
+        args: { target: "{tv_computer}" }
+
+  - id: send-look-up
+    name: A look-up goes to another display
+    say: "send the device list to my phone"
+    acts: true
+    expect: { route: fastpath, tool: constellation.devices, reply_not_has: "couldn't" }
+    within: 30s
+    question: "Did the device list show on your phone?"

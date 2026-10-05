@@ -1,0 +1,7 @@
+# Your home's names, used by the field checks ({light}, {lock}…). Write them the way you'd say them to me
+# ("living room light", "front door", "TV PC"). A check that needs one you haven't set is skipped and says which.
+vars:
+  light: "kitchen light"          # a light I can turn on and off (SmartRent): e.g. "living room light"
+  lock: "front door"           # your door lock: e.g. "front door"
+  tv: "Roku"             # the Roku TV: e.g. "living room tv"
+  tv_computer: "Node-TV"    # the computer on the TV's input: e.g. "TV PC"

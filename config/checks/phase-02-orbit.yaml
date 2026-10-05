@@ -1,0 +1,31 @@
+# Field checks for Phase 2: Orbit, the home.
+release: Orbit, the home (Phase 2)
+phase: 2
+checks:
+  - id: home-status
+    name: The home's state shows (lock, thermostat, sensors)
+    say: "show the home status"
+    expect: { tool: orbit.status, status: completed }
+    verify:
+      tool: orbit.status
+      find: { list: devices, name: "{lock}" }
+      field: kind
+      equals: lock
+
+  - id: unlock-asks
+    name: Unlocking always asks you first
+    say: "unlock the {lock}"
+    expect: { asks_to_confirm: orbit.unlock, tool: none }
+
+  - id: light
+    name: A light turns on, and reports it
+    say: "turn on the {light}"
+    acts: true
+    expect: { tool: orbit.light, status: completed }
+    verify:
+      tool: orbit.status
+      find: { list: devices, name: "{light}" }
+      field: "on"
+      equals: true
+    after:
+      - say: "turn off the {light}"

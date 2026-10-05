@@ -1,0 +1,18 @@
+# Field checks for Phases 0 and 1: the stack, the brain, the fast path and Probe.
+release: The foundation and the brain (Phases 0-1)
+phase: 1
+checks:
+  - id: echo
+    name: A request calls the echo tool end to end
+    say: "echo hello"
+    expect:
+      route: fastpath
+      tool: probe.echo
+      status: completed
+      result: { message: hello }
+    within: 30s
+
+  - id: functions
+    name: My functions report their status
+    say: "status of your functions"
+    expect: { tool: probe.functions, status: completed }

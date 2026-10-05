@@ -1,0 +1,19 @@
+# Field checks for Phase 5: Nebula, the web.
+release: Nebula, the web (Phase 5)
+phase: 5
+checks:
+  - id: search
+    name: A web search returns results
+    say: "search for monarch butterfly migration"
+    expect:
+      tool: nebula.search
+      status: completed
+      result_has: { query: monarch }
+    within: 30s
+
+  - id: download
+    name: A download finishes and reports its size
+    say: "download https://www.example.com/"
+    acts: true
+    expect: { tool: nebula.download, status: completed }
+    within: 60s

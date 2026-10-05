@@ -1,0 +1,13 @@
+# Field checks for Phase 4: the mailbox, the digest and Parallax.
+release: Mailbox and Parallax (Phase 4)
+phase: 4
+checks:
+  - id: mailbox
+    name: The mailbox opens
+    say: "open my mailbox"
+    expect: { tool: parallax.mailbox, status: completed }
+
+  - id: digest
+    name: The morning digest opens
+    say: "show my digest"
+    expect: { tool: parallax.digest, status: completed }

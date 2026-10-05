@@ -1,0 +1,8 @@
+# Field checks for Phase 3: memory.
+release: Memory (Phase 3)
+phase: 3
+checks:
+  - id: restore
+    name: A repeated look-up shows its last panel at once, labeled with its age
+    needs_you: "Say “show the home status” twice, a few seconds apart."
+    question: "The second time, did the last panel show at once, labeled with how old it was, while it refreshed?"

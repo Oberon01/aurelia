@@ -1,0 +1,31 @@
+# Field checks for Phase 9: Admiral (plans and the scheduling engine) and Morpho (skills and trust).
+release: Admiral and Morpho (Phase 9)
+phase: 9
+checks:
+  - id: scheduled
+    name: What's scheduled opens
+    say: "what's scheduled"
+    expect: { tool: admiral.scheduled, status: completed }
+
+  - id: skills
+    name: My skills open
+    say: "show my skills"
+    expect: { tool: morpho.skills, status: completed }
+
+  - id: trusts
+    name: What I do without asking opens
+    say: "what do you do without asking"
+    expect: { tool: morpho.trusts, status: completed }
+
+  - id: reminder
+    name: A reminder reaches you on time
+    say: "remind me in 1 minute to check the field checks"
+    acts: true
+    expect: { tool: admiral.schedule, status: completed, reply_has: "Reminder" }
+    question: "About a minute later, did the reminder reach you?"
+
+  - id: plan
+    name: A plan runs and ends in a checked report
+    # Checks never run plans themselves (a plan's steps run outside the check's rules), so this one is yours.
+    needs_you: "Say “make a plan to find the best monitor under $400” and let it finish."
+    question: "Did the plan's panel end in a checked report?"

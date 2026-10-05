@@ -1,0 +1,57 @@
+# Field checks for Pulsar (Phase 10): automations, routines and initiative.
+release: Pulsar (Phase 10)
+phase: 10
+checks:
+  - id: readback
+    name: An automation is read back, and nothing is saved until you confirm
+    say: "every day at 7 am turn on the {light}"
+    expect:
+      route: fastpath
+      tool: pulsar.automate
+      asks_to_confirm: pulsar.save
+      reply_has: ["Every day at 7:00 AM", "Save it?"]
+
+  - id: day-list
+    name: Day lists are read by code
+    say: "turn on the {light} every monday, wednesday and friday at 9 pm"
+    expect:
+      route: fastpath
+      asks_to_confirm: pulsar.save
+      reply_starts: "Every Monday, Wednesday and Friday at 9:00 PM"
+
+  - id: never-now
+    name: Something that repeats never runs now, even when I can't read it
+    say: "turn off the {light} every other weeknight at 11"
+    expect:
+      route: "not fastpath"
+      tool: none
+
+  - id: routine-draft
+    name: A routine is read back step by step
+    say: "make a routine called check night: turn on the {light}, then turn off the {light}"
+    expect:
+      route: fastpath
+      asks_to_confirm: pulsar.save
+      reply_starts: "Routine \"check night\": 1)"
+
+  - id: automations-panel
+    name: My automations open
+    say: "show my automations"
+    expect: { tool: pulsar.automations, status: completed }
+
+  - id: notices-panel
+    name: What I'm watching opens
+    say: "any alerts"
+    expect: { tool: pulsar.notices, status: completed }
+
+  - id: runs-on-time
+    name: An automation you approve runs on time, with its heads-up, and the light reports it
+    needs_you: "Say “every day at {in_3_minutes} turn on the {light}” and confirm the read-back. I'll watch for it to run."
+    verify:
+      automation: "{light}"
+      outcome: done
+      within: 6m
+    question: "Did a heads-up with a Cancel show about a minute before it ran?"
+    after:
+      - delete: automation          # exactly the one made for this check (never one of yours)
+      - say: "turn off the {light}"
