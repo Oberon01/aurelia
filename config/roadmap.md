@@ -85,7 +85,7 @@ Built so far:
 - Morpho: a plan that worked is kept as a skill (your tap, your approval, your name and phrases); the planner reaches for skills first; a skill's phrases are fast paths, and a skill that needs no model runs with it down; versions learned from a change of course or a plan that differs in one step (a choice), with rollback; tools you use together proposed daily as skills; and earned trust for exactly what you keep approving, only from your allow-list in morpho.yaml, never the coded never-list, taken back by one no or a failure. (Replaying past runs before a new version replaces the old one comes with Nova's eval set, Phase 17.)
 Field check passed: "find the best computer within a $1000 budget" as a plan, kept as a skill, then "find the best monitor under $400" reusing it; a finished plan's notification opens its panel.
 
-## 10. Pulsar — In progress (everything built; awaiting your field check)
+## 10. Pulsar — Done
 Builds: recurring automations on Admiral's scheduling engine, routines you set up in words, and initiative: deciding when something is worth interrupting you, by severity levels you set in governance.
 Done when: an approved recurring automation runs on schedule with its heads-up.
 Built so far:
@@ -94,9 +94,9 @@ Built so far:
 - Events: an automation can wait for a computer coming online or going offline, or a display opening (at most once per cooldown). Doors, lights and arrivals wait for the Home Assistant bridge (Lagrange).
 - Initiative: I watch for a door unlocked during quiet hours, a water leak, low batteries, the server's disk, a server (or a computer you list) down, a failed update, a paused automation, the model budget running ahead, and mailbox items waiting. Each kind's severity is yours in pulsar.yaml: critical (phone and every open display, even in quiet hours), high (phone now, or when quiet hours end), normal (a card, no phone), low (digest only). Told once while it lasts, repeated only on your interval, never after "got it", and its card taken back when it clears. The home checks run as Pulsar's own user, which may run Orbit's status and nothing else (an allow-list in charter.yaml, so tools added later can't slip past it). Everything is in the morning digest.
 - Suggestions: approving one of Parallax's habit cards makes the automation now; the ones you approved before Pulsar existed are running too (I'll tell you which, once).
-Everything in this phase is built. Field check: say "every day at <a few minutes from now>, turn on the living room light" (or another light), confirm the read-back, and watch it run on time with its heads-up and Cancel; then "show my automations".
+Field check: done on your hardware (October 2026): an approved automation ran on time with its heads-up, checked by the light's own report (Swallowtail's "runs on time" check).
 
-## 10.5. Swallowtail — In progress (built; awaiting its first run in your home)
+## 10.5. Swallowtail — Done
 Builds: field checks of each release, run on the live system in your home, beside Chrysalis's tests (which run before a release deploys). Each release brings a checks file (config/checks/): the input (what you'd say, or a tool), what's expected, and how I find out what actually happened (the result, or a device's own report afterwards).
 Done when: a release's checks run once it's live, the ones that act wait for your Start, and the report panel shows each check's input, expected and actual, with failures as a notice.
 Built so far:
@@ -105,6 +105,7 @@ Built so far:
 - After your Start: checks that act, checks that give you something to do first and watch for what it causes, yes/no questions only you can judge, and clean-up afterwards (the test automation deleted, the light turned back off).
 - The report panel: one row per check (passed, failed, waiting for you, skipped), each with the input given, what was expected and what actually happened, line by line. Kept on the release ("how did the last release's checks go"). Failures are a notice (high by default, pulsar.yaml) with a rollback offered, never done on my own.
 - Checks for Pulsar, for Swallowtail itself, and for each finished phase's "Done when" (0-7 and 9): "run all the checks" re-tests everything.
+Field check: done on your hardware (October 2026): the checks for Pulsar, Swallowtail and the HUD ran once each release went live, the acting ones waited for your Start, and all passed.
 
 ## 11. Lagrange — Not started
 Builds: integrations of any kind without new code per service: an MCP client, OAuth connections, a Home Assistant bridge, webhooks in and out. Every new tool starts in the change tier; credentials sit in a vault the model never sees.
