@@ -37,6 +37,9 @@ class FunctionRegistration(BaseModel):
     description: str
     url: str                            # where the orchestrator reaches this function
     tools: list[ToolSpec]
+    # "lagrange": a service connected through Lagrange (an MCP server, Home Assistant, a webhook). Governed
+    # like any function, but with no rules file of its own until he writes one: every tool asks first.
+    via: str | None = None
 
 
 class ResolvedTool(BaseModel):
@@ -89,3 +92,8 @@ async def list_all(redis: Redis) -> list[FunctionRegistration]:
         if raw:
             functions.append(FunctionRegistration.model_validate(json.loads(raw)))
     return sorted(functions, key=lambda f: f.name)
+
+
+async def connections(redis: Redis) -> set[str]:
+    """The functions that are services connected through Lagrange, as registered right now."""
+    return {f.name for f in await list_all(redis) if f.via == "lagrange"}

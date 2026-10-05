@@ -67,10 +67,11 @@ checks:
   - {id: a, name: x, say: "a", tool: "b.c", expect: {colour: red}}
   - {id: a, name: y, verify: {tool: o.s}}
   - {id: c, name: z, say: "a", expect: {route: sideways}, within: "soon"}
+  - {id: d, name: w, say: "a", expect: {result_has: [tools]}}
 """))
     problems = " | ".join(S.validate(bad))
     for want in ("say or tool, not both", "unknown expect colour", "appears twice", "verify needs a tool and a field",
-                 "route is one of", "isn't a length of time"):
+                 "route is one of", "isn't a length of time", "result_has is a list of fields"):
         assert want in problems, want
     with pytest.raises(Exception):
         S.CheckFile.model_validate({"release": "T", "checks": [{"id": "a", "name": "b", "typo": 1}]})

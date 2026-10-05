@@ -11,6 +11,7 @@ Conversation state lives in Redis (stateless replicas), and every request and
 model call is logged for timing and cost analysis.
 """
 import asyncio
+import re
 import json
 import logging
 import time
@@ -126,6 +127,12 @@ async def ask(body: Ask, request: Request):
                 pattern=FastPathPattern(name=f"skill-{sk['id']}", match="", tool="morpho.run", args={},
                                         reply=f"Running your skill: {sk['name']}."),
                 args={"skill": str(sk["id"]), "slots": slots}, groups={})
+    if fp is None and chosen is None and cfg.fastpath.enabled and not later and not repeats:
+        hit = await _connection_tool(app, body.text)          # "gitea list repos": a connected service's own tool
+        if hit is not None:
+            q, label = hit
+            fp = fastpath.FastPathMatch(pattern=FastPathPattern(name=f"connection-{q}", match="", tool=q, args={},
+                                                                reply=f"Asking {label}."), args={}, groups={})
     resolved = await registry.resolve(app.state.redis, fp.pattern.tool) if fp else None
     elsewhere = None
     if chosen is None and cfg.fastpath.enabled and not later and not repeats and not (fp and fp.pattern.name.startswith("skill-")):
@@ -380,6 +387,41 @@ async def _follow_up(app, user: str, tool: str, result: dict | None, out: dict) 
 
 # ---- LLM loop -----------------------------------------------------------------
 
+# ---- connected services (Lagrange) -------------------------------------------------------------------------
+
+_LEADS = re.compile(r"^(?:please\s+)?(?:ask|use|on|in|with|tell)\s+", re.I)
+_FILLER = {"my", "the", "all", "a", "an", "me", "please", "to", "for", "of", "show", "get"}
+
+
+async def _named_connection(app, text: str):
+    """A request that starts with a connected service's name ("gitea, list my repos", "ask home assistant to …"):
+    (its registration, the rest of the request), or None."""
+    t = _LEADS.sub("", " ".join(text.strip().split()))
+    for fn in await registry.list_all(app.state.redis):
+        if fn.via != "lagrange":
+            continue
+        name = fn.name.replace("_", " ")
+        m = re.match(rf"^(?:the\s+|my\s+)?{re.escape(name)}(?:'s)?\b[\s,:]+(?:to\s+)?(?P<rest>.+)$", t, re.I)
+        if m:
+            return fn, m.group("rest").strip(" ?.!")
+    return None
+
+
+async def _connection_tool(app, text: str) -> tuple[str, str] | None:
+    """"gitea list repos" -> 'gitea.list_repos' when the words are exactly a tool's name and it needs nothing
+    else. Anything more goes to the model, which then sees only that service's tools."""
+    hit = await _named_connection(app, text)
+    if hit is None:
+        return None
+    fn, rest = hit
+    said = {w for w in re.findall(r"[a-z0-9]+", rest.lower())} - _FILLER
+    for tool in fn.tools:
+        words = set(tool.name.split("_")) - _FILLER
+        if said and said == words and not (tool.input_schema or {}).get("required"):
+            return f"{fn.name}.{tool.name}", fn.name.replace("_", " ").title()
+    return None
+
+
 async def _run_llm(app, body: Ask, history: list[dict[str, Any]], request_id: str) -> dict[str, Any]:
     cfg = app.state.config.current.llm
     out: dict[str, Any] = {"route": "llm", "reply": "", "task_ids": [], "needs_confirmation": []}
@@ -389,7 +431,8 @@ async def _run_llm(app, body: Ask, history: list[dict[str, Any]], request_id: st
                                         "fast-path commands until it resets or the cap is raised.")
         return out
 
-    tools, by_api, functions = await _tool_defs(app, body.user)
+    named = await _named_connection(app, body.text)
+    tools, by_api, functions = await _tool_defs(app, body.user, only=named[0].name if named else None)
     if body.screen and body.screen.panels:
         tools = tools + [PANEL_TOOL]
     from . import history as my_history
@@ -569,7 +612,7 @@ async def _run_for_display(app, user: str, qualified: str, args: dict, on: str, 
 
 REPLY_TOOL = "aurelia.reply"
 QUIET_TOOLS = {"constellation.send"}
-NOT_FOR_MODEL = {"pulsar.save"}               # only his confirmation of a read-back runs it           # tools whose panel isn't something to read
+NOT_FOR_MODEL = {"pulsar.save", "lagrange.connect", "lagrange.approve", "lagrange.turn_on"}   # his own taps and words only               # only his confirmation of a read-back runs it           # tools whose panel isn't something to read
 _SENTENCE = __import__("re").compile(r"(?<=[.!?])[\"')\]]*\s+(?=[A-Z0-9\"'(])")
 
 
@@ -676,12 +719,15 @@ def _data(payload: dict) -> str:
     return "<tool_output>\n" + text + "\n</tool_output>"
 
 
-async def _tool_defs(app, user: str) -> tuple[list[ToolDef], dict[str, str], list[dict]]:
+async def _tool_defs(app, user: str, only: str | None = None) -> tuple[list[ToolDef], dict[str, str], list[dict]]:
     """Tools the model may see: registered, enabled by policy, not blocked for this user.
-    Also returns the functions those tools belong to, for the system prompt."""
+    Also returns the functions those tools belong to, for the system prompt. `only`: a request that names a
+    connected service sees that service's tools and nothing else."""
     gov = app.state.governance
     defs, by_api, functions = [], {}, []
     for fn in await registry.list_all(app.state.redis):
+        if only is not None and fn.name != only:
+            continue
         visible = []
         for tool in fn.tools:
             decision = gov.decide(fn.name, tool.name, user, confirmed=True)

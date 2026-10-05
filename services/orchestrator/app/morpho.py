@@ -45,7 +45,7 @@ RULES = {
 NEVER = [re.compile(p) for p in (
     r"^orbit\.unlock$", r"\.(?:install|install_package|uninstall|remove_package|speaker)$", r"\.(?:kill|close)_process$",
     r"sign_in$", r"\.submit$", r"\.(?:upload|purchase|download)$", r"\.(?:forget|forget_alias|delete_file|move_file)$",
-    r"^chrysalis\.", r"^admiral\.", r"^morpho\.", r"^pulsar\.", r"\.(?:send|copy|paste|notify)$", r"read_secrets$")]
+    r"^chrysalis\.", r"^admiral\.", r"^morpho\.", r"^pulsar\.", r"^lagrange\.", r"\.(?:send|copy|paste|notify)$", r"read_secrets$")]
 
 
 def rules(app) -> dict:

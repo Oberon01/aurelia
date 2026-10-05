@@ -446,6 +446,9 @@ def repeats(job: dict) -> str | None:
     rule = _j(job.get("rule"))
     if rule.get("once"):
         return None
+    if rule.get("on") in ("state", "hook"):
+        from .happenings import says
+        return says(rule)
     if rule.get("on"):
         what = {"online": "comes online", "offline": "goes offline", "open": "opens"}.get(rule["on"], rule["on"])
         return f"when {rule.get('device_name') or 'it'} {what}"

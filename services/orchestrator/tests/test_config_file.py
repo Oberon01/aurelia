@@ -400,3 +400,45 @@ def test_the_hud_buttons_say_what_a_fast_path_hears(said, tool, args):
     view = (HERE.parents[1] / "app" / "static" / "view.html").read_text()
     words = said.replace("TV PC", "${n.node}")
     assert f'"{words}"' in view or f"`{words}`" in view, f"the HUD no longer says {said!r}"
+
+
+# Lagrange: connections in his words, and never stealing a phrase that already meant something else.
+@pytest.mark.skipif(not CONFIG.exists(), reason="the repo's config isn't in the test image")
+@pytest.mark.parametrize("said,tool,args", [
+    ("show my connections", "lagrange.connections", {}), ("what's connected", "lagrange.connections", {}),
+    ("connect a service", "lagrange.connect_form", {}), ("connect a new mcp server", "lagrange.connect_form", {}),
+    ("connect a webhook", "lagrange.connect_form", {"kind": "hook_in"}),
+    ("connect home assistant", "lagrange.connect", {"name": "home assistant"}),
+    ("connect gitea", "lagrange.connect", {"name": "gitea"}), ("connect the gitea draft", "lagrange.connect", {"name": "gitea"}),
+    ("show the gitea connection", "lagrange.connection", {"name": "gitea"}),
+    ("connect the spotify draft", "lagrange.connect", {"name": "spotify"}),
+    ("approve the new gitea tools", "lagrange.approve", {"name": "gitea"}),
+    ("refresh the gitea connection", "lagrange.refresh", {"name": "gitea"}),
+    ("check gitea for new tools", "lagrange.refresh", {"name": "gitea"}),
+    ("disconnect gitea", "lagrange.disconnect", {"name": "gitea"}),
+    ("turn off the gitea connection", "lagrange.turn_off", {"name": "gitea"}),
+    ("turn on the gitea connection", "lagrange.turn_on", {"name": "gitea"}),
+    ("sign in to gitea again", "lagrange.sign_in", {"name": "gitea"}),
+    ("when the front door unlocks during quiet hours, turn on the hall light", "pulsar.automate", {}),
+    ("turn on the porch light when I get home", "pulsar.automate", {}),
+    ("when the arrive home webhook is called, turn on the porch light", "pulsar.automate", {}),
+    ("sign in to youtube on the tv pc", "constellation.screen", None), ("turn off the kitchen light", "orbit.light", None),
+    ("connect to the tv", None, None), ("connect my airpods", None, None),
+    ("stop using the skill goodnight", "morpho.retire", None), ("refresh the page", None, None),
+    ("disconnect my headphones", None, None), ("disconnect from wifi", None, None), ("unlink my phone", None, None),
+    ("sign in to my email", None, None), ("show me the dev tools", None, None), ("stop using it", None, None),
+    ("refresh gitea", None, None), ("show the gitea tools", None, None),
+])
+def test_connection_phrases(said, tool, args):
+    from app import fastpath
+    from app.config import RuntimeConfig
+    cfg = RuntimeConfig.model_validate(yaml.safe_load(CONFIG.read_text()))
+    m = fastpath.match(said, cfg.fastpath.patterns)
+    if tool is None:
+        assert m is None or not m.pattern.tool.startswith("lagrange."), (said, m and m.pattern.name)
+        return
+    if args is None:                                          # one that already meant something else: unchanged
+        assert m is None or not m.pattern.tool.startswith("lagrange."), (said, m and m.pattern.tool)
+        return
+    assert m and m.pattern.tool == tool, (said, m and m.pattern.tool)
+    assert {k: m.args.get(k) for k in args} == args, (said, m.args)

@@ -136,6 +136,9 @@ def validate(f: CheckFile) -> list[str]:
             out.append(f"{where}: route is one of {', '.join(sorted(ROUTES))}")
         if c.expect and not (c.say or c.tool):
             out.append(f"{where}: expect needs a say or a tool")
+        for k in ("result", "result_has"):
+            if k in c.expect and not isinstance(c.expect[k], dict):
+                out.append(f"{where}: {k} is a list of fields and what each should be ({{field: value}})")
         if not (c.expect or c.verify or c.question):
             out.append(f"{where} checks nothing (no expect, verify or question)")
         for st in c.after:

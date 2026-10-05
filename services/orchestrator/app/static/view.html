@@ -633,6 +633,33 @@ body.hud:not(.screen) .nowslot:not([hidden]){display:flex}
 .ns-mid{display:contents}
 .ns-mini{display:none;flex:none;width:44px;height:44px;border:1px solid var(--cyan);border-radius:4px;background:rgba(95,212,230,.12);color:var(--ink-strong);align-items:center;justify-content:center}
 .ns-mini svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.6}
+
+/* Lagrange: connections */
+.pdev .dn small.cst{font-family:var(--mono);font-size:10px;letter-spacing:1px;color:var(--cyan);margin-left:8px;text-transform:uppercase}
+.pdev .dn small.cst.error,.pdev .dn small.cst.needs_signin{color:var(--warn)}.pdev .dn small.cst.off,.pdev .dn small.cst.draft{color:var(--ink-faint)}
+.conn-detail,.conn-out,form.connect{display:flex;flex-direction:column;gap:12px}
+.conn-head{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;font-family:var(--mono);font-size:12px;color:var(--ink-dim)}
+.conn-head small.cst{font-family:var(--mono);font-size:10px;letter-spacing:1px;color:var(--cyan);text-transform:uppercase}
+.conn-head small.cst.error,.conn-head small.cst.needs_signin{color:var(--warn)}
+.conns .pdev .dm{white-space:normal;overflow-wrap:anywhere}
+.conn-tools{display:flex;flex-direction:column;border-top:1px solid rgba(95,212,230,.12)}
+.conn-tools .ct{display:flex;flex-direction:column;gap:2px;padding:8px 0;border-bottom:1px solid rgba(95,212,230,.08)}
+.conn-tools .ct b{font-weight:500;color:var(--ink-strong);font-size:14px}.conn-tools .ct span{font-size:13px;color:var(--ink-dim)}
+.conn-acts{display:flex;gap:8px;flex-wrap:wrap}
+details.rules summary{cursor:pointer;font-family:var(--mono);font-size:12px;color:var(--ink-dim)}
+details.rules pre,.conn-out pre.otext{white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:12px;line-height:1.5;color:var(--ink);background:rgba(95,212,230,.04);border:1px solid rgba(95,212,230,.12);border-radius:6px;padding:10px;margin:8px 0;max-height:360px;overflow:auto}
+.conn-out pre.otext{font-size:13px;margin:0}
+.hookurl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.hookurl code,.cf-out code{font-family:var(--mono);font-size:12px;word-break:break-all;color:var(--ink-strong)}
+a.btn.signin{display:inline-flex;align-items:center;text-decoration:none}
+form.connect .cf{display:flex;flex-direction:column;gap:4px}
+form.connect .cf[hidden]{display:none}
+form.connect .cf > span{font-family:var(--mono);font-size:11px;letter-spacing:1px;color:var(--ink-dim);text-transform:uppercase}
+form.connect .cf small{font-size:12px;color:var(--ink-faint)}
+form.connect input,form.connect select,form.connect textarea{font:inherit;font-size:15px;color:var(--ink-strong);background:rgba(95,212,230,.04);border:1px solid var(--cyan-soft);border-radius:6px;padding:9px 10px;min-height:44px;box-sizing:border-box;width:100%}
+form.connect select option{background:#04070b;color:var(--ink)}
+form.connect textarea{font-family:var(--mono);font-size:13px}
+.cf-out{display:flex;flex-direction:column;gap:10px}
+.pdev.ent .ent-s{font-family:var(--mono);font-size:12px;color:var(--cyan)}
 </style>
 </head>
 <body>
@@ -821,7 +848,7 @@ function drawTape() {
     const left = x(m.ms) - 1, label = el("span", null, m.title);
     mk.style.left = left + "px";
     const right = left + Math.min(phone ? 130 : 220, 7 * m.title.length + 14), nowL = x(now) + 2, nowR = x(now) + 36;
-    if (left > lastRight + 8 && left < W - 60 && (right < nowL || left > nowR)) { mk.append(label); lastRight = right; }
+    if (left > lastRight + 8 && right < W && (right < nowL || left > nowR)) { mk.append(label); lastRight = right; }
     mk.addEventListener("click", () => ask(m.kind === "digest" ? "show my digest" : m.automation ? "show my automations" : "what's scheduled"));
     kids.push(mk);
   });
@@ -899,6 +926,10 @@ const TITLES = { "aurelia.reply": "Aurelia", "quasar.now": "Now playing",
   "pulsar.forget_routine": "Routine",
   "swallowtail.report": "Field checks", "swallowtail.checks": "Field checks", "swallowtail.run": "Field checks",
   "swallowtail.start": "Field checks",
+  "lagrange.connections": "Connections", "lagrange.connection": "Connection", "lagrange.connect_form": "Connect a service",
+  "lagrange.connect": "Connection", "lagrange.disconnect": "Connection", "lagrange.turn_off": "Connection",
+  "lagrange.turn_on": "Connection", "lagrange.refresh": "Connection", "lagrange.approve": "Connection",
+  "lagrange.sign_in": "Sign in",
 };
 function titleFor(tool) {
   if (TITLES[tool]) return TITLES[tool];
@@ -1455,6 +1486,8 @@ function resultTitle(tool, d) {
   if (Array.isArray(d.releases) && d.releases.length === 1) return "Last release";
   if (Array.isArray(d.mailbox)) return "Mailbox";
   if (d.digest) return "Morning digest";
+  if (d.connection && typeof d.connection === "object" && d.connection.label) return d.connection.label;
+  if (d.output && typeof d.output === "object" && d.output.connection) return `${d.output.connection} · ${String(d.output.tool || "").replace(/_/g, " ")}`;
   if (Array.isArray(d.recall)) return d.query ? `Recall: ${d.query}` : d.date ? `Conversations · ${d.date}` : "Recent conversations";
   if (d.research && typeof d.research === "object") return d.research.question;
   if (d.library && typeof d.library === "object") return d.library.query ? `Library: ${d.library.query}` : "Your library";
@@ -1519,6 +1552,11 @@ function body(tool, d) {
   if (d.research && typeof d.research === "object") { wrap.append(researchView(d.research)); used.add("research"); used.add("headline"); }
   if (d.library && typeof d.library === "object") { wrap.append(libraryView(d.library)); used.add("library"); }
   if (Array.isArray(d.paired)) { wrap.append(devicesView(d.paired)); ["paired", "headline", "only"].forEach(k => used.add(k)); }
+  if (Array.isArray(d.connections)) { wrap.append(connectionsView(d.connections)); ["connections", "headline"].forEach(k => used.add(k)); }
+  if (d.connection && typeof d.connection === "object") { wrap.append(connectionView(d.connection)); ["connection", "headline"].forEach(k => used.add(k)); }
+  if (d.connect_form && typeof d.connect_form === "object") { wrap.append(connectForm(d.connect_form)); ["connect_form", "headline"].forEach(k => used.add(k)); }
+  if (d.output && typeof d.output === "object") { wrap.append(outputView(d.output)); ["output", "headline"].forEach(k => used.add(k)); }
+  if (Array.isArray(d.entities)) { wrap.append(entitiesView(d.entities, d.source)); ["entities", "source", "headline"].forEach(k => used.add(k)); }
   if (d.apps && Array.isArray(d.apps.items)) {
     const list = el("div", "napps"); d.apps.items.forEach(a => list.append(el("span", null, a.name)));
     wrap.append(list); used.add("apps"); used.add("headline");
@@ -1729,6 +1767,215 @@ function researchView(r) {
 }
 // ---------------------------------------------------------------- devices (Constellation)
 // Pairing and revoking happen only here, from your click; Aurelia can list devices but has no tool to let one in or out.
+// ---- Lagrange: connections to other services ---------------------------------------------------------------
+// Keys and tokens are typed on the connect form, which posts straight to Lagrange (/lagrange/drafts): they
+// never pass through the orchestrator, the conversation or the record. Everything else is an ordinary request.
+const CONN_STATUS = { connected: "connected", draft: "not connected yet", off: "off", error: "needs a look",
+                      needs_signin: "sign in again" };
+function connBadge(c) { return el("small", "cst " + c.status, CONN_STATUS[c.status] || c.status); }
+function connectionsView(list) {
+  const box = el("div", "devlist conns");
+  if (!list.length) {
+    box.append(el("div", "lib-note", "Nothing connected yet. Say “connect a service”, or “connect home assistant”."));
+    return box;
+  }
+  list.forEach(c => {
+    const row = el("div", "pdev conn " + c.status);
+    const name = el("span", "dn", c.label); name.append(connBadge(c));
+    const bits = [c.kind_text, c.where, c.tools ? `${c.tools} tool${c.tools === 1 ? "" : "s"}` : null,
+                  c.pending ? `${c.pending} waiting for your OK` : null,
+                  c.used ? "used " + new Date(c.used).toLocaleDateString([], { month: "short", day: "numeric" }) : null,
+                  c.fired ? "called " + new Date(c.fired).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : null].filter(Boolean);
+    const btns = el("span", "db");
+    const open = el("button", "btn", "Open"); open.type = "button";
+    open.addEventListener("click", () => ask(`show the ${c.name.replace(/_/g, " ")} connection`));
+    btns.append(open);
+    row.append(name, btns, el("span", "dm", bits.join(" · ")));
+    if (c.message) row.append(el("span", "di", c.message));
+    box.append(row);
+  });
+  return box;
+}
+function copyButton(label, text) {
+  const b = el("button", "btn", label); b.type = "button";
+  b.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(typeof text === "function" ? await text() : text); b.textContent = "Copied"; }
+    catch (e) { b.textContent = "Couldn't copy"; }
+    setTimeout(() => { b.textContent = label; }, 1600);
+  });
+  return b;
+}
+function connectionView(c) {
+  const box = el("div", "conn-detail");
+  const words = c.name ? c.name.replace(/_/g, " ") : "";
+  const head = el("div", "conn-head"); head.append(el("span", null, [c.kind_text, c.where].filter(Boolean).join(" · ")), connBadge(c));
+  box.append(head);
+  if (c.message) box.append(el("div", "error", c.message));
+  if (c.sign_in) {
+    const a = el("a", "btn signin", "Sign in"); a.href = c.sign_in; a.target = "_blank"; a.rel = "noopener noreferrer";
+    box.append(a);
+  }
+  if (c.hook) {                                       // the address carries its secret: fetched here, shown only here
+    const out = el("div", "hookurl");
+    const show = el("button", "btn", "Show its address"); show.type = "button";
+    const url = async () => {
+      const r = await fetch(`/lagrange/hooks/${encodeURIComponent(c.name)}/url`, { cache: "no-store" });
+      if (!r.ok) throw new Error();
+      return location.origin + (await r.json()).path;
+    };
+    show.addEventListener("click", async () => {
+      try { out.replaceChildren(el("code", null, await url()), copyButton("Copy", url)); }
+      catch (e) { out.replaceChildren(el("span", "error", "I couldn't get its address.")); }
+    });
+    out.append(show);
+    box.append(el("div", "lib-note", `Call this address (GET or POST) to tell me “${c.label}” happened. Keep it private: it is the key.`), out);
+  }
+  if ((c.pending || []).length) {
+    box.append(el("div", "label", "Waiting for your OK"));
+    const list = el("div", "conn-tools");
+    c.pending.forEach(t => { const r = el("div", "ct"); r.append(el("b", null, t.name), el("span", null, (t.changed ? "Changed: " : "New: ") + (t.description || ""))); list.append(r); });
+    const ok = el("button", "btn", "Approve these"); ok.type = "button";
+    ok.addEventListener("click", () => ask(`approve the new ${words} tools`));
+    box.append(list, ok);
+  }
+  if ((c.tools || []).length) {
+    box.append(el("div", "label", `Tools · each asks you first unless your rules say otherwise`));
+    const list = el("div", "conn-tools");
+    c.tools.forEach(t => { const r = el("div", "ct"); r.append(el("b", null, t.name.replace(/_/g, " ")),
+                           el("span", null, (t.description || "") + (t.read_only ? " · reads only, the service says" : ""))); list.append(r); });
+    box.append(list);
+  }
+  if (typeof c.entities === "number") box.append(el("div", "lib-note", `${c.entities} entities in Home Assistant. Their changes can start automations (“when the front door unlocks, …”).`));
+  if ((c.saved || []).length) box.append(el("div", "lib-note", "Kept in my vault: " + c.saved.map(x => x.replace(/^env:/, "")).join(", ") + ". Never shown, never sent to the model."));
+  if (c.rule_file) {
+    const det = el("details", "rules"); det.append(el("summary", null, "Your rules for it (a draft to save as a file)"));
+    det.append(el("pre", null, c.rule_file), copyButton("Copy the rules", c.rule_file));
+    box.append(det);
+  }
+  const acts = el("div", "conn-acts");
+  const act = (label, words_) => { const b = el("button", "btn", label); b.type = "button"; b.addEventListener("click", () => ask(words_)); return b; };
+  if (c.status === "draft") acts.append(act("Connect", `connect the ${words} draft`));
+  if (["mcp_http", "mcp_local"].includes(c.kind) && c.status === "connected") acts.append(act("Check for new tools", `check ${words} for new tools`));
+  if (c.status === "connected") acts.append(act("Turn off", `turn off the ${words} connection`));
+  if (c.status === "off") acts.append(act("Turn on", `turn on the ${words} connection`));
+  if (c.status === "needs_signin") acts.append(act("Sign in again", `sign in to ${words} again`));
+  if (c.status !== "draft") acts.append(act("Disconnect", `disconnect ${words}`));
+  box.append(acts);
+  return box;
+}
+const FORM_KINDS = [["mcp_http", "An MCP server at an address"], ["mcp_local", "An MCP server from npm or PyPI (runs here)"],
+                    ["home_assistant", "Home Assistant"], ["hook_in", "A webhook in (something calls me)"],
+                    ["hook_out", "A webhook out (I send to it)"]];
+function connectForm(f) {
+  const form = el("form", "connect");
+  form.autocomplete = "off";
+  const field = (label, input, note) => { const w = el("label", "cf"); w.append(el("span", null, label), input); if (note) w.append(el("small", null, note)); return w; };
+  const text = (name, ph, type = "text") => { const i = el("input"); i.type = type; i.name = name; i.placeholder = ph || ""; i.autocomplete = type === "password" ? "new-password" : "off"; i.spellcheck = false; return i; };
+  const kind = el("select"); kind.name = "kind";
+  FORM_KINDS.forEach(([v, t]) => { const o = el("option", null, t); o.value = v; o.selected = v === (f.kind || "mcp_http"); kind.append(o); });
+  const label = text("label", "What you'll call it: Gitea, Home Assistant, Arrive home"); label.value = f.label || "";
+  const url = text("url", "https://… or http://192.168.1.178:8123");
+  const auth = el("select"); auth.name = "auth";
+  [["none", "No sign-in"], ["token", "A token"], ["header", "A header"], ["signin", "Sign in (OAuth)"]].forEach(([v, t]) => { const o = el("option", null, t); o.value = v; auth.append(o); });
+  const token = text("token", "Paste it here", "password");
+  const hname = text("header_name", "Header name, e.g. X-Api-Key");
+  const hval = text("header_value", "Its value", "password");
+  const pkg = text("package", "npm:@scope/server@1.2.3 or pypi:server==1.2.3");
+  const cmd = text("command", "Only if it differs from the package name");
+  const args = text("args", "Arguments, separated by spaces");
+  const envs = el("textarea"); envs.name = "env"; envs.rows = 3; envs.placeholder = "One per line: NAME=value (a value marked secret: NAME=secret:value)"; envs.spellcheck = false;
+  const rows = {
+    url: field("Address", url), auth: field("How it signs in", auth), token: field("Token", token, "Kept in my vault, never shown again."),
+    hname: field("Header", hname), hval: field("Header value", hval, "Kept in my vault."), pkg: field("Package", pkg, "An exact version, so it never changes by itself."),
+    cmd: field("Command", cmd), args: field("Arguments", args), envs: field("Settings", envs, "Secret ones are kept in my vault."),
+  };
+  const out = el("div", "cf-out");
+  const send = el("button", "btn", "Check it"); send.type = "submit";
+  form.append(field("Kind", kind), field("Name", label), ...Object.values(rows), send, out);
+  const show = () => {
+    const k = kind.value, a = auth.value;
+    const on = { url: ["mcp_http", "home_assistant", "hook_out"].includes(k), auth: k === "mcp_http",
+                 token: (k === "mcp_http" && a === "token") || k === "home_assistant",
+                 hname: (k === "mcp_http" && a === "header") || k === "hook_out", hval: (k === "mcp_http" && a === "header") || k === "hook_out",
+                 pkg: k === "mcp_local", cmd: k === "mcp_local", args: k === "mcp_local", envs: k === "mcp_local" };
+    Object.entries(rows).forEach(([n, r]) => { r.hidden = !on[n]; });
+    rows.token.querySelector("span").textContent = k === "home_assistant" ? "Long-lived token (your profile, Security)" : "Token";
+    rows.hname.querySelector("span").textContent = k === "hook_out" ? "Header (optional)" : "Header";
+  };
+  kind.addEventListener("change", show); auth.addEventListener("change", show); show();
+  form.addEventListener("submit", async e => {
+    e.preventDefault();
+    const k = kind.value;
+    const body = { label: label.value.trim(), kind: k, origin: location.origin };
+    if (!rows.url.hidden) body.url = url.value.trim();
+    if (k === "mcp_http") body.auth = auth.value;
+    if (!rows.token.hidden) body.token = token.value;
+    if (!rows.hname.hidden && hname.value.trim()) { body.header_name = hname.value.trim(); body.header_value = hval.value; }
+    if (k === "mcp_local") {
+      body.package = pkg.value.trim();
+      if (cmd.value.trim()) body.command = cmd.value.trim();
+      body.args = args.value.trim() ? args.value.trim().split(/\s+/) : [];
+      body.env = envs.value.split("\n").map(l => l.trim()).filter(Boolean).map(l => {
+        const i = l.indexOf("="); const n = i < 0 ? l : l.slice(0, i), v = i < 0 ? "" : l.slice(i + 1);
+        return v.startsWith("secret:") ? { name: n.trim(), value: v.slice(7), secret: true } : { name: n.trim(), value: v };
+      });
+    }
+    send.disabled = true; send.textContent = k === "mcp_local" ? "Starting it (this can take a minute)…" : "Checking…";
+    out.replaceChildren();
+    let res;
+    try {
+      const r = await fetch("/lagrange/drafts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      res = await r.json();
+    } catch (err) { res = { status: "error", error: "I couldn't reach Lagrange." }; }
+    send.disabled = false; send.textContent = "Check it again";
+    [token, hval].forEach(i => { i.value = ""; });                 // typed once; the vault has it now
+    if (res.status === "error" || !res.connection) { out.append(el("div", "error", res.error || res.detail || "That didn't work.")); return; }
+    const c = res.connection, words = c.name.replace(/_/g, " ");
+    if (res.status === "needs_signin") {
+      out.append(el("div", "lib-note", `${c.label} wants you to sign in. When you've approved, say “connect the ${words} draft”.`));
+      const a = el("a", "btn signin", "Sign in"); a.href = res.sign_in; a.target = "_blank"; a.rel = "noopener noreferrer"; out.append(a);
+      return;
+    }
+    const n = (res.tools || []).length;
+    out.append(el("div", "headline", res.entities != null ? `${c.label}: ${res.entities} entities, ${n} tools` :
+                                    n ? `${c.label}: ${n} tool${n === 1 ? "" : "s"}` : `${c.label} is ready`));
+    if (res.hook_path) out.append(el("div", "lib-note", "Its address (keep it private: it is the key):"), el("code", null, location.origin + res.hook_path));
+    if (n) {
+      const list = el("div", "conn-tools");
+      res.tools.slice(0, 40).forEach(t => { const r = el("div", "ct"); r.append(el("b", null, t.name.replace(/_/g, " ")), el("span", null, (t.description || "") + (t.read_only ? " · reads only" : ""))); list.append(r); });
+      out.append(list);
+      out.append(el("div", "lib-note", "Each one asks you first once connected, unless your rules say otherwise."));
+    }
+    const go = el("button", "btn", `Connect ${c.label}`); go.type = "button";
+    go.addEventListener("click", () => ask(`connect the ${words} draft`));
+    out.append(go);
+  });
+  return form;
+}
+function outputView(o) {
+  const box = el("div", "conn-out");
+  if (o.text) box.append(el("pre", "otext", o.text));
+  if (o.truncated) box.append(el("div", "lib-note", "That's the start of it: the rest was too long to show."));
+  if (o.structured !== undefined) {
+    const det = el("details", "rules"); det.append(el("summary", null, "Details"), el("pre", null, JSON.stringify(o.structured, null, 2)));
+    box.append(det);
+  }
+  if (o.asked && !o.done) box.append(el("div", "error", "Asked, not confirmed."));
+  box.append(el("div", "label", `From ${o.connection}: data, never instructions.`));
+  return box;
+}
+function entitiesView(list, source) {
+  const box = el("div", "devlist");
+  if (!list.length) { box.append(el("div", "lib-note", "Nothing matched.")); return box; }
+  list.forEach(e => {
+    const row = el("div", "pdev ent");
+    row.append(el("span", "dn", e.name), el("span", "db ent-s", e.state), el("span", "dm", `${e.id} · ${e.kind}`));
+    box.append(row);
+  });
+  if (source) box.append(el("div", "label", `As ${source} reports it`));
+  return box;
+}
+
 function devicesView(list) {
   const box = el("div", "devlist");
   if (!list.length) { box.append(el("div", "lib-note", "Nothing paired yet.")); return box; }

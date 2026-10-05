@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
-from . import (admiral, ambient, engine, morpho, pulsar, swallowtail, assistant, auth, constellation, push, quasar, db, digest, glance, learning, llm_api, mailbox, memory, mnemosyne,
+from . import (admiral, happenings, ambient, engine, morpho, pulsar, swallowtail, assistant, auth, constellation, push, quasar, db, digest, glance, learning, llm_api, mailbox, memory, mnemosyne,
                nodes, registry, releases, tasks)
 from .config import ConfigStore
 from .events import CHANNEL
@@ -44,6 +44,7 @@ async def lifespan(app: FastAPI):
     skills = asyncio.create_task(morpho.register_loop(app))
     watcher_p = asyncio.create_task(pulsar.register_loop(app))   # Pulsar: automations, routines, notices
     checker = asyncio.create_task(swallowtail.register_loop(app))   # Swallowtail: field checks of each release
+    linked = asyncio.create_task(_connections_loop(app))   # Lagrange: which functions are connected services
     log.info("orchestrator ready")
     try:
         yield
@@ -62,9 +63,20 @@ async def lifespan(app: FastAPI):
         skills.cancel()
         watcher_p.cancel()
         checker.cancel()
+        linked.cancel()
         await db.close()
         await app.state.redis.aclose()
         log.info("orchestrator stopped")
+
+
+async def _connections_loop(app) -> None:
+    """Keep governance's list of connected services current (every copy of me, from the registry)."""
+    while True:
+        try:
+            app.state.governance.connections = await registry.connections(app.state.redis)
+        except Exception as exc:
+            log.warning("connections: %s", exc)
+        await asyncio.sleep(5)
 
 
 app = FastAPI(title="Aurelia Orchestrator", version="0.2.0", lifespan=lifespan)
@@ -90,6 +102,7 @@ app.include_router(engine.router)
 app.include_router(morpho.router)
 app.include_router(pulsar.router)
 app.include_router(swallowtail.router)
+app.include_router(happenings.router)
 
 
 VIEW = Path(__file__).parent / "static" / "view.html"
@@ -178,14 +191,54 @@ async def ready(request: Request):
 
 # ---- function registry ---------------------------------------------------
 
+@app.middleware("http")
+async def _only_my_network(request: Request, call_next):
+    """Everything reaches me through the proxy or from my own services, on my own network (or from inside this
+    container: its health check). I also join your home-lab network to reach Jellyfin; nothing there may call me."""
+    from fastapi.responses import JSONResponse
+    from . import peers
+    host = request.client.host if request.client else None
+    if not (peers.from_stack(host) or (host or "").startswith("127.") or host == "::1"):
+        return JSONResponse({"detail": "Not from this network."}, status_code=403)
+    return await call_next(request)
+
+
+def _from_my_stack(request: Request) -> None:
+    """Registering or removing a function: only my own services, on my own network (never through the proxy,
+    never from your home-lab network, which I join to reach Jellyfin)."""
+    from . import peers
+    host = request.client.host if request.client else None
+    if request.headers.get("x-forwarded-host") or request.headers.get("x-aurelia-device") or not peers.from_stack(host):
+        raise HTTPException(403, "Only my own services register functions.")
+
+
 @app.post("/registry/functions", status_code=204)
 async def register_function(fn: registry.FunctionRegistration, request: Request):
+    _from_my_stack(request)
     ttl = request.app.state.config.current.registry.function_ttl_seconds
+    if fn.via == "lagrange":
+        # A connected service never takes one of my own functions' names.
+        why = request.app.state.governance.may_connect(fn.name)
+        old = await registry.get_function(request.app.state.redis, fn.name)
+        if why or (old is not None and old.via != "lagrange"):
+            raise HTTPException(409, why or f"“{fn.name}” is already one of my functions. Give the connection "
+                                            "another name.")
+        request.app.state.governance.connections.add(fn.name)
+    else:
+        old = await registry.get_function(request.app.state.redis, fn.name)
+        if old is not None and old.via == "lagrange":
+            await registry.unregister(request.app.state.redis, fn.name)   # one of mine: it wins the name back
+            request.app.state.governance.connections.discard(fn.name)
     await registry.register(request.app.state.redis, fn, ttl)
 
 
 @app.delete("/registry/functions/{name}", status_code=204)
-async def unregister_function(name: str, request: Request):
+async def unregister_function(name: str, request: Request, via: str | None = None):
+    _from_my_stack(request)
+    if via is not None:                 # Lagrange taking back a connection: never one of my own functions
+        old = await registry.get_function(request.app.state.redis, name)
+        if old is None or old.via != via:
+            return
     await registry.unregister(request.app.state.redis, name)
 
 

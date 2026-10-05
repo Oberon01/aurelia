@@ -307,12 +307,26 @@ async def parse(app, say: str, user: str = "owner") -> dict:
     t = _clean(say)
     if not t:
         raise ValueError("What should I automate?")
+    from . import happenings
     m = EVENT_FIRST.match(t) or EVENT_LAST.match(t)
-    try:
-        if m:
+    home = None
+    if m:                                       # a computer or display first; then the home's devices and hooks
+        try:
             kind_ev = _event_kind(m.group("ev"))
             dev_words = (m.group("dev2") or m.group("dev") or "").strip()
             dev_id, dev_name, dev_kind = await _event_device(app, dev_words, kind_ev)
+        except ValueError as exc:
+            if not str(exc).startswith("I don't know"):     # "which computer?": his answer, never a guess elsewhere
+                raise
+            home = await happenings.parse(app, t)
+            if home is None:
+                raise
+    else:
+        home = await happenings.parse(app, t)
+    try:
+        if home:
+            rule, what = home
+        elif m:
             rule = {"on": kind_ev, "device": dev_id, "device_name": dev_name}
             what = m.group("what")
         else:
