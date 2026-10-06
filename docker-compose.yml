@@ -263,6 +263,85 @@ services:
       - traefik.http.routers.lagrange-open.service=lagrange
       - traefik.http.routers.lagrange-open.middlewares=aurelia-strip@docker
 
+  # Beacon: your email (Gmail) and calendars. Your app password, calendar password and ntfy topic are
+  # entered on its setup form, which posts straight here (never through the orchestrator), and kept in its
+  # vault, whose key only Beacon mounts.
+  beacon:
+    build: ./services/functions/beacon
+    env_file: .env
+    environment:
+      FUNCTION_URL: http://beacon-core:9000
+      ORCHESTRATOR_URL: http://aurelia-core:8000
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      VAULT_KEY_PATH: /data/vault.key
+      RADICALE_URL: http://radicale:5232
+      RADICALE_USERS: /radicale-auth/users
+      STACK_GUARD: "1"
+    volumes:
+      - ./data/beacon:/data
+      - ./data/radicale-auth:/radicale-auth      # only the calendar's password file (it writes the hash)
+    networks:
+      default:
+        aliases: [beacon-core]
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9000/health', timeout=3).status == 200 else 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    stop_grace_period: 30s
+    restart: unless-stopped
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=aurelia_default
+      - traefik.http.services.beacon.loadbalancer.server.port=9000
+      # The setup form posts here straight from your display (a paired device's key, checked by the
+      # orchestrator), so passwords you type never pass through the orchestrator.
+      - traefik.http.routers.beacon.rule=PathPrefix(`/beacon/`)
+      - traefik.http.routers.beacon.entrypoints=web
+      - traefik.http.routers.beacon.priority=100
+      - traefik.http.routers.beacon.service=beacon
+      - traefik.http.routers.beacon.middlewares=aurelia-strip@docker,aurelia-auth@docker
+
+  # Your calendar server (Radicale, CalDAV). Your iPhone reaches it at https://<this server>/dav/ (Tailscale
+  # Serve, so your tailnet only) with its own password, set on Beacon's form: a calendar app can't present a
+  # paired device's key. Beacon reaches it directly on my network.
+  radicale:
+    build: ./services/functions/radicale
+    volumes:
+      - ./data/radicale:/data                     # your events: back up by copying this folder
+      - ./data/radicale-auth:/auth                # its one login (Beacon writes it; empty until you set it)
+    healthcheck:
+      test: ["CMD", "python", "-c", "import http.client,sys; c=http.client.HTTPConnection('localhost',5232,timeout=3); c.request('GET','/'); sys.exit(0 if c.getresponse().status < 500 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    stop_grace_period: 15s
+    restart: unless-stopped
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=aurelia_default
+      - traefik.http.services.radicale.loadbalancer.server.port=5232
+      - traefik.http.routers.radicale.rule=PathPrefix(`/dav/`) || Path(`/dav`)
+      - traefik.http.routers.radicale.entrypoints=web
+      - traefik.http.routers.radicale.priority=300
+      - traefik.http.routers.radicale.service=radicale
+      - traefik.http.routers.radicale.middlewares=aurelia-strip@docker,radicale-prefix,radicale-strip
+      - traefik.http.middlewares.radicale-strip.stripprefix.prefixes=/dav
+      - traefik.http.middlewares.radicale-prefix.headers.customrequestheaders.X-Script-Name=/dav
+      # Calendar apps look here first ("server: <this server>"); Radicale answers with a relative /dav/.
+      - traefik.http.routers.radicale-find.rule=Path(`/.well-known/caldav`)
+      - traefik.http.routers.radicale-find.entrypoints=web
+      - traefik.http.routers.radicale-find.priority=300
+      - traefik.http.routers.radicale-find.service=radicale
+      - traefik.http.routers.radicale-find.middlewares=aurelia-strip@docker,radicale-prefix
+
   # Chrysalis: Aurelia's update system (protected core). Watches GitHub, tests,
   # deploys and rolls back. It drives Docker, so it only runs where enabled with
   # COMPOSE_PROFILES=chrysalis (the home server), never on a dev machine.

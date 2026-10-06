@@ -57,6 +57,8 @@ def rules(app) -> dict:
 def never(tool: str, args: dict | None) -> bool:
     if any(p.search(tool) for p in NEVER):
         return True
+    if tool == "beacon.drop_event" or (tool == "beacon.save_event" and ((args or {}).get("draft") or {}).get("invite")):
+        return True                                       # removing an event, or inviting anyone: always asked
     return tool == "constellation.restart" and str((args or {}).get("action") or "restart") != "restart"   # shutdown
 
 

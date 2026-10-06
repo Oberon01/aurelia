@@ -539,7 +539,7 @@ def test_the_display_tape_shows_what_will_run_in_the_next_day(stack, fn):
     _, done, j = save(stack, f"flip the porch light every day at {words}")
     tape = httpx.get(f"{stack['orch']}/view/tape", timeout=10).json()
     assert tape["tz"] == "America/Chicago" and "quiet" in tape and "items" in tape
-    mine = [i for i in tape["items"] if i["job"] == j["id"]]
+    mine = [i for i in tape["items"] if i.get("job") == j["id"]]
     assert len(mine) == 1, tape                                         # every day: once in the next 24 hours
     [it] = mine
     assert it["automation"] and it["repeats"] and not it["waiting"]
@@ -548,4 +548,4 @@ def test_the_display_tape_shows_what_will_run_in_the_next_day(stack, fn):
     # Cancelled: it leaves the tape.
     sql("UPDATE jobs SET status='cancelled' WHERE id=$1", j["id"])
     tape = httpx.get(f"{stack['orch']}/view/tape", timeout=10).json()
-    assert not [i for i in tape["items"] if i["job"] == j["id"]]
+    assert not [i for i in tape["items"] if i.get("job") == j["id"]]

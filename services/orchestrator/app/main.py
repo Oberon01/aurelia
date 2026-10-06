@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
-from . import (admiral, happenings, ambient, engine, morpho, pulsar, swallowtail, assistant, auth, constellation, push, quasar, db, digest, glance, learning, llm_api, mailbox, memory, mnemosyne,
+from . import (admiral, beacon_glue, happenings, ambient, engine, morpho, pulsar, swallowtail, assistant, auth, constellation, push, quasar, db, digest, glance, learning, llm_api, mailbox, memory, mnemosyne,
                nodes, registry, releases, tasks)
 from .config import ConfigStore
 from .events import CHANNEL
@@ -103,6 +103,7 @@ app.include_router(morpho.router)
 app.include_router(pulsar.router)
 app.include_router(swallowtail.router)
 app.include_router(happenings.router)
+app.include_router(beacon_glue.router)
 
 
 VIEW = Path(__file__).parent / "static" / "view.html"

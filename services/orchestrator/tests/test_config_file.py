@@ -222,6 +222,11 @@ NO_FAST_PATH = {
     "constellation.move_file": "planned (Kuiper)", "constellation.delete_file": "planned (Kuiper)",
     "nebula.submit": "planned", "nebula.upload": "planned",
     "pulsar.save": "only his confirmation of a read-back runs it (never a phrase, never the model)",
+    "beacon.draft_email": "who it goes to and what it says are his own words: the model writes the draft, and "
+                          "it's read back whole before anything is sent",
+    "beacon.send": "only his confirmation of a draft runs it (never a phrase, never the model)",
+    "beacon.save_event": "only his confirmation of a read-back runs it (never a phrase, never the model)",
+    "beacon.drop_event": "only his confirmation of a read-back runs it (never a phrase, never the model)",
 }
 
 
@@ -465,3 +470,37 @@ def test_an_event_automation_keeps_its_conditions(said):
     m = fastpath.match(said, cfg.fastpath.patterns)
     assert m and m.pattern.tool == "pulsar.automate", (said, m and m.pattern.name)
     assert m.args["say"] == said, (said, m.args)
+
+
+
+# Beacon (Phase 12): its phrases, and the ones that were there before it are still where they were.
+@pytest.mark.skipif(not CONFIG.exists(), reason="the repo's config isn't in the test image")
+@pytest.mark.parametrize("said,name,args", [
+    ("set up my email", "beacon-setup", {}), ("connect my calendar", "beacon-setup", {}),
+    ("show my email", "beacon-inbox", {}), ("any new emails", "beacon-inbox", {}), ("what's in my inbox", "beacon-inbox", {}),
+    ("show all my emails", "beacon-inbox-all", {"all": "true"}),
+    ("read email 1812345678901234567", "beacon-read-id", {"id": "1812345678901234567"}),
+    ("read the email from sam", "beacon-read", {"which": "sam"}), ("read my latest email", "beacon-read", {"which": ""}),
+    ("search my email for invoice", "beacon-search", {"query": "invoice"}),
+    ("find emails from sam", "beacon-search-from", {"query": "from:sam"}),
+    ("what's on my calendar", "beacon-agenda", {"day": ""}), ("what's on my calendar tomorrow", "beacon-agenda", {"day": "tomorrow"}),
+    ("what's on thursday", "beacon-agenda", {"day": "thursday"}), ("what do i have tomorrow", "beacon-agenda", {"day": "tomorrow"}),
+    ("show my calendar for next week", "beacon-agenda", {"day": "next week"}),
+    ("add dentist thursday at 3pm to my calendar", "beacon-add-event", {"say": "dentist thursday at 3pm"}),
+    ("remove the dentist from my calendar", "beacon-remove-event", {"which": "dentist"}),
+    ("is my email connected", "beacon-status", {}),
+    # Not Beacon's: unchanged.
+    ("what's scheduled", "schedule-list", None), ("show my reminders", "schedule-list", None),
+    ("what's on my screens", "node-screens", None), ("connect home assistant", "lagrange-form-ha", None),
+    ("connect the gitea draft", "lagrange-connect-draft", None), ("show my connections", "lagrange-list", None),
+    ("remind me at 5 to call the pharmacy", "schedule-remind", None), ("cancel my reminder to call mom", "schedule-cancel", None),
+    ("what's on tv at 8 pm", None, None),
+])
+def test_beacon_phrases(said, name, args):
+    from app import fastpath
+    from app.config import RuntimeConfig
+    cfg = RuntimeConfig.model_validate(yaml.safe_load(CONFIG.read_text()))
+    m = fastpath.match(said, cfg.fastpath.patterns)
+    assert (m.pattern.name if m else None) == name, (said, m and m.pattern.name)
+    if args is not None:
+        assert m.args == args, (said, m.args)

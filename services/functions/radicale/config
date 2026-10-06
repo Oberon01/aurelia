@@ -1,0 +1,29 @@
+# Radicale, as Aurelia runs it. Edited here, applied by the next release.
+[server]
+hosts = 0.0.0.0:5232
+max_connections = 20
+# 10 MB: an event with an attachment, never a dump
+max_content_length = 10000000
+timeout = 30
+
+[auth]
+type = htpasswd
+htpasswd_filename = /auth/users
+htpasswd_encryption = bcrypt
+# a wrong password waits before it's answered
+delay = 2
+
+[rights]
+# each user sees only their own calendars
+type = owner_only
+
+[storage]
+filesystem_folder = /data/collections
+
+[web]
+# no web page: your iPhone and Beacon only speak CalDAV
+type = none
+
+[logging]
+level = warning
+mask_passwords = True

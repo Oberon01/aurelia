@@ -122,9 +122,17 @@ Built so far:
 - Field checks: config/checks/lagrange.yaml.
 Field check: done on your hardware (October 2026): Gitea connected from the display through its MCP server and its first use asked you; Home Assistant connected, a door unlocking turned on the light (checked by the light's own report), and a webhook started an automation.
 
-## 12. Beacon — Not started
-Builds: communication: email (sending always confirmed), calendar, my own number, iMessage through a Mac bridge, notifications to your phone.
-Done when: a text to my number gets a reply; the day's calendar and important email appear in the digest.
+## 12. Beacon — In progress (everything built; awaiting your field check)
+Builds: your Gmail (read, important email flagged, sending always confirmed), your calendar on your own server (Radicale: read and write, on your iPhone too; your Google calendar read alongside it), and a second path to your phone for critical notices (your ntfy). Later, when it's needed: my own number, and an iMessage bridge (needs a Mac).
+Done when: the day's calendar and important email appear in the digest, an event I add shows on your iPhone, and a critical notice reaches your phone even when the app's push doesn't.
+Built so far:
+- Beacon, a function in its own container, and your calendar server (Radicale) in my stack, reached by your iPhone at /dav/ over Tailscale only.
+- One setup form (Gmail and its app password, your calendar's password, your Google calendar's secret address, ntfy): each part checked before it's kept; passwords sealed in Beacon's vault, never through me or the model.
+- Email: what arrives is read every couple of minutes (never marked read), important email flagged by your rules first, then Gmail's own marker, the model only for unknown senders and only so many a day; reading, searching; drafts read back whole and sent only on your yes, "sent" only once it's in your Sent mail.
+- Calendar: both calendars together, repeating events in your time zone; adding and removing read back first and checked on the server; only your own calendar is ever changed; invitations are emails from you, always confirmed.
+- The digest opens with today's calendar and important email; your events are on the day tape.
+- Critical notices also go to your ntfy (pulsar.yaml's ntfy_for).
+- Field checks: config/checks/beacon.yaml.
 
 ## 13. Voice — Not started
 Builds: push-to-talk, then the wake word "Aurelia" through room units; local speech-to-text; a speech engine that sounds like a person talking; real conversation (I stop when you talk over me); spoken confirmations.

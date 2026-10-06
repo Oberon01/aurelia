@@ -23,7 +23,7 @@ space-themed name. Tools are addressed as `<function>.<tool>`.
 | `orbit` | Smart home: SmartRent (locks, lights, thermostat, sensors) and Roku TVs | `orbit.status`, `orbit.lock`, `orbit.unlock`, `orbit.light`, `orbit.thermostat`, `orbit.login`, `orbit.alias`, `orbit.tv_power`, `orbit.tv_input`, `orbit.tv_inputs`, `orbit.tv_app`, `orbit.tv_remote`, `orbit.tv_mute` | Built |
 | `kepler` | Research and learning: cited answers from several sources, a library of topics that grows, explanations at your level, quizzes; written to Trilium | `kepler.research`, `kepler.recall`, `kepler.topic`, `kepler.explain`, `kepler.quiz`, `kepler.read_pdf`, `kepler.forget` | Built |
 | `nova` | Developer: code in a sandbox | | Planned |
-| `beacon` | Communication: messages, calls, calendar | | Planned |
+| `beacon` | Your email (Gmail) and calendars (your own calendar server, and your Google calendar read alongside); a second path to your phone for critical notices (ntfy) | `beacon.inbox`, `beacon.read_email`, `beacon.search_email`, `beacon.draft_email`, `beacon.send`, `beacon.agenda`, `beacon.add_event`, `beacon.save_event`, `beacon.remove_event`, `beacon.drop_event`, `beacon.setup`, `beacon.status` | Built |
 | `libra` | Bookkeeping: services and subscriptions | | Planned |
 | `kuiper` | Files and storage | | Planned |
 | `swallowtail` | Field checks of each release, run in your home after it goes live (part of Aurelia, served by the orchestrator) | `swallowtail.checks`, `swallowtail.run`, `swallowtail.start` | Built |
@@ -1623,12 +1623,91 @@ on mine (`aurelia-core`, `lagrange-core`). Registering a function also never
 works through the proxy.
 
 **Gitea.** Its official MCP server ships as a container, not an npm or PyPI
-package: run `docker.gitea.com/gitea-mcp-server` with `-t http` next to Gitea
-on your home-lab network, then connect it by address
-(`http://<its name>:8080/mcp`) with a Gitea access token. Lagrange joins the
+package: run `docker.gitea.com/gitea-mcp-server` next to Gitea on your
+home-lab network with the command `/app/gitea-mcp -t http -p 8080` (the image
+has no entrypoint, so the program comes first) and `--no-healthcheck` (its own
+healthcheck is written wrong and always reports unhealthy), with `GITEA_HOST`
+set to Gitea's address inside Docker (behind Lazytainer, Lazytainer's name:
+`http://lazytainer-a:3000`). No token on the server: connect it by address
+(`http://gitea-mcp:8080/mcp`) with "A token", and Lagrange sends your Gitea
+access token with each call. Lagrange joins the
 home-lab network, so it reaches it (and Home Assistant) by name or address. A
 local server can't reach the home-lab network (it can reach published ports on
 your LAN address).
+
+## Beacon: your email and calendars (Phase 12)
+
+Beacon is a function in its own container. Code: `services/functions/beacon/`;
+policy: `config/governance/functions/beacon.yaml`; your calendar server:
+`services/functions/radicale/` (Radicale, in my stack).
+
+**Setting it up.** Say "set up my email" (or "set up my calendar"). One form,
+four parts, each checked before it's kept, each saying how it went:
+- **Gmail:** your address and an app password (Google account → Security →
+  2-Step Verification → App passwords). IMAP to read, SMTP to send. Google's
+  sign-in isn't used: for a personal project it expires every 7 days.
+- **Your calendar:** a user name and a password (12+ characters). Beacon
+  writes the calendar server's one login (bcrypt) and makes your calendar. On
+  your iPhone: Settings → Calendar → Accounts → Add Account → Other → Add CalDAV
+  Account; server: the address you open me at (without `https://`). It's
+  reached at `/dav/` through the proxy, so over Tailscale only (your phone's
+  calendar syncs while Tailscale is connected; nothing is lost while it isn't).
+  Your events are files in `data/radicale/` on the server: back it up by
+  copying the folder.
+- **Your Google calendar (read only):** its secret address in iCal format
+  (Google Calendar → Settings → your calendar → Integrate calendar).
+- **ntfy:** its address (yours: `http://192.168.1.178:8090`) and a long topic
+  name (it works like a password; subscribe to it in the ntfy app). A test
+  notification goes out when you save.
+
+The form posts straight to Beacon, never through me or the model. The
+passwords, the Google address and the ntfy topic are sealed in Beacon's vault
+(AES-256-GCM in Postgres; its key in `data/beacon/vault.key`, which only Beacon
+mounts: back it up, or enter them again if it's lost).
+
+**Email.** Every couple of minutes I look at what arrived (never marking
+anything read, moving or deleting anything) and keep a week of headers and a
+short snippet. Important is decided by your rules first (`beacon.yaml`: VIPs,
+senders never flagged, your keywords, anyone you've written to), then Gmail's
+own "important" marker; only an unknown sender Gmail marked important goes to
+the model, at most `model_per_day` a day. "Show my email", "any new emails",
+"read the email from Sam", "search my email for invoice", "find emails from
+sam". Reading fetches the message live; what it says is its sender's, never
+instructions to me.
+
+**Sending.** Ask me to write one ("reply to Sam's email saying noon works",
+"email sam@example.com about Thursday"): the draft is read back whole (to,
+subject, every word), and only your yes sends it, exactly as you saw it. It's
+"Sent" only once it's in your Sent mail; otherwise "handed to Gmail, not
+confirmed". Sending never earns trust and the model can never send by itself.
+
+**Calendar.** "What's on my calendar", "what's on Thursday", "what do I have
+tomorrow", "show my calendar for next week": both calendars together, each
+event marked with where it's from. "Add dentist Thursday at 3pm to my calendar"
+is read back ("Add “dentist” to your calendar: Thursday at 3:00 PM, until
+4:00 PM?") and saved on your yes, then checked on the server. Times are read by
+the same parser as your reminders, and asked about when unclear. "Remove the
+dentist from my calendar" works the same way, only on your own calendar (never
+your Google one), and only the version I read: changed on your phone since, it
+stays. An invitation to anyone is an email from you: read back, sent on your
+yes, never earned by trust. The next two weeks of both calendars are kept for
+the digest and the day tape, where your events show in amber.
+
+**The digest** now opens with today on your calendars and your important email
+since yesterday (with why each is important).
+
+**A second path for critical notices.** A critical notice (a leak, a door
+unlocked during quiet hours) also goes to your ntfy, for when the app's own
+push doesn't reach your phone. `pulsar.yaml`'s `ntfy_for` names the severities
+(default: critical; add high if you like). For instant delivery on iPhone, your
+ntfy server needs `upstream-base-url: "https://ntfy.sh"` in its config (ntfy's
+own iOS push relay, which carries only that something arrived on your topic);
+without it the app only checks when it's open. Your phone then fetches the
+message from your ntfy server, so it needs to reach it (at home, or over
+Tailscale).
+
+**Not in Beacon (for now).** My own phone number, and an iMessage bridge (it
+needs a Mac). Calls and voice are Phase 13.
 
 ## Known gaps (by design, for later phases)
 

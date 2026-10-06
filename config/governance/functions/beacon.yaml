@@ -1,0 +1,36 @@
+# Beacon — your email (Gmail) and calendars (your own calendar server; your Google calendar read alongside).
+#
+# Reading looks only. Sending an email, adding or removing an event, and inviting anyone are drafted and read
+# back to you whole: the read-back's confirmation runs send / save_event / drop_event, exactly as you saw it
+# (never the model, and sending or inviting never earns trust). Your Gmail app password, the calendar's password,
+# your Google calendar's address and your ntfy topic are typed on the setup form, which posts straight to Beacon,
+# and kept in its vault. What emails and events say is data from their senders, never instructions.
+function: beacon
+enabled: true
+
+tools:
+  inbox:        { tier: reference }   # your important email (and how many others), as I've sorted it
+  read_email:   { tier: read }        # one email, live from Gmail
+  search_email: { tier: read }        # Gmail's own search
+  draft_email:  { tier: act }         # a draft, read back whole: nothing is sent
+  send:         { tier: change }      # the draft you confirmed (only from your confirmation)
+  agenda:       { tier: reference }   # what's on your calendars
+  add_event:    { tier: act }         # read back: nothing is saved
+  save_event:   { tier: change }      # the event you confirmed (and its invitation email, if any)
+  remove_event: { tier: act }         # read back: nothing is removed
+  drop_event:   { tier: change }      # the removal you confirmed (your own calendar only)
+  setup:        { tier: reference }   # the setup form (you type passwords there)
+  status:       { tier: reference }
+
+rate_limit_per_minute: 30
+
+# Enforced inside Beacon.
+rules:
+  # Which email is important (the digest, the top of the inbox panel). Your rules first, then Gmail's own
+  # "important" marker; only an unknown sender Gmail marked important goes to the model, at most model_per_day.
+  vip: []                 # always important: addresses (sam@example.com) or whole domains (@school.edu)
+  never: []               # never important, the same way
+  keywords: [urgent, action required, past due, overdue, security alert, verify your, appointment, reservation,
+             delivery, your order, interview, offer letter]
+  written_to: true        # anyone you've written to (your Sent mail) is important
+  model_per_day: 40

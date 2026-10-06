@@ -376,6 +376,9 @@ async def _late_follow_up(app, user: str, tool: str, task_id: str, device: int |
 HANDOFFS = {"quasar": ("constellation.install_package",)}     # "the TV PC needs my player: install it?"
 
 
+READ_BACK = ("pulsar.save", "beacon.send", "beacon.save_event", "beacon.drop_event")   # shown whole: what he says yes to
+
+
 async def _follow_up(app, user: str, tool: str, result: dict | None, out: dict) -> str | None:
     """A tool that stopped short of something he has to decide (e.g. a click that would buy or
     send) returns `confirm`: the same function's tool and args to run if he says yes. It's held
@@ -394,7 +397,8 @@ async def _follow_up(app, user: str, tool: str, result: dict | None, out: dict) 
     if c["tool"].split(".", 1)[0] != tool.split(".", 1)[0] and c["tool"] not in HANDOFFS.get(tool.split(".", 1)[0], ()):
         return None                                                 # only its own function's tools (or a named handoff)
     # A read-back he confirms (an automation, a routine's steps) is shown whole; it's kept short where it's made.
-    reason = str(c.get("reason") or "That needs your confirmation.")[:900 if c["tool"] == "pulsar.save" else 300]
+    # A read-back is shown whole (an email: every word he'd send; Beacon refuses one too long to show).
+    reason = str(c.get("reason") or "That needs your confirmation.")[:12000 if c["tool"] in READ_BACK else 300]
     action = await _hold(app, c["tool"], dict(c.get("args") or {}), user, reason,
                          reply=str(c["reply"])[:200] if c.get("reply") else None)
     out["needs_confirmation"].append(action)
@@ -630,8 +634,10 @@ async def _run_for_display(app, user: str, qualified: str, args: dict, on: str, 
 
 REPLY_TOOL = "aurelia.reply"
 QUIET_TOOLS = {"constellation.send", "constellation.show"}
+# Only his own taps and words, or his confirmation of a read-back, run these: never the model.
 NOT_FOR_MODEL = {"pulsar.save", "lagrange.connect", "lagrange.approve", "lagrange.turn_on",
-                 "constellation.show"}       # routines' and automations' steps; the model uses _on   # his own taps and words only               # only his confirmation of a read-back runs it           # tools whose panel isn't something to read
+                 "constellation.show",                    # routines' and automations' steps (the model uses _on)
+                 "beacon.send", "beacon.save_event", "beacon.drop_event"}   # an email or event he confirmed, as read back
 _SENTENCE = __import__("re").compile(r"(?<=[.!?])[\"')\]]*\s+(?=[A-Z0-9\"'(])")
 
 

@@ -193,8 +193,14 @@ async def catalog(app) -> dict[str, dict]:
             continue
         for t in fn.tools:
             q = f"{fn.name}.{t.name}"
+            if q in CONFIRM_ONLY:
+                continue
             out[q] = {"description": t.description, "schema": t.input_schema or {}, "tier": tier_of(app, q)}
     return out
+
+
+# Only his yes to a read-back runs these (an email, an event): never a plan's step, whoever wrote the plan.
+CONFIRM_ONLY = {"pulsar.save", "beacon.send", "beacon.save_event", "beacon.drop_event"}
 
 
 MODEL_HIDDEN = {"constellation.show"}       # steps only his own words make (a routine's "send my youtube to my phone")

@@ -65,6 +65,7 @@ RULES: dict[str, Any] = {
         "battery_low": "low",
     },
     "repeat_hours": {"critical": 1, "high": 24, "normal": 0, "low": 0},    # 0: once, until it clears
+    "ntfy_for": ["critical"],                 # also sent to your ntfy (Beacon), a second path to your phone
     "watch": {"server_disk_free_percent": 10, "computer_down_minutes": 10, "always_on": [],
               "mailbox_waiting_hours": 24, "home_check_minutes": 10, "battery_low_percent": 15},
 }
@@ -860,6 +861,9 @@ async def _tell(app, n: dict, again: bool = False) -> None:
                               urgency="high" if sev == "critical" else "normal")
         except Exception:
             log.exception("notice push")
+    if not held:                                             # a second path to his phone (his ntfy), by severity:
+        from . import beacon_glue                            # last, so ntfy never delays the displays or the push
+        await beacon_glue.second_path(app, n)
 
 
 async def release_held(app) -> int:
@@ -868,11 +872,14 @@ async def release_held(app) -> int:
     if is_quiet(app):
         return 0
     rows = await db.pool().fetch("UPDATE notices SET held=false, told_at=now() WHERE held AND status='open' RETURNING *")
+    from . import beacon_glue
     for n in rows:
         try:                                     # (its card stays as it was: the mailbox's own push would repeat this)
             await push.notify(app, n["title"], n["text"][:250], _link(dict(n)), f"notice-{n['id']}")
         except Exception:
             log.exception("held notice")
+    if rows:                                     # every push first; then ntfy, all at once (it never raises)
+        await asyncio.gather(*(beacon_glue.second_path(app, dict(n)) for n in rows))
     return len(rows)
 
 

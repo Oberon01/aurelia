@@ -178,6 +178,14 @@ async def tape(request: Request):
                               **({"repeats": engine.repeats(job)} if rec else {})})
             n += 1
             at = engine.next_time(rule, at, job["tz"]) if rec and not rule.get("on") else None
+    try:                                                   # your calendars (Beacon keeps the next two weeks)
+        for e in await db.pool().fetch(
+                "SELECT source, title, starts_at, ends_at FROM calendar_events WHERE NOT all_day AND starts_at >= $1 "
+                "AND starts_at < $2 ORDER BY starts_at LIMIT 40", now - timedelta(hours=2), end):
+            items.append({"at": e["starts_at"].isoformat(), "title": e["title"], "kind": "event", "source": e["source"],
+                          "until": e["ends_at"].isoformat() if e["ends_at"] else None})
+    except Exception as exc:                               # no calendar table yet (before Beacon's migration)
+        log.debug("tape: no calendar events (%s)", exc)
     items.sort(key=lambda x: x["at"])
     dg = app.state.config.current.digest
     return {"tz": tz, "now": now.isoformat(), "items": items[:TAPE_MAX],

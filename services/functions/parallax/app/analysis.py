@@ -279,11 +279,14 @@ def _secs(ms: float) -> str:
 # ---- morning digest --------------------------------------------------------------------------
 
 def digest(rows: list[dict], now: datetime, rules: Rules, waiting: list[dict], releases: list[dict],
-           anomalies: list[dict], computers: list[dict] | None = None, notices: list[dict] | None = None) -> dict:
+           anomalies: list[dict], computers: list[dict] | None = None, notices: list[dict] | None = None,
+           calendar: list[dict] | None = None, email: list[dict] | None = None) -> dict:
     """Waiting items, what ran without you since yesterday (his automations and scheduled commands too),
-    failures, anomalies, his computers' health problems, what Pulsar noticed, one notable pattern. Quiet
-    (nothing to show) when none of the first six has anything. `computers`: [{name, issues: [{level, text}]}];
-    `notices`: [{title, severity, status}] (open, or raised in the last day)."""
+    failures, anomalies, his computers' health problems, what Pulsar noticed, today on his calendars, important
+    email since yesterday (Beacon), one notable pattern. Quiet (nothing to show) when none but the pattern has
+    anything. `computers`: [{name, issues: [{level, text}]}]; `notices`: [{title, severity, status}] (open, or
+    raised in the last day); `calendar`: [{title, starts_at, all_day, location, source}]; `email`: [{from_name,
+    from_addr, subject, why}]."""
     tz = ZoneInfo(rules.timezone)
     since = now - timedelta(hours=24)
     failed: dict[str, list[dict]] = defaultdict(list)
@@ -308,7 +311,12 @@ def digest(rows: list[dict], now: datetime, rules: Rules, waiting: list[dict], r
               if isinstance(i, dict) and i.get("text")]
     notes = [{"title": n["title"], "severity": n["severity"], **({"cleared": True} if n.get("status") == "cleared" else {})}
              for n in (notices or [])]
-    quiet = not (waiting or failures or automatic or anomalies or health or notes)
+    today = [{"title": e["title"], "when": "all day" if e.get("all_day") else
+              e["starts_at"].astimezone(tz).strftime("%-I:%M %p"), "location": e.get("location") or "",
+              "google": e.get("source") == "google"} for e in (calendar or [])]
+    mail = [{"from": m.get("from_name") or m.get("from_addr") or "", "subject": m.get("subject") or "",
+             "why": m.get("why") or ""} for m in (email or [])]
+    quiet = not (waiting or failures or automatic or anomalies or health or notes or today or mail)
     return {
         "date": f"{now.astimezone(tz):%A, %B %-d}",
         "quiet": quiet,
@@ -320,4 +328,7 @@ def digest(rows: list[dict], now: datetime, rules: Rules, waiting: list[dict], r
         "computers": health[:8],
         "notices": notes[:8],
         "pattern": pattern,
+        "calendar": today[:12],
+        "email": mail[:8],
+        "email_count": len(mail),
     }

@@ -115,6 +115,64 @@ fastpath:
       tool: pulsar.automate
       args: { say: "{say|}{say2|}" }
       reply: "Here's the automation."
+    # Beacon (Phase 12): your email and calendars. Before Lagrange ("connect my email" is Beacon's setup) and the
+    # scheduling phrases ("add the dentist thursday at 3pm to my calendar" is an event, never a reminder). Sending,
+    # adding and removing are drafts read back for your OK.
+    - name: beacon-setup
+      match: '^(?:(?:set\s*up|connect|link|add|change|update)\s+(?:my\s+)?(?:e-?mail|gmail|calendars?|google\s+calendar|ntfy|backup\s+notifications|e-?mail\s+and\s+(?:my\s+)?calendars?|calendars?\s+and\s+(?:my\s+)?e-?mail)(?:\s+(?:password|settings|account))?|(?:open\s+)?(?:the\s+)?(?:beacon|e-?mail|calendar)\s+(?:setup|settings))$'
+      tool: beacon.setup
+      args: {}
+      reply: "Here's the setup form."
+    - name: beacon-status
+      match: '^(?:is\s+my\s+(?:e-?mail|gmail|calendar)\s+(?:connected|set\s*up|working)|(?:beacon|e-?mail|gmail|calendar)\s+status)\??$'
+      tool: beacon.status
+      args: {}
+      reply: "Checking."
+    - name: beacon-inbox
+      match: '^(?:(?:show|check|open)\s+(?:me\s+)?)?(?:my\s+)?(?:e-?mails?|inbox|gmail|e-?mail\s+inbox)\??$|^(?:any|do\s+i\s+have\s+(?:any\s+)?)\s*(?:new\s+|important\s+)?(?:e-?mails?|mail)\??$|^what(?:''s|s|\s+is)\s+(?:new\s+)?in\s+my\s+(?:inbox|e-?mail)\??$|^(?:anything|any)\s+important\s+in\s+my\s+(?:e-?mail|inbox)\??$|^(?:show\s+(?:me\s+)?)?(?:my\s+)?important\s+e-?mails?\??$'
+      tool: beacon.inbox
+      args: {}
+      reply: "Here's your email."
+    - name: beacon-inbox-all
+      match: '^(?:show|list)\s+(?:me\s+)?all\s+(?:of\s+)?(?:my\s+)?(?:e-?mails?|mail|inbox)(?:\s+from\s+(?:today|the\s+last\s+two\s+days))?$'
+      tool: beacon.inbox
+      args: { all: "true" }
+      reply: "Here's all of it."
+    - name: beacon-read-id
+      match: '^read\s+(?:the\s+)?e-?mail\s+(?P<id>\d{6,25})$'
+      tool: beacon.read_email
+      args: { id: "{id}" }
+      reply: "Reading it."
+    - name: beacon-read
+      match: '^(?:read|open|show)\s+(?:me\s+)?(?:the\s+|my\s+)?(?:latest\s+|last\s+|newest\s+|new\s+)?(?:e-?mail|message|mail)(?:\s+(?:from|about)\s+(?P<which>.+?))?$'
+      tool: beacon.read_email
+      args: { which: "{which|}" }
+      reply: "Reading it."
+    - name: beacon-search
+      match: '^(?:search|look\s+through)\s+(?:in\s+)?my\s+(?:e-?mail|gmail|inbox|mail)\s+for\s+(?P<q>.+)$|^find\s+(?:my\s+|the\s+)?e-?mails?\s+about\s+(?P<q2>.+)$'
+      tool: beacon.search_email
+      args: { query: "{q|}{q2|}" }
+      reply: "Searching your email."
+    - name: beacon-search-from
+      match: '^(?:find|show|search)\s+(?:me\s+)?(?:my\s+|the\s+|all\s+)?e-?mails?\s+from\s+(?P<who>[\w.@+-]+)$'
+      tool: beacon.search_email
+      args: { query: "from:{who}" }
+      reply: "Searching your email."
+    - name: beacon-agenda
+      match: '^what(?:''s|s|\s+is)\s+on\s+my\s+(?:calendar|schedule|agenda)(?:\s+(?:for\s+)?(?P<day>today|tomorrow|tonight|(?:this|next)\s+week|the\s+weekend|this\s+weekend|(?:on\s+)?(?:mon|tues|wednes|thurs|fri|satur|sun)day|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\w*\.?\s+\d{1,2}))?\??$|^what(?:''s|s|\s+is)\s+on\s+(?P<day2>today|tomorrow|(?:this|next)\s+week|the\s+weekend|this\s+weekend|(?:mon|tues|wednes|thurs|fri|satur|sun)day)\??$|^(?:show|open)\s+(?:me\s+)?my\s+(?:calendar|schedule|agenda)(?:\s+for\s+(?P<day3>today|tomorrow|(?:this|next)\s+week|the\s+weekend|(?:mon|tues|wednes|thurs|fri|satur|sun)day))?$|^(?:my\s+)?(?:calendar|agenda)(?:\s+(?P<day4>today|tomorrow|this\s+week))?$|^what\s+do\s+i\s+have\s+(?:on\s+)?(?P<day5>today|tomorrow|tonight|this\s+week|next\s+week|(?:mon|tues|wednes|thurs|fri|satur|sun)day)\??$'
+      tool: beacon.agenda
+      args: { day: "{day|}{day2|}{day3|}{day4|}{day5|}" }
+      reply: "Here's your calendar."
+    - name: beacon-add-event
+      match: '^(?:add|put|schedule)\s+(?P<say>.+?)\s+(?:to|on|in)(?:to)?\s+my\s+calendar$|^(?:add|put)\s+(?:to|on)\s+my\s+calendar\s*[:,]?\s+(?P<say2>.+)$'
+      tool: beacon.add_event
+      args: { say: "{say|}{say2|}" }
+      reply: "Here's the event."
+    - name: beacon-remove-event
+      match: '^(?:remove|delete|cancel|take)\s+(?:the\s+|my\s+)?(?P<which>.+?)\s+(?:from|off(?:\s+of)?)\s+my\s+calendar$'
+      tool: beacon.remove_event
+      args: { which: "{which}" }
+      reply: "Here's what I'd remove."
     # Lagrange: connections to other services (before the home's "turn off the …" and "show …" phrases).
     - name: lagrange-list
       match: '^(?:(?:show|list|open)(?: me)?\s+(?:my\s+|the\s+|all\s+)?(?:connections|connected\s+services|integrations|webhooks)|what(?:''s|\s+is|\s+are)\s+(?:you\s+)?connected(?:\s+to)?|what\s+(?:services\s+)?(?:are\s+you|am\s+i)\s+connected\s+to|(?:my\s+)?connections)\??$'

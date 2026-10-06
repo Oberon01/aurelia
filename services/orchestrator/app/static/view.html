@@ -317,6 +317,7 @@ details.mb-ev ul{margin:6px 0 0;padding-left:18px;font-family:var(--mono);font-s
 .day[aria-pressed=true]{background:var(--cyan);border-color:var(--cyan);color:var(--ground)}
 .mb-item .btns .btn{min-height:36px;font-size:13px}
 .btn.quiet{border-color:var(--cyan-soft);color:var(--ink-dim)}
+.btn.quiet.warn{border-color:var(--warn-line);color:var(--warn)}
 .mb-result{font-size:14px;color:var(--cyan)}
 .mb-result.bad{color:var(--bad)}
 /* digest */
@@ -531,6 +532,7 @@ body.hud:not(.screen) .tape{display:block;position:relative;margin:0 72px;min-wi
 .tape .mk.r2{bottom:26px}.tape .mk.r2::before{height:9px}
 .tape .mk span{overflow:hidden;text-overflow:ellipsis;padding-bottom:1px}
 .tape .mk.auto span{color:var(--ink-dim)}
+.tape .mk.ev::before{background:var(--amber,#e6b35f)}
 .tape .mk.waiting{color:var(--warn)}.tape .mk.waiting::before{background:var(--warn)}
 .tape .mk:hover span{color:var(--cyan)}
 .tape .now{position:absolute;top:0;bottom:0;width:2px;background:var(--cyan);box-shadow:0 0 10px var(--cyan)}
@@ -660,6 +662,32 @@ form.connect select option{background:#04070b;color:var(--ink)}
 form.connect textarea{font-family:var(--mono);font-size:13px}
 .cf-out{display:flex;flex-direction:column;gap:10px}
 .pdev.ent .ent-s{font-family:var(--mono);font-size:12px;color:var(--cyan)}
+/* Beacon: email and calendars */
+.panel.asking .msg{white-space:pre-wrap;overflow-wrap:anywhere;max-height:55vh;overflow:auto}
+.mail{display:flex;flex-direction:column;border-top:1px solid rgba(95,212,230,.12)}
+.mail .ml{display:flex;flex-direction:column;gap:2px;padding:9px 0;border-bottom:1px solid rgba(95,212,230,.08);cursor:pointer;text-align:left;background:none;border-left:0;border-right:0;border-top:0;color:inherit;font:inherit}
+.mail .ml .ml-top{display:flex;justify-content:space-between;gap:10px;align-items:baseline;width:100%}
+.mail .ml > *{width:100%;text-align:left}
+.mail .ml b{font-weight:500;color:var(--ink-strong);font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mail .ml time{font-family:var(--mono);font-size:11px;color:var(--ink-faint);flex:none}
+.mail .ml .sub{font-size:14px;color:var(--ink)}.mail .ml small{font-size:12px;color:var(--ink-dim)}
+.mail .ml small.why{font-family:var(--mono);font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--cyan)}
+.mailmsg{display:flex;flex-direction:column;gap:10px}
+.mailmsg .mh{display:flex;flex-direction:column;gap:2px;font-size:13px;color:var(--ink-dim)}
+.mailmsg .mh b{font-size:15px;color:var(--ink-strong);font-weight:500}
+.mailmsg pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-size:15px;line-height:1.55;color:var(--ink);margin:0;max-height:60vh;overflow:auto}
+.agenda{display:flex;flex-direction:column;gap:14px}
+.agenda .ad{display:flex;flex-direction:column;gap:4px}
+.agenda .ad-h{font-family:var(--mono);font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--ink-dim)}
+.agenda .ev{display:grid;grid-template-columns:84px minmax(0,1fr);gap:10px;padding:7px 0;border-bottom:1px solid rgba(95,212,230,.08);align-items:baseline}
+.agenda .ev time{white-space:nowrap}
+.agenda .ev time{font-family:var(--mono);font-size:12px;color:var(--cyan)}.agenda .ev.g time{color:var(--amber,#e6b35f)}
+.agenda .ev b{font-weight:500;color:var(--ink-strong);font-size:14px}.agenda .ev small{display:block;font-size:12px;color:var(--ink-dim)}
+.agenda .none{font-size:13px;color:var(--ink-faint)}
+@media (max-width:640px){.agenda .ev{grid-template-columns:76px minmax(0,1fr)}}
+form.connect .bsec{display:flex;flex-direction:column;gap:10px;padding:12px 0;border-top:1px solid rgba(95,212,230,.12)}
+form.connect .bsec h4{margin:0;font-family:var(--mono);font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--ink-dim);font-weight:400}
+form.connect .bsec .st{font-size:13px;color:var(--ink-dim)}form.connect .bsec .st.ok{color:var(--cyan)}
 </style>
 </head>
 <body>
@@ -840,7 +868,7 @@ function drawTape() {
   marks.sort((a, b) => a.ms - b.ms);
   let lastRight = -Infinity;
   marks.filter(m => m.ms >= start && m.ms < start + span).forEach(m => {
-    const mk = el("button", "mk" + (m.automation ? " auto" : "") + (m.waiting ? " waiting" : ""));
+    const mk = el("button", "mk" + (m.automation ? " auto" : "") + (m.kind === "event" ? " ev" : "") + (m.waiting ? " waiting" : ""));
     mk.type = "button";
     const at = new Date(m.ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
     mk.title = `${at} · ${m.title}${m.repeats ? " · " + m.repeats : ""}${m.waiting ? " · waiting for your OK" : ""}`;
@@ -849,7 +877,8 @@ function drawTape() {
     mk.style.left = left + "px";
     const right = left + Math.min(phone ? 130 : 220, 7 * m.title.length + 14), nowL = x(now) + 2, nowR = x(now) + 36;
     if (left > lastRight + 8 && right < W && (right < nowL || left > nowR)) { mk.append(label); lastRight = right; }
-    mk.addEventListener("click", () => ask(m.kind === "digest" ? "show my digest" : m.automation ? "show my automations" : "what's scheduled"));
+    mk.addEventListener("click", () => ask(m.kind === "digest" ? "show my digest" : m.kind === "event" ? "what's on my calendar"
+                                           : m.automation ? "show my automations" : "what's scheduled"));
     kids.push(mk);
   });
   const cur = el("div", "now"); cur.style.left = x(now) + "px"; kids.push(cur);
@@ -930,6 +959,10 @@ const TITLES = { "aurelia.reply": "Aurelia", "quasar.now": "Now playing",
   "lagrange.connect": "Connection", "lagrange.disconnect": "Connection", "lagrange.turn_off": "Connection",
   "lagrange.turn_on": "Connection", "lagrange.refresh": "Connection", "lagrange.approve": "Connection",
   "lagrange.sign_in": "Sign in",
+  "beacon.inbox": "Email", "beacon.read_email": "Email", "beacon.search_email": "Email", "beacon.draft_email": "Draft",
+  "beacon.send": "Send email", "beacon.agenda": "Calendar", "beacon.add_event": "New event", "beacon.save_event": "Add event",
+  "beacon.remove_event": "Remove event", "beacon.drop_event": "Remove event", "beacon.setup": "Email and calendars",
+  "beacon.status": "Email and calendars",
 };
 function titleFor(tool) {
   if (TITLES[tool]) return TITLES[tool];
@@ -1555,6 +1588,9 @@ function body(tool, d) {
   if (Array.isArray(d.connections)) { wrap.append(connectionsView(d.connections)); ["connections", "headline"].forEach(k => used.add(k)); }
   if (d.connection && typeof d.connection === "object") { wrap.append(connectionView(d.connection)); ["connection", "headline"].forEach(k => used.add(k)); }
   if (d.connect_form && typeof d.connect_form === "object") { wrap.append(connectForm(d.connect_form)); ["connect_form", "headline"].forEach(k => used.add(k)); }
+  if (d.email && typeof d.email === "object") { wrap.append(emailView(d.email)); ["email", "headline"].forEach(k => used.add(k)); }
+  if (d.agenda && typeof d.agenda === "object") { wrap.append(agendaView(d.agenda)); ["agenda", "headline"].forEach(k => used.add(k)); }
+  if (d.beacon_setup && typeof d.beacon_setup === "object") { wrap.append(beaconSetup(d.beacon_setup)); ["beacon_setup", "headline"].forEach(k => used.add(k)); }
   if (d.output && typeof d.output === "object") { wrap.append(outputView(d.output)); ["output", "headline"].forEach(k => used.add(k)); }
   if (Array.isArray(d.entities)) { wrap.append(entitiesView(d.entities, d.source)); ["entities", "source", "headline"].forEach(k => used.add(k)); }
   if (d.apps && Array.isArray(d.apps.items)) {
@@ -1949,6 +1985,124 @@ function connectForm(f) {
     const go = el("button", "btn", `Connect ${c.label}`); go.type = "button";
     go.addEventListener("click", () => ask(`connect the ${words} draft`));
     out.append(go);
+  });
+  return form;
+}
+// Beacon: your email (sorted as I see it), one message (what it says is its sender's, never instructions), a draft
+// (read back again on its confirmation), your calendars, and the setup form (passwords post straight to Beacon).
+function emailView(e) {
+  const box = el("div", "mailmsg");
+  if (e.message) {
+    const m = e.message, h = el("div", "mh");
+    h.append(el("b", null, m.subject), el("span", null, `${m.from} <${m.address}> · ${m.when}`));
+    if ((m.to || []).length) h.append(el("span", null, "To " + m.to.join(", ")));
+    box.append(h, el("pre", null, m.text || "(no text)"));
+    if ((m.attachments || []).length) box.append(el("div", "lib-note", "Attached: " + m.attachments.join(", ")));
+    if (m.note) box.append(el("div", "lib-note", m.note));
+    return box;
+  }
+  if (e.draft) {
+    const d = e.draft, h = el("div", "mh");
+    h.append(el("span", null, "From " + (d.from || "you")), el("span", null, "To " + (d.to || []).join(", ")));
+    if ((d.cc || []).length) h.append(el("span", null, "Cc " + d.cc.join(", ")));
+    h.append(el("b", null, d.subject || ""));
+    box.append(h, el("pre", null, d.body || ""), el("div", "lib-note", "Nothing is sent until you say yes."));
+    return box;
+  }
+  const list = el("div", "mail");
+  (e.items || []).forEach(m => {
+    const row = el("button", "ml"); row.type = "button";
+    const top = el("div", "ml-top"); top.append(el("b", null, m.from), el("time", null, m.when));
+    row.append(top, el("div", "sub", m.subject));
+    if (m.snippet) row.append(el("small", null, m.snippet));
+    if (m.why && m.important) row.append(el("small", "why", m.why));
+    row.addEventListener("click", () => ask(`read email ${m.id}`));
+    list.append(row);
+  });
+  if (!(e.items || []).length) list.append(el("div", "lib-note", e.query ? "Nothing found." : "Nothing here."));
+  box.append(list);
+  if (e.others) box.append(el("div", "lib-note", `${e.others} other${e.others === 1 ? "" : "s"} in the last two days. Say “show all my emails”.`));
+  if (e.problem) box.append(el("div", "error", e.problem));
+  return box;
+}
+function agendaView(a) {
+  const box = el("div", "agenda");
+  (a.days || []).forEach(d => {
+    const day = el("div", "ad"); day.append(el("div", "ad-h", d.label));
+    if (!(d.events || []).length) day.append(el("div", "none", "Nothing on your calendar."));
+    d.events.forEach(e => {
+      const row = el("div", "ev" + (e.source === "google" ? " g" : ""));
+      const what = el("div"); what.append(el("b", null, e.title));
+      const [from, until] = String(e.when).split("–");                      // the start in the column; until, below
+      const sub = [until ? "until " + until : "", e.location, e.source === "google" ? "Google" : ""].filter(Boolean).join(" · ");
+      if (sub) what.append(el("small", null, sub));
+      row.append(el("time", null, from), what); day.append(row);
+    });
+    box.append(day);
+  });
+  (a.problems || []).forEach(p => box.append(el("div", "error", "Couldn't read " + p)));
+  return box;
+}
+function beaconSetup(st) {
+  const form = el("form", "connect"); form.autocomplete = "off";
+  const field = (label, input, note) => { const w = el("label", "cf"); w.append(el("span", null, label), input); if (note) w.append(el("small", null, note)); return w; };
+  const input = (name, ph, type = "text", value = "") => { const i = el("input"); i.type = type; i.name = name; i.placeholder = ph || ""; i.value = value || "";
+    i.autocomplete = type === "password" ? "new-password" : "off"; i.spellcheck = false; return i; };
+  const status = {};
+  const section = (key, title, saved, fields) => {
+    const sec = el("div", "bsec"); sec.append(el("h4", null, title));
+    status[key] = el("div", "st" + (saved ? " ok" : ""), saved || "Not set up");
+    sec.append(status[key], ...fields);
+    if (saved && key !== "calendar") {                   // (your calendar's events stay yours: only its password changes)
+      const f = el("button", "btn quiet", "Forget"); f.type = "button";
+      let armed = null;                                  // the first press asks; a second press within 5s forgets
+      f.addEventListener("click", async () => {
+        if (!armed) {
+          f.textContent = "Forget it? Press again"; f.classList.add("warn");
+          armed = setTimeout(() => { armed = null; f.textContent = "Forget"; f.classList.remove("warn"); }, 5000);
+          return;
+        }
+        clearTimeout(armed); armed = null;
+        f.disabled = true;
+        try { const r = await fetch("/beacon/setup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ forget: [key] }) });
+              const res = await r.json(); status[key].textContent = (res.results || {})[key] || "Forgotten."; status[key].className = "st"; f.remove(); }
+        catch (e) { f.disabled = false; f.textContent = "Forget"; f.classList.remove("warn"); }
+      });
+      sec.append(f);
+    }
+    form.append(sec); return sec;
+  };
+  const gAddr = input("gmail_address", "you@gmail.com", "email", st.gmail || ""), gPw = input("gmail_password", st.gmail_saved ? "Saved: type a new one to change it" : "16 letters", "password");
+  section("gmail", "Gmail", st.gmail ? `Reading ${st.gmail}` : "", [field("Address", gAddr), field("App password", gPw,
+    "Google account → Security → 2-Step Verification → App passwords. Kept in my vault, never shown again.")]);
+  const cUser = input("calendar_user", "kentrell", "text", st.calendar_user || "kentrell"), cPw = input("calendar_password", st.calendar_saved ? "Saved: type a new one to change it" : "At least 12 characters", "password");
+  section("calendar", "Your calendar (on this server)", st.calendar_user ? `Ready for ${st.calendar_user}` : "", [field("User name", cUser), field("Password", cPw,
+    "You'll type it once on your iPhone (Settings → Calendar → Accounts → Add Account → Other → CalDAV).")]);
+  const gIcs = input("google_ics", st.google ? "Saved: paste a new one to change it" : "https://calendar.google.com/calendar/ical/…/basic.ics", "password");
+  section("google", "Your Google calendar (read only)", st.google ? "Reading it" : "", [field("Secret address in iCal format", gIcs,
+    "Google Calendar → Settings → your calendar → Integrate calendar.")]);
+  const nUrl = input("ntfy_url", "http://192.168.1.178:8090", "url", st.ntfy || ""), nTopic = input("ntfy_topic", st.ntfy_saved ? "Saved: type a new one to change it" : "a long topic name", "password"), nTok = input("ntfy_token", "Only if your ntfy needs one", "password");
+  section("ntfy", "ntfy (a second path for critical notices)", st.ntfy ? `Sending to ${st.ntfy}` : "", [field("Address", nUrl), field("Topic", nTopic,
+    "It works like a password: subscribe to it in the ntfy app on your phone."), field("Access token", nTok)]);
+  const out = el("div", "cf-out"), send = el("button", "btn", "Save"); send.type = "submit";
+  form.append(send, out);
+  form.addEventListener("submit", async e => {
+    e.preventDefault();
+    const body = {};
+    const put = (k, v) => { v = (v || "").trim(); if (v) body[k] = v; };
+    if (gPw.value || gAddr.value.trim() !== (st.gmail || "")) { put("gmail_address", gAddr.value); put("gmail_password", gPw.value); }
+    if (cPw.value) { put("calendar_user", cUser.value); body.calendar_password = cPw.value; }
+    put("google_ics", gIcs.value);
+    if (nTopic.value || nUrl.value.trim() !== (st.ntfy || "")) { put("ntfy_url", nUrl.value); put("ntfy_topic", nTopic.value); put("ntfy_token", nTok.value); }
+    if (!Object.keys(body).length) { out.replaceChildren(el("div", "lib-note", "Nothing changed.")); return; }
+    send.disabled = true; send.textContent = "Checking…"; out.replaceChildren();
+    let res;
+    try { const r = await fetch("/beacon/setup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); res = await r.json(); }
+    catch (err) { res = { error: "I couldn't reach Beacon." }; }
+    send.disabled = false; send.textContent = "Save";
+    [gPw, cPw, gIcs, nTopic, nTok].forEach(i => { i.value = ""; });              // typed once; the vault has them now
+    if (!res.results) { out.append(el("div", "error", res.error || res.detail || "That didn't work.")); return; }
+    Object.entries(res.results).forEach(([k, v]) => { if (status[k]) { status[k].textContent = v; status[k].className = "st" + (/^(Connected|Ready|Added|Set)/.test(v) ? " ok" : ""); } });
   });
   return form;
 }
@@ -3282,6 +3436,13 @@ function digestView(d) {
   box.append(el("div", "facts", d.date || ""));
   if (d.quiet) box.append(el("div", "msg", "A quiet day. Nothing needs you."));
   const section = (title, lines) => { if (!lines.length) return; const sec = el("div", "dg-sec"); sec.append(el("div", "dg-h", title)); lines.forEach(l => sec.append(l)); box.append(sec); };
+  section("Today", (d.calendar || []).map(e => el("div", "dg-line", `${e.when} · ${e.title}${e.location ? ` (${e.location})` : ""}${e.google ? " · Google" : ""}`)));
+  if ((d.email || []).length) {
+    const lines = d.email.map(m => el("div", "dg-line", `${m.from}: ${m.subject}${m.why ? ` (${m.why})` : ""}`));
+    const open = el("button", "btn", "Open my email"); open.type = "button";
+    open.addEventListener("click", () => ask("show my email"));
+    section(`Important email · ${d.email_count || d.email.length}`, [...lines, open]);
+  }
   if (d.waiting_count) {
     const lines = (d.waiting || []).map(w => el("div", "dg-line", w.title));
     const open = el("button", "btn", "Open the mailbox"); open.type = "button";

@@ -15,7 +15,8 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import asyncpg
 import httpx
@@ -164,7 +165,20 @@ async def build_digest() -> dict:
             "ORDER BY first_at DESC LIMIT 20")], key=lambda n: (n["status"] != "open", rank.get(n["severity"], 9)))
     except Exception as exc:               # an older database without notices: no section
         log.info("no notices for the digest: %s", exc)
-    return analysis.digest(rows, now, r, waiting, releases, analysis.drift(rows, now, r), computers, notices)
+    calendar, email = [], []
+    try:                                   # Beacon: today on your calendars, and important email since yesterday
+        tz = ZoneInfo(r.timezone)
+        start = datetime.combine(now.astimezone(tz).date(), datetime.min.time(), tz)
+        calendar = [dict(x) for x in await app.state.db.fetch(
+            "SELECT title, starts_at, ends_at, all_day, location, source FROM calendar_events WHERE starts_at < $2 "
+            "AND COALESCE(ends_at, starts_at) > $1 ORDER BY all_day DESC, starts_at LIMIT 30", start, start + timedelta(days=1))]
+        email = [dict(x) for x in await app.state.db.fetch(
+            "SELECT from_name, from_addr, subject, why FROM mail_items WHERE important AND received_at > now() - "
+            "interval '24 hours' ORDER BY received_at DESC LIMIT 20")]
+    except Exception as exc:               # an older database without Beacon's tables: no sections
+        log.info("no calendar or email for the digest: %s", exc)
+    return analysis.digest(rows, now, r, waiting, releases, analysis.drift(rows, now, r), computers, notices,
+                           calendar, email)
 
 
 async def analysis_loop() -> None:
