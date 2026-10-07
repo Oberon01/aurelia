@@ -158,3 +158,24 @@ def test_what_pulsar_noticed_and_his_automations_are_in_the_digest(month):
                                         task(NOW - timedelta(hours=3), "orbit.light", "act", trigger="schedule")],
                           NOW, RULES, waiting=[], releases=[], anomalies=[])
     assert ran["quiet"] is False and len(ran["automatic"]) == 2
+
+
+def test_today_on_his_calendars_and_important_email_are_in_the_digest(month):
+    quiet_rows = [r for r in month if r["status"] == "completed"]
+    from zoneinfo import ZoneInfo
+    chi = ZoneInfo(RULES.timezone)
+    nine = NOW.astimezone(chi).replace(hour=9, minute=30)
+    d = analysis.digest(quiet_rows, NOW, RULES, waiting=[], releases=[], anomalies=[],
+                        calendar=[{"title": "Trip to Austin", "starts_at": nine, "all_day": True, "location": "", "source": "mine"},
+                                  {"title": "Standup", "starts_at": nine, "all_day": False, "location": "Zoom", "source": "google"}],
+                        email=[{"from_name": "Sam Lee", "from_addr": "sam@example.com", "subject": "Lunch?",
+                                "why": "someone you've written to"}])
+    assert d["quiet"] is False
+    assert d["calendar"] == [{"title": "Trip to Austin", "when": "all day", "location": "", "google": False},
+                             {"title": "Standup", "when": "9:30 AM", "location": "Zoom", "google": True}]
+    assert d["email"] == [{"from": "Sam Lee", "subject": "Lunch?", "why": "someone you've written to"}] and d["email_count"] == 1
+    plain = analysis.digest(quiet_rows, NOW, RULES, waiting=[], releases=[], anomalies=[])
+    assert plain["calendar"] == [] and plain["email"] == []
+    only_cal = analysis.digest(quiet_rows, NOW, RULES, waiting=[], releases=[], anomalies=[],
+                               calendar=[{"title": "Dentist", "starts_at": nine, "all_day": False, "location": "", "source": "mine"}])
+    assert only_cal["quiet"] is False                                   # a day with something on it isn't quiet

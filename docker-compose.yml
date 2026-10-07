@@ -67,13 +67,15 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      STACK_GUARD: "1"                    # what only my services may do (register, report a device) comes from my network
     volumes:
       - ./config:/config:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"   # reach a local Ollama on the host (Linux)
     networks:
-      - default
-      - homelab                           # to reach Jellyfin (Quasar), which publishes no port
+      default:
+        aliases: [aurelia-core]           # only on my own network: services on both reach me over it, never the home lab
+      homelab: {}                         # to reach Jellyfin (Quasar), which publishes no port
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -163,6 +165,7 @@ services:
     env_file: .env                 # TRILIUM_URL, TRILIUM_TOKEN (optional: Trilium notes)
     environment:
       FUNCTION_URL: http://kepler:9000
+      ORCHESTRATOR_URL: http://aurelia-core:8000   # on both networks: reach me over my own (my name for it there)
       # Its research library (tables made by the orchestrator's migrations); reads the "learning" part of your profile.
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       DOWNLOADS_DIR: /downloads
@@ -205,6 +208,139 @@ services:
       retries: 3
     stop_grace_period: 30s
     restart: unless-stopped
+
+  # Lagrange: connections to other services with no new code (MCP servers, Home Assistant, webhooks).
+  # Each connection registers as a function of its own. Keys and tokens live in its vault: encrypted in
+  # Postgres, with the key in ./data/lagrange (only Lagrange mounts it, so nothing else can open them).
+  lagrange:
+    build: ./services/functions/lagrange
+    env_file: .env
+    environment:
+      # Names that exist only on my own network, so the orchestrator and Lagrange always talk over it (Lagrange
+      # refuses its API from anywhere else, your home-lab network included).
+      FUNCTION_URL: http://lagrange-core:9000
+      ORCHESTRATOR_URL: http://aurelia-core:8000
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      VAULT_KEY_PATH: /data/vault.key
+      STACK_GUARD: "1"
+    volumes:
+      - ./data/lagrange:/data
+    cap_add:
+      - NET_ADMIN                         # only to fence local MCP servers off from my own network (iptables)
+    networks:
+      default:
+        aliases: [lagrange-core]
+      homelab: {}                         # to reach your home-lab services by name (Gitea, Home Assistant…)
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9000/health', timeout=3).status == 200 else 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    stop_grace_period: 30s
+    restart: unless-stopped
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=aurelia_default
+      - traefik.http.services.lagrange.loadbalancer.server.port=9000
+      # The connect form posts here straight from your display (a paired device's key, checked by the
+      # orchestrator), so keys you type never pass through the orchestrator.
+      - traefik.http.routers.lagrange.rule=PathPrefix(`/lagrange/`)
+      - traefik.http.routers.lagrange.entrypoints=web
+      - traefik.http.routers.lagrange.priority=100
+      - traefik.http.routers.lagrange.service=lagrange
+      - traefik.http.routers.lagrange.middlewares=aurelia-strip@docker,aurelia-auth@docker
+      # A service's sign-in redirect and webhooks in carry no key of yours: a one-time state, or the
+      # webhook's own secret in its address, guards them.
+      - traefik.http.routers.lagrange-open.rule=Path(`/lagrange/oauth/callback`) || PathPrefix(`/hooks/`)
+      - traefik.http.routers.lagrange-open.entrypoints=web
+      - traefik.http.routers.lagrange-open.priority=200
+      - traefik.http.routers.lagrange-open.service=lagrange
+      - traefik.http.routers.lagrange-open.middlewares=aurelia-strip@docker
+
+  # Beacon: your email (Gmail) and calendars. Your app password, calendar password and ntfy topic are
+  # entered on its setup form, which posts straight here (never through the orchestrator), and kept in its
+  # vault, whose key only Beacon mounts.
+  beacon:
+    build: ./services/functions/beacon
+    env_file: .env
+    environment:
+      FUNCTION_URL: http://beacon-core:9000
+      ORCHESTRATOR_URL: http://aurelia-core:8000
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      VAULT_KEY_PATH: /data/vault.key
+      RADICALE_URL: http://radicale:5232
+      RADICALE_USERS: /radicale-auth/users
+      STACK_GUARD: "1"
+    volumes:
+      - ./data/beacon:/data
+      - ./data/radicale-auth:/radicale-auth      # only the calendar's password file (it writes the hash)
+    networks:
+      default:
+        aliases: [beacon-core]
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9000/health', timeout=3).status == 200 else 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    stop_grace_period: 30s
+    restart: unless-stopped
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=aurelia_default
+      - traefik.http.services.beacon.loadbalancer.server.port=9000
+      # The setup form posts here straight from your display (a paired device's key, checked by the
+      # orchestrator), so passwords you type never pass through the orchestrator.
+      - traefik.http.routers.beacon.rule=PathPrefix(`/beacon/`)
+      - traefik.http.routers.beacon.entrypoints=web
+      - traefik.http.routers.beacon.priority=100
+      - traefik.http.routers.beacon.service=beacon
+      - traefik.http.routers.beacon.middlewares=aurelia-strip@docker,aurelia-auth@docker
+
+  # Your calendar server (Radicale, CalDAV). Your iPhone reaches it at https://<this server>/dav/ (Tailscale
+  # Serve, so your tailnet only) with its own password, set on Beacon's form: a calendar app can't present a
+  # paired device's key. Beacon reaches it directly on my network.
+  radicale:
+    build: ./services/functions/radicale
+    volumes:
+      - ./data/radicale:/data                     # your events: back up by copying this folder
+      - ./data/radicale-auth:/auth                # its one login (Beacon writes it; empty until you set it)
+    healthcheck:
+      test: ["CMD", "python", "-c", "import http.client,sys; c=http.client.HTTPConnection('localhost',5232,timeout=3); c.request('GET','/'); sys.exit(0 if c.getresponse().status < 500 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    stop_grace_period: 15s
+    restart: unless-stopped
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=aurelia_default
+      - traefik.http.services.radicale.loadbalancer.server.port=5232
+      - traefik.http.routers.radicale.rule=PathPrefix(`/dav/`) || Path(`/dav`)
+      - traefik.http.routers.radicale.entrypoints=web
+      - traefik.http.routers.radicale.priority=300
+      - traefik.http.routers.radicale.service=radicale
+      - traefik.http.routers.radicale.middlewares=aurelia-strip@docker,radicale-prefix,radicale-strip
+      - traefik.http.middlewares.radicale-strip.stripprefix.prefixes=/dav
+      - traefik.http.middlewares.radicale-prefix.headers.customrequestheaders.X-Script-Name=/dav
+      # Calendar apps look here first ("server: <this server>"); Radicale answers with a relative /dav/.
+      - traefik.http.routers.radicale-find.rule=Path(`/.well-known/caldav`)
+      - traefik.http.routers.radicale-find.entrypoints=web
+      - traefik.http.routers.radicale-find.priority=300
+      - traefik.http.routers.radicale-find.service=radicale
+      - traefik.http.routers.radicale-find.middlewares=aurelia-strip@docker,radicale-prefix
 
   # Chrysalis: Aurelia's update system (protected core). Watches GitHub, tests,
   # deploys and rolls back. It drives Docker, so it only runs where enabled with

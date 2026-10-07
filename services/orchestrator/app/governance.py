@@ -66,6 +66,7 @@ class ToolPolicy(BaseModel):
 
 class FunctionPolicy(BaseModel):
     function: str
+    connection: bool = False            # a service connected through Lagrange (his own rules for it)
     enabled: bool = True
     tools: dict[str, ToolPolicy] = {}
     rate_limit_per_minute: int | None = None
@@ -84,6 +85,9 @@ class GovernanceStore:
         self.root = Path(root)
         self.charter = Charter()
         self.functions: dict[str, FunctionPolicy] = {}
+        # Services connected through Lagrange (kept current from the registry). One with no rules file of
+        # its own is governed by the charter's default: every tool is change-tier, so it asks first.
+        self.connections: set[str] = set()
         self.load_all()
 
     # ---- loading ---------------------------------------------------------
@@ -133,7 +137,7 @@ class GovernanceStore:
         enforced = self.charter.enforced
         if user not in self.charter.users:
             return Decision(allowed=False, tier="never", reason=f"unknown user '{user}'")
-        policy = self.functions.get(function)
+        policy = self.policy(function)
         if policy is None:
             return Decision(allowed=False, tier="never", reason=f"no policy for function '{function}'")
         if not policy.enabled:
@@ -151,6 +155,20 @@ class GovernanceStore:
                             reason=f"'{function}.{tool}' is a '{tier}' action and needs your confirmation")
         return Decision(allowed=True, tier=tier)
 
+    def policy(self, function: str) -> FunctionPolicy | None:
+        """A function's rules: its file, or for a connected service with no file yet, the default (asks first)."""
+        policy = self.functions.get(function)
+        if policy is None and function in self.connections:
+            return FunctionPolicy(function=function, connection=True)
+        return policy
+
+    def may_connect(self, name: str) -> str | None:
+        """Why a connected service can't use this name (it's one of my own functions), or None."""
+        policy = self.functions.get(name)
+        if policy is not None and not policy.connection:
+            return f"“{name}” is one of my own functions. Give the connection another name."
+        return None
+
     def rate_limit(self, function: str) -> int:
         policy = self.functions.get(function)
         if policy and policy.rate_limit_per_minute:
@@ -159,7 +177,7 @@ class GovernanceStore:
 
     def for_function(self, function: str) -> dict[str, Any] | None:
         """What a function fetches: the principles plus its own policy."""
-        policy = self.functions.get(function)
+        policy = self.policy(function)
         if policy is None:
             return None
         return {"charter_version": self.charter.version, "principles": self.charter.principles,

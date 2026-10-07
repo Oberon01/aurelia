@@ -12,6 +12,7 @@ class _Device:
     def get_battery_powered(self): return self._battery is not None
     def get_battery_level(self): return self._battery
     def start_updater(self): self.updater_started = True
+    def set_update_callback(self, fn): self.callbacks = getattr(self, "callbacks", []) + [fn]
     async def _async_fetch_state(self): self.fetches += 1
 
 

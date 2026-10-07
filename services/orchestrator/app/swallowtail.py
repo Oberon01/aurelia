@@ -93,6 +93,7 @@ class CheckFile(BaseModel):
 EXPECT_KEYS = {"route", "tool", "asks_to_confirm", "status", "reply_starts", "reply_has", "reply_not_has",
                "reply_matches", "result", "result_has", "error_has", "confirmed"}
 ROUTES = {"fastpath", "llm", "not fastpath"}
+LOOKS_ONLY = "looks only"                    # expect tool: every tool that ran only looked (reference or read tier)
 
 
 def checks_dir(app) -> Path:
@@ -136,6 +137,9 @@ def validate(f: CheckFile) -> list[str]:
             out.append(f"{where}: route is one of {', '.join(sorted(ROUTES))}")
         if c.expect and not (c.say or c.tool):
             out.append(f"{where}: expect needs a say or a tool")
+        for k in ("result", "result_has"):
+            if k in c.expect and not isinstance(c.expect[k], dict):
+                out.append(f"{where}: {k} is a list of fields and what each should be ({{field: value}})")
         if not (c.expect or c.verify or c.question):
             out.append(f"{where} checks nothing (no expect, verify or question)")
         for st in c.after:
@@ -262,6 +266,14 @@ def judge(expect: dict, act: dict) -> list[dict]:
             ok = (r != "fastpath") if v == "not fastpath" else (r == v)
             lines.append(_line("route", v, r, ok))
         elif k == "tool":
+            if v == LOOKS_ONLY:                    # it may look things up (to ask a better question), never act
+                acted = [t["tool"] for t in act.get("tools", []) if t.get("tier") not in ("reference", "read")]
+                held = list(act.get("would_act") or [])              # tried to act (a check holds it): not only looking
+                ok = not acted and not held
+                ran = ", ".join(f"{t['tool']} ({t.get('tier') or 'unknown tier'})" for t in act.get("tools", []))
+                lines.append(_line("tools it ran", "look-ups only, nothing that acts",
+                                   (ran or "none") + (f"; tried to act: {', '.join(held)}" if held else ""), ok))
+                continue
             ok = (not tools) if v in ("none", None, False) else (v in tools)
             lines.append(_line("tool it ran", v, ", ".join(tools) or "none", ok))
         elif k == "asks_to_confirm":
@@ -332,8 +344,9 @@ async def _tasks_of(state: dict, ids: list[str], within: float) -> list[dict]:
             continue
         seen.add(t["id"])
         res = await wait_for_result(t["id"], within)
-        tool = t["tool"] or await db.pool().fetchval("SELECT tool FROM task_runs WHERE id=$1", uuid.UUID(t["id"]))
-        out.append({"tool": tool, "status": (res or {}).get("status") or "still running",
+        row = await db.pool().fetchrow("SELECT tool, tier FROM task_runs WHERE id=$1", uuid.UUID(t["id"]))
+        tool = t["tool"] or (row["tool"] if row else None)
+        out.append({"tool": tool, "tier": row["tier"] if row else None, "status": (res or {}).get("status") or "still running",
                     "error": (res or {}).get("error"), "result": (res or {}).get("result")})
     return out
 

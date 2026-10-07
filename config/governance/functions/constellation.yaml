@@ -32,6 +32,7 @@ tools:
   notify:          { tier: act }         # notifications: a test to the device asking, or which devices have them on
   clear:           { tier: act }         # close panels on a display (checked from its report); everything: also home
   send:            { tier: act }         # a panel, link or note to another display (or a group by role)
+  show:            { tier: act }         # a look-up shown on another display, as a routine or automation step
   search_files:    { tier: reference }
   list_processes:  { tier: reference }   # what's running on a computer (node reporting)
   health:          { tier: reference }   # how a computer is doing: hardware, live state, why it's slow
@@ -96,7 +97,7 @@ rules:
   # on if it's off and switches it to this input first. tv: Orbit's name for the TV (empty = your
   # only TV). input: "HDMI 2", or the name you gave the input on the TV. Empty input = not set.
   screens:
-    - computer: Node-TV
+    - computer: TV PC
       tv: Living room TV
       input: ""                        # which HDMI the TV PC is plugged into, e.g. "HDMI 2"
   targeting:

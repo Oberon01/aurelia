@@ -45,7 +45,7 @@ RULES = {
 NEVER = [re.compile(p) for p in (
     r"^orbit\.unlock$", r"\.(?:install|install_package|uninstall|remove_package|speaker)$", r"\.(?:kill|close)_process$",
     r"sign_in$", r"\.submit$", r"\.(?:upload|purchase|download)$", r"\.(?:forget|forget_alias|delete_file|move_file)$",
-    r"^chrysalis\.", r"^admiral\.", r"^morpho\.", r"^pulsar\.", r"\.(?:send|copy|paste|notify)$", r"read_secrets$")]
+    r"^chrysalis\.", r"^admiral\.", r"^morpho\.", r"^pulsar\.", r"^lagrange\.", r"\.(?:send|copy|paste|notify)$", r"read_secrets$")]
 
 
 def rules(app) -> dict:
@@ -57,6 +57,8 @@ def rules(app) -> dict:
 def never(tool: str, args: dict | None) -> bool:
     if any(p.search(tool) for p in NEVER):
         return True
+    if tool == "beacon.drop_event" or (tool == "beacon.save_event" and ((args or {}).get("draft") or {}).get("invite")):
+        return True                                       # removing an event, or inviting anyone: always asked
     return tool == "constellation.restart" and str((args or {}).get("action") or "restart") != "restart"   # shutdown
 
 

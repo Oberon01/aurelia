@@ -193,8 +193,22 @@ async def catalog(app) -> dict[str, dict]:
             continue
         for t in fn.tools:
             q = f"{fn.name}.{t.name}"
+            if q in CONFIRM_ONLY:
+                continue
             out[q] = {"description": t.description, "schema": t.input_schema or {}, "tier": tier_of(app, q)}
     return out
+
+
+# Only his yes to a read-back runs these (an email, an event): never a plan's step, whoever wrote the plan.
+CONFIRM_ONLY = {"pulsar.save", "beacon.send", "beacon.save_event", "beacon.drop_event"}
+
+
+MODEL_HIDDEN = {"constellation.show"}       # steps only his own words make (a routine's "send my youtube to my phone")
+
+
+def _for_model(cat: dict[str, dict]) -> dict[str, dict]:
+    """The tools the planning model may use: never one only his own words may make."""
+    return {q: t for q, t in cat.items() if q not in MODEL_HIDDEN}
 
 
 def _catalog_text(cat: dict[str, dict]) -> str:
@@ -317,7 +331,7 @@ def view(plan: dict, steps: list[dict]) -> dict:
     asking = any(s["status"] == "waiting" and s["tool"] == ASK for s in steps)
     head = {"planning": "Planning", "running": f"Plan · {done} of {len(live)} steps",
             "waiting": "Plan · a question for you" if asking else "Plan · waiting for you",
-            "done": "Plan done", "gaps": "Plan done, with gaps", "failed": "Plan stopped",
+            "done": "Plan done", "kept": "Plan done · kept for later", "gaps": "Plan done, with gaps", "failed": "Plan stopped",
             "stopped": "Plan stopped", "expired": "Plan expired: no answer in time"}.get(st, "Plan")
     if plan.get("report") and plan["report"].get("headline"):
         head = str(plan["report"]["headline"])[:160]
@@ -351,6 +365,14 @@ async def publish(app, plan_id: str) -> None:
 
 
 # ---- checking a step's own result -------------------------------------------------------------------
+
+def kept(result: Any) -> str | None:
+    """A look-up kept for a display that isn't open (constellation.show): not shown yet, so never "done", but
+    not a failure either. It shows there the moment that display opens."""
+    if isinstance(result, dict) and isinstance(result.get("kept"), dict):
+        return str(result.get("headline") or "kept for a display that isn't open")[:300]
+    return None
+
 
 def unconfirmed(result: Any) -> str | None:
     """Why a completed result doesn't count as done: it says itself that it couldn't be confirmed."""
@@ -584,8 +606,9 @@ async def _await_step(app, plan: dict, n: int, task_id: str) -> None:
         return
     if res["status"] == "completed":
         why = unconfirmed(res["result"])
-        await _set_step(pid, n, status="unconfirmed" if why else "done", result=_trim(res["result"]), note=why,
-                        finished_at=_now())
+        held = None if why else kept(res["result"])
+        await _set_step(pid, n, status="unconfirmed" if why else "kept" if held else "done", result=_trim(res["result"]),
+                        note=why or held, finished_at=_now())
         return
     _, steps = await load(pid)
     step = next(s for s in steps if s["n"] == n)
@@ -604,7 +627,7 @@ def _now():
 
 
 def ready(steps: list[dict]) -> list[dict]:
-    done = {s["n"] for s in steps if s["status"] == "done"}
+    done = {s["n"] for s in steps if s["status"] in ("done", "kept")}
     at = _now()
     return [s for s in steps if s["status"] == "pending" and all(d in done for d in s["depends"])
             and not (s.get("not_before") and s["not_before"] > at)]
@@ -633,7 +656,7 @@ def blocked(steps: list[dict]) -> list[dict]:
 async def replan(app, plan: dict, steps: list[dict], trouble: list[dict]) -> None:
     """Change course: the model sees what happened and plans another route for the steps that haven't run."""
     pid = str(plan["id"])
-    done = frozenset(s["n"] for s in steps if s["status"] == "done")
+    done = frozenset(s["n"] for s in steps if s["status"] in ("done", "kept"))
     nxt = max(s["n"] for s in steps) + 1
     asks_left = MAX_ASKS - sum(1 for s in steps if s["tool"] == ASK and s["status"] != "replaced")
     room = min(MAX_STEPS, MAX_TOTAL - len([s for s in steps if s["status"] != "replaced"]))
@@ -643,7 +666,7 @@ async def replan(app, plan: dict, steps: list[dict], trouble: list[dict]) -> Non
         change["why"] = "I couldn't change course again: the plan is as long as it can get."
     else:
         try:
-            cat = await catalog(app)
+            cat = _for_model(await catalog(app))
             text = (f"His request: {plan['goal']}\n\nThe steps so far:\n{_results_text(steps, room=RESULT_KEEP // 4)}\n\n"
                     f"What went wrong: " + "; ".join(f"step {s['n']} ({s['title']}) {s['status']}: {s.get('note') or ''}"
                                                    for s in trouble)
@@ -736,7 +759,8 @@ async def finish(app, plan_id: str) -> None:
     if plan["status"] not in ("running", "waiting"):
         return
     live = [s for s in steps if s["status"] != "replaced"]
-    ok = [s for s in live if s["status"] == "done" and s["tool"] != ASK]
+    ok = [s for s in live if s["status"] in ("done", "kept") and s["tool"] != ASK]
+    held = [s for s in live if s["status"] == "kept" and not s["superseded"]]
     if not ok:
         bad = next((s for s in live if s["status"] in BAD), None)
         await _set_plan(plan_id, status="failed",
@@ -752,7 +776,7 @@ async def finish(app, plan_id: str) -> None:
         counted = [s for s in live if s["tool"] != ASK and not s["superseded"]]   # a step another route replaced isn't owed
         rep = {"headline": f"{skill['name']}: {len(ok)} of {len(counted)} steps done",
                "summary": "\n".join(f"{s['n']}. {s['title']}: " + (str((s.get('result') or {}).get('headline') or 'done')
-                                                                  if s["status"] == "done" else s["status"])
+                                                                  if s["status"] in ("done", "kept") else s["status"])
                                     for s in counted),
                "meets_goal": not any(s["status"] in (*BAD, "skipped") for s in counted), "gaps": []}
     else:
@@ -770,13 +794,19 @@ async def finish(app, plan_id: str) -> None:
     # Not done: anything that failed, wasn't confirmed or was skipped, unless another route replaced it.
     open_ = [s for s in live if s["status"] in (*BAD, "skipped") and not s["superseded"]]
     status = "done" if report["meets_goal"] and not open_ else "gaps"
+    if status == "done" and held:                    # everything else done; a look-up waits for a display to open
+        status = "kept"
+        report["headline"] = report["headline"] or plan["goal"][:120]
+        report["kept"] = [f"Step {s['n']} ({s['title']}): {s.get('note') or 'kept for later'}" for s in held]
     if open_ and not report["gaps"]:
         report["gaps"] = [f"Step {s['n']} ({s['title']}) {s['status']}" for s in open_]
     await _set_plan(plan_id, status=status, report=report)
     await publish(app, plan_id)
     trig = await db.pool().fetchval("SELECT trigger FROM task_runs WHERE id=$1", plan["task_id"]) if plan.get("task_id") else None
-    if not (status == "done" and trig == "automation"):   # an automation's routine that worked: the digest, not his phone
-        await _tell(app, plan, "Plan done" if status == "done" else "Plan done, with gaps",
+    # An automation's routine that worked: the digest, not his phone. One whose look-up was kept: that display
+    # already got its own notification when the look-up was kept, so not a second one.
+    if not (status in ("done", "kept") and trig == "automation"):
+        await _tell(app, plan, {"done": "Plan done", "kept": "Plan done, one part kept for later"}.get(status, "Plan done, with gaps"),
                     report["headline"] or plan["goal"][:120])
     if status == "done":
         try:
@@ -839,9 +869,10 @@ async def plan_tool(app, user: str, args: dict) -> dict:
             await db.pool().execute("UPDATE plans SET skill_id=$2, slots=$3::jsonb WHERE id=$1", uuid.UUID(plan_id),
                                     sk["id"], json.dumps(slots))
         else:
+            mc = _for_model(cat)
             raw = _json_in(await _model(app, plan_id, PLAN_SYSTEM % (MAX_STEPS, MAX_ASKS),
-                                        f"His request: {goal}\n\nTools:\n{_catalog_text(cat)}"))
-            steps = validate(raw, cat)
+                                        f"His request: {goal}\n\nTools:\n{_catalog_text(mc)}"))
+            steps = validate(raw, mc)
     except ValueError as exc:
         await _set_plan(plan_id, status="failed", error=f"I couldn't make a plan: {exc}"[:400])
         raise ValueError(f"I couldn't make a plan for that: {exc}")

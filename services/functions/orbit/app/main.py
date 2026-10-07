@@ -184,11 +184,22 @@ async def heartbeat() -> None:
             await asyncio.sleep(settings.heartbeat_seconds)
 
 
+async def report_change(device: Any) -> None:
+    """A SmartRent device changed (its own live update): tell Pulsar, which starts any automation waiting for
+    it (a door unlocking, a light turning on, a leak sensor getting wet). Pulsar keeps the last state it heard,
+    so a repeat of the same state starts nothing."""
+    d = describe(device)
+    async with httpx.AsyncClient(timeout=5) as client:
+        await client.post(f"{settings.orchestrator_url}/pulsar/state", json={
+            "source": "orbit", "id": str(d["name"]).lower(), "name": d["name"], "kind": d["kind"], "state": d})
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.redis = Redis.from_url(settings.redis_url)
     app.state.aliases = AliasStore(app.state.redis)
-    app.state.home = Home(settings.smartrent_email, settings.smartrent_password, app.state.redis)
+    app.state.home = Home(settings.smartrent_email, settings.smartrent_password, app.state.redis,
+                          on_change=report_change)
     app.state.roku = Roku(app.state.redis)
     tasks = [asyncio.create_task(heartbeat()), asyncio.create_task(app.state.home.start()),
              asyncio.create_task(tv_discovery())]

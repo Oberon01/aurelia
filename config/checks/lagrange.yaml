@@ -1,0 +1,63 @@
+# Field checks for Lagrange (Phase 11): connecting services from the display with no code, and the first use
+# of a connected service asking you. Home Assistant's changes and a webhook in starting automations.
+release: Lagrange (Phase 11)
+phase: 11
+checks:
+  - id: connections
+    name: My connections open
+    say: "show my connections"
+    expect: { route: fastpath, tool: lagrange.connections, status: completed }
+
+  - id: form
+    name: The connect form opens
+    say: "connect a service"
+    expect: { route: fastpath, tool: lagrange.connect_form, status: completed }
+
+  - id: connect-gitea
+    name: You connect Gitea from the display, with no code
+    needs_you: "Run Gitea's official MCP server in http mode next to Gitea (docker.gitea.com/gitea-mcp-server with -t http, on your home-lab network). Then on a display say “connect a service”: kind “An MCP server at an address”, name Gitea, its address (http://<its name>:8080/mcp), “A token” with a Gitea access token. Press Check it, then Connect Gitea."
+    question: "Did the form list Gitea's tools before you connected it, and did the token disappear from the form once it was checked?"
+
+  - id: gitea-tools
+    name: Gitea's tools are listed, from its own connection
+    needs_you: "Connect Gitea first (the check before this one)."
+    say: "show the gitea connection"
+    expect:
+      route: fastpath
+      tool: lagrange.connection
+      status: completed
+      result: { connection.label: Gitea, connection.status: connected }
+
+  - id: gitea-asks
+    name: A Gitea tool asks before it runs
+    needs_you: "Say “gitea list my repos” on a display."
+    question: "Did I ask for your OK first, and after you said yes, did your repositories show?"
+
+  - id: home-assistant
+    name: Home Assistant connects, and its changes can start an automation
+    needs_you: "Say “connect home assistant”: its address (http://192.168.1.178:8123) and a long-lived token (your Home Assistant profile, Security). Press Check it, then Connect Home Assistant."
+    say: "when the {lock} unlocks, turn on the {light}"
+    expect:
+      route: fastpath
+      asks_to_confirm: pulsar.save
+      reply_starts: "When "
+
+  - id: door-starts-light
+    name: The door unlocking turns on the light, checked by the light's own report
+    needs_you: "Say “when the {lock} unlocks, turn on the {light}” and confirm the read-back. Then unlock the {lock} (and lock it again)."
+    verify:
+      automation: "{light}"
+      outcome: done
+      within: 5m
+    after:
+      - delete: automation
+      - say: "turn off the {light}"
+
+  - id: webhook
+    name: A webhook in can start an automation
+    needs_you: "Say “connect a webhook”, name it Arrive home, press Check it and Connect, then open the connection and press Show its address."
+    say: "when the arrive home webhook is called, turn on the {light}"
+    expect:
+      route: fastpath
+      asks_to_confirm: pulsar.save
+      reply_starts: "When the Arrive home webhook is called"

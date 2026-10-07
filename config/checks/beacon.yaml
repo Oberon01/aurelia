@@ -1,0 +1,64 @@
+# Field checks for Beacon (Phase 12): your Gmail, your calendar server and Google calendar, and ntfy.
+# Done when: the day's calendar and important email appear in the digest, an event I add shows on your iPhone,
+# and a critical notice reaches your phone even when the app's push doesn't.
+release: Beacon (Phase 12)
+phase: 12
+checks:
+  - id: setup-form
+    name: The setup form opens
+    say: "set up my email"
+    expect: { route: fastpath, tool: beacon.setup, status: completed }
+
+  - id: status
+    name: I can say what's set up
+    say: "is my email connected"
+    expect: { route: fastpath, tool: beacon.status, status: completed }
+
+  - id: gmail
+    name: Your Gmail is read, and important email is flagged by your rules
+    needs_you: "Say “set up my email”: your Gmail address and an app password (Google account → Security → 2-Step Verification → App passwords). Press Save; it should say Connected. Then say “show my email”."
+    question: "Does the email panel show your recent important email, each with why it's important?"
+
+  - id: inbox
+    name: The inbox opens from its own words
+    say: "show my email"
+    expect: { route: fastpath, tool: beacon.inbox }
+
+  - id: calendar-iphone
+    name: Your calendar server is on your iPhone
+    needs_you: "On the setup form, set a calendar password (12 characters or more) and press Save. Then on your iPhone: Settings → Calendar → Accounts → Add Account → Other → Add CalDAV Account; server: the address you open me at (without https://), user kentrell, that password."
+    question: "Does a calendar named “Calendar” from this server show in your iPhone's Calendar app?"
+
+  - id: event-on-iphone
+    name: An event I add is read back first, then shows on your iPhone
+    needs_you: "Say “add check event tomorrow at 9am to my calendar” and confirm the read-back. Then look at tomorrow in your iPhone's Calendar app."
+    question: "Did “check event” appear tomorrow at 9:00 AM on your iPhone? (Then say “remove check event from my calendar” and confirm.)"
+
+  - id: agenda
+    name: What's on your calendar, both calendars together
+    say: "what's on my calendar tomorrow"
+    expect: { route: fastpath, tool: beacon.agenda, status: completed }
+
+  - id: event-read-back
+    name: Adding an event never saves without your yes
+    say: "add check readback tomorrow at 10am to my calendar"
+    expect:
+      route: fastpath
+      tool: beacon.add_event
+      asks_to_confirm: beacon.save_event
+      reply_has: ["check readback"]
+
+  - id: send-confirmed
+    name: An email is read back whole, and sent only on your yes
+    needs_you: "Say “email <your own Gmail address> a test that says hello from Aurelia” and read the confirmation: it shows who it's to, the subject and the whole message. Press Go ahead."
+    question: "Did the panel say “Sent to …” and did the email arrive in your inbox?"
+
+  - id: digest
+    name: The digest shows today's calendar and important email
+    needs_you: "Say “show my digest” (or wait for tomorrow morning's)."
+    question: "Does it have a “Today” section with your calendar and an “Important email” section?"
+
+  - id: ntfy
+    name: Critical notices also reach your phone through ntfy
+    needs_you: "On the setup form, enter your ntfy address (e.g. http://192.168.1.178:8090) and a long topic name, and press Save. Subscribe to that topic in the ntfy app on your phone."
+    question: "Did the test notification (“This is where critical notices also reach you.”) arrive on your phone?"
