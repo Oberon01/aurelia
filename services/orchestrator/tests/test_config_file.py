@@ -214,12 +214,19 @@ GOVERNANCE = CONFIG.parent / "governance" / "functions"
 NO_FAST_PATH = {
     "nebula.youtube": "covered by quasar.youtube (\"youtube X\" searches through it)",
     "orbit.tv_play": "covered by quasar.play, which plays a title on a Roku TV through it",
+    "constellation.show": "a routine's or automation's step; said aloud, \"send my youtube to my phone\" does the "
+                          "same by fast path (a look-up shown on another display)",
     # Planned in governance, not built yet: when one is built, it needs a fast path (this test says so).
     "constellation.search_files": "planned (Kuiper)", "constellation.browser_history": "planned",
     "constellation.read_file": "planned (Kuiper)", "constellation.launch": "planned",
     "constellation.move_file": "planned (Kuiper)", "constellation.delete_file": "planned (Kuiper)",
     "nebula.submit": "planned", "nebula.upload": "planned",
     "pulsar.save": "only his confirmation of a read-back runs it (never a phrase, never the model)",
+    "beacon.draft_email": "who it goes to and what it says are his own words: the model writes the draft, and "
+                          "it's read back whole before anything is sent",
+    "beacon.send": "only his confirmation of a draft runs it (never a phrase, never the model)",
+    "beacon.save_event": "only his confirmation of a read-back runs it (never a phrase, never the model)",
+    "beacon.drop_event": "only his confirmation of a read-back runs it (never a phrase, never the model)",
 }
 
 
@@ -372,3 +379,164 @@ def test_automations_have_fast_paths_and_take_nothing_else(said, tool):
         assert got is None or not got.startswith("pulsar."), (said, got)
     else:
         assert got == tool, (said, got)
+
+
+# The HUD's own buttons (the player spot and the day tape) say what he'd say, so each one must hit its fast path:
+# no model, and the same checks as when he types it.
+@pytest.mark.skipif(not CONFIG.exists(), reason="the repo's config isn't in the test image")
+@pytest.mark.parametrize("said,tool,args", [
+    ("pause on spotify", "quasar.spotify", {"action": "pause"}),
+    ("resume on spotify", "quasar.spotify", {"action": "resume"}),
+    ("next on spotify", "quasar.spotify", {"action": "next"}),
+    ("previous on spotify", "quasar.spotify", {"action": "previous"}),
+    ("pause on the TV PC", "constellation.media", {"action": "pause", "target": "TV PC"}),
+    ("play on the TV PC", "constellation.media", {"action": "play", "target": "TV PC"}),
+    ("play the next one on the TV PC", "constellation.media", {"action": "next", "target": "TV PC"}),
+    ("rewind 10 seconds on the TV PC", "constellation.media", {"action": "back", "target": "TV PC"}),
+    ("show my automations", "pulsar.automations", {}),
+    ("what's scheduled", "admiral.scheduled", {}),
+    ("show my digest", "parallax.digest", {}),
+])
+def test_the_hud_buttons_say_what_a_fast_path_hears(said, tool, args):
+    from app import fastpath
+    from app.config import RuntimeConfig
+    cfg = RuntimeConfig.model_validate(yaml.safe_load(CONFIG.read_text()))
+    m = fastpath.match(said, cfg.fastpath.patterns)
+    assert m and m.pattern.tool == tool, (said, m and m.pattern.tool)
+    assert {k: m.args.get(k) for k in args} == args, (said, m.args)
+    view = (HERE.parents[1] / "app" / "static" / "view.html").read_text()
+    words = said.replace("TV PC", "${n.node}")
+    assert f'"{words}"' in view or f"`{words}`" in view, f"the HUD no longer says {said!r}"
+
+
+# Lagrange: connections in his words, and never stealing a phrase that already meant something else.
+@pytest.mark.skipif(not CONFIG.exists(), reason="the repo's config isn't in the test image")
+@pytest.mark.parametrize("said,tool,args", [
+    ("show my connections", "lagrange.connections", {}), ("what's connected", "lagrange.connections", {}),
+    ("connect a service", "lagrange.connect_form", {}), ("connect a new mcp server", "lagrange.connect_form", {}),
+    ("connect a webhook", "lagrange.connect_form", {"kind": "hook_in"}),
+    ("connect home assistant", "lagrange.connect", {"name": "home assistant"}),
+    ("connect gitea", "lagrange.connect", {"name": "gitea"}), ("connect the gitea draft", "lagrange.connect", {"name": "gitea"}),
+    ("show the gitea connection", "lagrange.connection", {"name": "gitea"}),
+    ("connect the spotify draft", "lagrange.connect", {"name": "spotify"}),
+    ("approve the new gitea tools", "lagrange.approve", {"name": "gitea"}),
+    ("refresh the gitea connection", "lagrange.refresh", {"name": "gitea"}),
+    ("check gitea for new tools", "lagrange.refresh", {"name": "gitea"}),
+    ("disconnect gitea", "lagrange.disconnect", {"name": "gitea"}),
+    ("turn off the gitea connection", "lagrange.turn_off", {"name": "gitea"}),
+    ("turn on the gitea connection", "lagrange.turn_on", {"name": "gitea"}),
+    ("sign in to gitea again", "lagrange.sign_in", {"name": "gitea"}),
+    ("when the front door unlocks during quiet hours, turn on the hall light", "pulsar.automate", {}),
+    ("turn on the porch light when I get home", "pulsar.automate", {}),
+    ("when the arrive home webhook is called, turn on the porch light", "pulsar.automate", {}),
+    ("sign in to youtube on the tv pc", "constellation.screen", None), ("turn off the kitchen light", "orbit.light", None),
+    ("connect to the tv", None, None), ("connect my airpods", None, None),
+    ("stop using the skill goodnight", "morpho.retire", None), ("refresh the page", None, None),
+    ("disconnect my headphones", None, None), ("disconnect from wifi", None, None), ("unlink my phone", None, None),
+    ("sign in to my email", None, None), ("show me the dev tools", None, None), ("stop using it", None, None),
+    ("refresh gitea", None, None), ("show the gitea tools", None, None),
+])
+def test_connection_phrases(said, tool, args):
+    from app import fastpath
+    from app.config import RuntimeConfig
+    cfg = RuntimeConfig.model_validate(yaml.safe_load(CONFIG.read_text()))
+    m = fastpath.match(said, cfg.fastpath.patterns)
+    if tool is None:
+        assert m is None or not m.pattern.tool.startswith("lagrange."), (said, m and m.pattern.name)
+        return
+    if args is None:                                          # one that already meant something else: unchanged
+        assert m is None or not m.pattern.tool.startswith("lagrange."), (said, m and m.pattern.tool)
+        return
+    assert m and m.pattern.tool == tool, (said, m and m.pattern.tool)
+    assert {k: m.args.get(k) for k in args} == args, (said, m.args)
+
+
+# An event automation's conditions reach the drafter whole: a window dropped here would be saved without it.
+@pytest.mark.skipif(not CONFIG.exists(), reason="the repo's config isn't in the test image")
+@pytest.mark.parametrize("said", [
+    "turn on the lights when the tv pc comes online on weekdays",
+    "turn on the lights when the tv pc comes online between 5pm and 6pm",
+    "turn on the hall light when the front door opens after 9pm",
+    "flip the porch light when the front door unlocks between 3pm and 4pm",
+    "turn on the light when I get home before 7am on weekends",
+    "turn on the porch light when the front door unlocks during quiet hours",
+    "when the den pc comes online between 5pm and 6pm, open youtube on the den pc",
+    "when the front door unlocks between 5pm and 6pm, run coming home",
+])
+def test_an_event_automation_keeps_its_conditions(said):
+    from app import fastpath
+    from app.config import RuntimeConfig
+    cfg = RuntimeConfig.model_validate(yaml.safe_load(CONFIG.read_text()))
+    m = fastpath.match(said, cfg.fastpath.patterns)
+    assert m and m.pattern.tool == "pulsar.automate", (said, m and m.pattern.name)
+    assert m.args["say"] == said, (said, m.args)
+
+
+
+# Beacon (Phase 12): its phrases, and the ones that were there before it are still where they were.
+@pytest.mark.skipif(not CONFIG.exists(), reason="the repo's config isn't in the test image")
+@pytest.mark.parametrize("said,name,args", [
+    ("set up my email", "beacon-setup", {}), ("connect my calendar", "beacon-setup", {}),
+    ("show my email", "beacon-inbox", {}), ("any new emails", "beacon-inbox", {}), ("what's in my inbox", "beacon-inbox", {}),
+    ("show all my emails", "beacon-inbox-all", {"all": "true"}),
+    ("read email 1812345678901234567", "beacon-read-id", {"id": "1812345678901234567"}),
+    ("read the email from sam", "beacon-read", {"which": "sam"}), ("read my latest email", "beacon-read", {"which": ""}),
+    ("search my email for invoice", "beacon-search", {"query": "invoice"}),
+    ("find emails from sam", "beacon-search-from", {"query": "from:sam"}),
+    ("what's on my calendar", "beacon-agenda", {"day": ""}), ("what's on my calendar tomorrow", "beacon-agenda", {"day": "tomorrow"}),
+    ("what's on thursday", "beacon-agenda", {"day": "thursday"}), ("what do i have tomorrow", "beacon-agenda", {"day": "tomorrow"}),
+    ("show my calendar for next week", "beacon-agenda", {"day": "next week"}),
+    ("add dentist thursday at 3pm to my calendar", "beacon-add-event", {"say": "dentist thursday at 3pm"}),
+    ("remove the dentist from my calendar", "beacon-remove-event", {"which": "dentist"}),
+    ("is my email connected", "beacon-status", {}),
+    # Not Beacon's: unchanged.
+    ("what's scheduled", "schedule-list", None), ("show my reminders", "schedule-list", None),
+    ("what's on my screens", "node-screens", None), ("connect home assistant", "lagrange-form-ha", None),
+    ("connect the gitea draft", "lagrange-connect-draft", None), ("show my connections", "lagrange-list", None),
+    ("remind me at 5 to call the pharmacy", "schedule-remind", None), ("cancel my reminder to call mom", "schedule-cancel", None),
+    ("what's on tv at 8 pm", None, None),
+])
+def test_beacon_phrases(said, name, args):
+    from app import fastpath
+    from app.config import RuntimeConfig
+    cfg = RuntimeConfig.model_validate(yaml.safe_load(CONFIG.read_text()))
+    m = fastpath.match(said, cfg.fastpath.patterns)
+    assert (m.pattern.name if m else None) == name, (said, m and m.pattern.name)
+    if args is not None:
+        assert m.args == args, (said, m.args)
+
+
+@pytest.mark.skipif(not CONFIG.exists(), reason="the repo's config isn't in the test image")
+@pytest.mark.parametrize("said,name,args", [
+    ("show my queue", "queue-show", {"action": "show", "on": ""}),
+    ("what's playing next on the tv pc", "queue-show", {"action": "show", "on": "tv pc"}),
+    ("what plays next on my calendar", None, None),                             # the calendar, not the queue
+    ("what's next", "roadmap", None),                                           # my roadmap's next phase, as before
+    ("add yt:abcdefghijk, jf:0123456789abcdef0123456789abcdef to my queue on TV PC", "queue-add-ids",
+     {"action": "add", "ids": "yt:abcdefghijk, jf:0123456789abcdef0123456789abcdef", "on": "TV PC"}),
+    ("play yt:abcdefghijk next on TV PC", "queue-next-ids", {"action": "next", "ids": "yt:abcdefghijk", "on": "TV PC"}),
+    ("add Dune to my queue", "queue-add-title", {"action": "add", "what": "Dune", "on": ""}),
+    ("play number 3 next on TV PC", "queue-next-title", {"action": "next", "what": "number 3", "on": "TV PC"}),
+    ("remove 2 from my queue on TV PC", "queue-remove", {"action": "remove", "which": "2", "on": "TV PC"}),
+    ("clear my queue", "queue-clear", {"action": "clear", "on": ""}),
+    ("turn off autoplay", "autoplay-off", {"action": "autoplay_off"}),
+    ("turn on autoplay", "autoplay-on", {"action": "autoplay_on"}),
+    ("skip", "media-skip", {"action": "next", "target": ""}),
+    ("skip 30 seconds", "video-skip-by", None),                                 # still a jump, not the next one
+    ("skip ahead", "video-forward", None),                                      # still 10 seconds ahead
+    ("skip ahead on the tv pc", "video-forward", None),
+    ("play it next", None, None),                                               # not a title: the model asks
+    ("play this next", None, None),
+    ("play whatever's up next", None, None),
+    ("play the next episode", "media-next", None),
+    ("play Frieren on the TV", "media-play-title", {"what": "Frieren", "on": "TV"}),
+    ("skip tonight's porch light automation", "automation-skip", None),
+])
+def test_queue_phrases(said, name, args):
+    from app import fastpath
+    from app.config import RuntimeConfig
+    cfg = RuntimeConfig.model_validate(yaml.safe_load(CONFIG.read_text()))
+    m = fastpath.match(said, cfg.fastpath.patterns)
+    assert (m.pattern.name if m else None) == name, (said, m and m.pattern.name)
+    if args is not None:
+        assert m.args == args, (said, m.args)

@@ -44,6 +44,9 @@ class QuasarConfig(BaseModel):
     spotify_redirect_uri: str = ""            # exactly as registered on that app
     spotify_confirm_seconds: float = 12       # how long Spotify gets to report the change before I say it didn't
     librespot_version: str = "0.8.0"          # what a computer builds with cargo where Ubuntu doesn't package it
+    autoplay: bool = True                     # with nothing queued, the top suggestion plays when a video ends
+    autoplay_limit: int = 5                   # autoplayed in a row with no word from him: then it stops and says so
+    suggest_seconds: int = 120                # suggestions this long before a video ends (halfway, for short ones)
 
 
 class RetentionConfig(BaseModel):

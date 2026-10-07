@@ -64,6 +64,7 @@ Built so far:
 - No ghost confirmations: sends are tried three times and confirmed only by the display's own report (and you hear when a kept one finally shows); opening a page or an app, going home and the clipboard are checked on the computer itself, and anything I couldn't see happen is called "asked", not "done".
 - Long answers open as a panel; a Raphael speaking style on trial.
 - I read my own releases and this roadmap, and harder questions (why, explain, improve, compare) use a stronger model.
+- A heads-up display on the displays that talk to me (workstations, laptops, the phone): a visor frame, a day tape across the top (the next day from the engine's own jobs, 12 hours on a phone; quiet hours shaded, the digest marked, tap a marker to open it), and a spot of its own for what's playing with its controls (they say what you'd say, so they go through the same fast paths). Panels work as before; presentation displays are unchanged. Field checks: config/checks/hud.yaml.
 - The phone app: Aurelia installs to the home screen, and notifications (Web Push, encrypted end to end) for urgent mailbox items, long requests that finished, and things kept for the phone, only when it isn't already on screen.
 Field check: done on your hardware (October 2026).
 Noted for later: my own model, trained from your data (for now I keep using Claude, with Ollama as the fallback).
@@ -84,18 +85,19 @@ Built so far:
 - Morpho: a plan that worked is kept as a skill (your tap, your approval, your name and phrases); the planner reaches for skills first; a skill's phrases are fast paths, and a skill that needs no model runs with it down; versions learned from a change of course or a plan that differs in one step (a choice), with rollback; tools you use together proposed daily as skills; and earned trust for exactly what you keep approving, only from your allow-list in morpho.yaml, never the coded never-list, taken back by one no or a failure. (Replaying past runs before a new version replaces the old one comes with Nova's eval set, Phase 17.)
 Field check passed: "find the best computer within a $1000 budget" as a plan, kept as a skill, then "find the best monitor under $400" reusing it; a finished plan's notification opens its panel.
 
-## 10. Pulsar — In progress (everything built; awaiting your field check)
+## 10. Pulsar — Done
 Builds: recurring automations on Admiral's scheduling engine, routines you set up in words, and initiative: deciding when something is worth interrupting you, by severity levels you set in governance.
 Done when: an approved recurring automation runs on schedule with its heads-up.
 Built so far:
 - Automations in your words: by the clock ("every weekday at 7 am, lock the front door", "turn off the lights every night at 11", "every 2 hours…", "on the 1st of every month at 9…", "remind me every Sunday at 6 pm to…"), the time read by code (a bare 7 is asked about, never guessed) and the command settled by its own fast path. I read it back; it's saved only when you confirm (saving is change-tier, never trusted, never offered to the model). Anything that repeats never runs now or as a one-off, whatever the phrasing ("every weeknight", "Monday, Wednesday and Friday", "11 o'clock" are read too; what I can't read goes to the model, which asks). Each run is an engine job: governed when it runs (a change-tier action asks each time, and your OK is for that run only), a heads-up with Cancel before physical actions, checked by its own result, never twice; a run that worked goes in the digest, not your phone; three failures in a row and it's paused and you're told. Pause, resume, skip the next one (Cancel on a heads-up skips that one too), delete: in words or on the automations panel.
 - Routines: several commands under one name ("make a routine called goodnight: lock the front door, turn off the living room lights and turn off the TV"), each settled by its own fast path ("then" means after the one before), confirmed by you, kept as a skill that needs no model; saying its name runs it (its whole name: never a guess from part of it, and never words that already mean something else), and it can be an automation's command ("run goodnight every night at 11"). A step waiting for your OK waits only as long as that run may still happen; after that it's stopped and the run is missed, never run late.
-- Events: an automation can wait for a computer coming online or going offline, or a display opening (at most once per cooldown). Doors, lights and arrivals wait for the Home Assistant bridge (Lagrange).
+- Events: an automation can wait for a computer coming online or going offline, or a display opening (at most once per cooldown). Doors, lights, sensors, arrivals and webhooks came with Lagrange (Phase 11). Since Lagrange: "between 5pm and 6pm", "after 9pm", "before 7am", "on weekdays", "on Mondays and Fridays" and "during quiet hours" after any event, read by code in your time zone (a bare hour is asked about); a sentence with a condition I can't read is never run as a command now.
 - Initiative: I watch for a door unlocked during quiet hours, a water leak, low batteries, the server's disk, a server (or a computer you list) down, a failed update, a paused automation, the model budget running ahead, and mailbox items waiting. Each kind's severity is yours in pulsar.yaml: critical (phone and every open display, even in quiet hours), high (phone now, or when quiet hours end), normal (a card, no phone), low (digest only). Told once while it lasts, repeated only on your interval, never after "got it", and its card taken back when it clears. The home checks run as Pulsar's own user, which may run Orbit's status and nothing else (an allow-list in charter.yaml, so tools added later can't slip past it). Everything is in the morning digest.
+- A routine step (or an automation's command) can show a look-up on another display: "send my youtube to my phone", run exactly as when you say it and confirmed by that display's own report.
 - Suggestions: approving one of Parallax's habit cards makes the automation now; the ones you approved before Pulsar existed are running too (I'll tell you which, once).
-Everything in this phase is built. Field check: say "every day at <a few minutes from now>, turn on the living room light" (or another light), confirm the read-back, and watch it run on time with its heads-up and Cancel; then "show my automations".
+Field check: done on your hardware (October 2026): an approved automation ran on time with its heads-up, checked by the light's own report (Swallowtail's "runs on time" check).
 
-## 10.5. Swallowtail — In progress (built; awaiting its first run in your home)
+## 10.5. Swallowtail — Done
 Builds: field checks of each release, run on the live system in your home, beside Chrysalis's tests (which run before a release deploys). Each release brings a checks file (config/checks/): the input (what you'd say, or a tool), what's expected, and how I find out what actually happened (the result, or a device's own report afterwards).
 Done when: a release's checks run once it's live, the ones that act wait for your Start, and the report panel shows each check's input, expected and actual, with failures as a notice.
 Built so far:
@@ -104,14 +106,44 @@ Built so far:
 - After your Start: checks that act, checks that give you something to do first and watch for what it causes, yes/no questions only you can judge, and clean-up afterwards (the test automation deleted, the light turned back off).
 - The report panel: one row per check (passed, failed, waiting for you, skipped), each with the input given, what was expected and what actually happened, line by line. Kept on the release ("how did the last release's checks go"). Failures are a notice (high by default, pulsar.yaml) with a rollback offered, never done on my own.
 - Checks for Pulsar, for Swallowtail itself, and for each finished phase's "Done when" (0-7 and 9): "run all the checks" re-tests everything.
+Field check: done on your hardware (October 2026): the checks for Pulsar, Swallowtail and the HUD ran once each release went live, the acting ones waited for your Start, and all passed.
 
-## 11. Lagrange — Not started
+## 11. Lagrange — Done
 Builds: integrations of any kind without new code per service: an MCP client, OAuth connections, a Home Assistant bridge, webhooks in and out. Every new tool starts in the change tier; credentials sit in a vault the model never sees.
 Done when: you connect a new service from the display with no code, and the first use asks you.
+Built so far:
+- Lagrange, a function in its own container: each connection registers as a function of its own ("gitea.list_my_repos"), governed like mine. With no rules file of its own, every tool asks you first; its panel drafts the file for you, and it never takes one of my names.
+- The connect form on your display: keys and tokens post straight to Lagrange, never through me, the conversation, the record or the model. A vault (AES-256-GCM, its key only on Lagrange's own folder) keeps them; a secret that shows up in what a service returns is cut out.
+- MCP servers at an address (no sign-in, a token, a header, or OAuth with PKCE, discovery and client registration, tokens refreshing themselves) and from npm or PyPI at an exact version, run as an unprivileged user. Tools pinned when you connect; new or changed ones wait for your OK. "Gitea list my repos" runs by its own words; anything more goes to the model with only that service's tools.
+- Home Assistant: what it reports, its services checked by its own report afterwards, and its live changes as events.
+- Webhooks in (an address with its own secret, an event Pulsar can wait for) and out (a send tool, asked each time).
+- Pulsar's home events, read by code: a lock unlocking, a light turning on, a door opening, a leak, motion, you coming home or leaving, a webhook being called; "during quiet hours" when you say so. Orbit reports SmartRent's live changes too, so doors and lights work without Home Assistant.
+- Only my own stack's network may call me or Lagrange (not your home-lab network, which both join); local servers run each as their own user, fenced off from every Docker network here.
+- Field checks: config/checks/lagrange.yaml.
+Field check: done on your hardware (October 2026): Gitea connected from the display through its MCP server and its first use asked you; Home Assistant connected, a door unlocking turned on the light (checked by the light's own report), and a webhook started an automation.
 
-## 12. Beacon — Not started
-Builds: communication: email (sending always confirmed), calendar, my own number, iMessage through a Mac bridge, notifications to your phone.
-Done when: a text to my number gets a reply; the day's calendar and important email appear in the digest.
+## 12. Beacon — Done
+Builds: your Gmail (read, important email flagged, sending always confirmed), your calendar on your own server (Radicale: read and write, on your iPhone too; your Google calendar read alongside it), and a second path to your phone for critical notices (your ntfy). Later, when it's needed: my own number, and an iMessage bridge (needs a Mac).
+Done when: the day's calendar and important email appear in the digest, an event I add shows on your iPhone, and a critical notice reaches your phone even when the app's push doesn't.
+Built so far:
+- Beacon, a function in its own container, and your calendar server (Radicale) in my stack, reached by your iPhone at /dav/ over Tailscale only.
+- One setup form (Gmail and its app password, your calendar's password, your Google calendar's secret address, ntfy): each part checked before it's kept; passwords sealed in Beacon's vault, never through me or the model.
+- Email: what arrives is read every couple of minutes (never marked read), important email flagged by your rules first, then Gmail's own marker, the model only for unknown senders and only so many a day; reading, searching; drafts read back whole and sent only on your yes, "sent" only once it's in your Sent mail.
+- Calendar: both calendars together, repeating events in your time zone; adding and removing read back first and checked on the server; only your own calendar is ever changed; invitations are emails from you, always confirmed.
+- The digest opens with today's calendar and important email; your events are on the day tape.
+- Critical notices also go to your ntfy (pulsar.yaml's ntfy_for).
+- Field checks: config/checks/beacon.yaml.
+Field check: done on your hardware (October 2026): your Gmail connected and important email was flagged, your calendar server showed on your iPhone with the event I added, an email was read back and sent only on your yes, the digest showed today's calendar and important email, and a critical notice reached your phone through ntfy.
+
+## 12.5. Quasar's queue and Skipper — In progress
+Builds: a queue for my player on each of your computers (YouTube and your library together), autoplay, and suggestions near the end of a video; and Skipper, your phone as the command center: my functions, their commands and their details, a tap each.
+Done when: near the end of a video a panel suggests what's next (your YouTube feed, or your library), what you add plays in order by itself, and with nothing queued the top suggestion plays; and on your phone any command is a few taps away (function, command, its details) while a panel from anywhere else still takes over.
+Built so far:
+- The queue, one per computer, YouTube and your library together: what you add plays in order when the video before it ends (as my player itself reports it); "stop" means nothing follows. Add, play next, move up, remove and clear, by words or from panels.
+- What's next, near the end of a video (2 minutes before, or halfway through a short one): what's lined up, or suggestions to pick one or several from (your YouTube feed after YouTube, your library after yours). On your phone it's a bar you tap.
+- Autoplay: with nothing queued, the top suggestion plays, at most 5 in a row with no word from you; "turn off autoplay" when you'd rather it end.
+- Skipper on your phone: my functions, then their commands, then a command's details (with your computers, displays, lights, locks and TVs to pick); each sends its sentence exactly as if you'd typed it. One panel at a time; closing it brings back the menu where you were. The menu is config/menu.yaml, and every sentence on it is tested to reach its tool by a fast path.
+- Field checks: config/checks/queue-skipper.yaml.
 
 ## 13. Voice — Not started
 Builds: push-to-talk, then the wake word "Aurelia" through room units; local speech-to-text; a speech engine that sounds like a person talking; real conversation (I stop when you talk over me); spoken confirmations.

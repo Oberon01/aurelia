@@ -242,9 +242,8 @@ def yt(monkeypatch):
     monkeypatch.setattr(quasar, "_where", where)
     monkeypatch.setattr(db, "pool", lambda: types.SimpleNamespace(fetchval=fetchval))
 
-    class R:
-        async def get(self, k): return None
-    app = types.SimpleNamespace(state=types.SimpleNamespace(redis=R()))
+    import fakeredis.aioredis
+    app = types.SimpleNamespace(state=types.SimpleNamespace(redis=fakeredis.aioredis.FakeRedis()))
     return app, asked, answers
 
 

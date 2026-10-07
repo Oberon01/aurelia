@@ -1,0 +1,330 @@
+# Skipper: your phone's command center (Phase 12.5).
+#
+# On your phone I open on this list: my functions, then each one's commands, then a command's details
+# (if it needs any). A command runs exactly as if you'd said it: `say` is the sentence, sent the same way
+# as typing it (same fast path, same rules, same confirmations, same record). Every sentence here must
+# match one of my fast paths, never the model; the tests check that each one reaches its `tool`.
+#
+# In `say`, {name} is a detail you fill in. Wrap optional parts in [brackets]: "play {what}[ on the {on}]"
+# leaves " on the …" out when that detail is empty. Each detail (under `fields`) can have:
+#   label        what the form calls it
+#   placeholder  an example, shown faintly
+#   pick         a list to choose from (you can still type anything): computers, displays, lights, locks,
+#                tvs, thermostats
+#   choices      a fixed list of answers (on / off)
+#   number       true for a number
+#   optional     true when it can be left empty (only inside [brackets])
+#   sample       what the tests fill in (when the placeholder isn't a real answer)
+# A function shows only while it's running; a command, only while its tool is there. Services you connect
+# through Lagrange show up on their own, below these, with their commands that need nothing more.
+functions:
+  - name: orbit
+    label: Orbit
+    about: Your home — doors, lights, the thermostat and TVs
+    commands:
+      - { label: Home status, say: "how's the house", tool: orbit.status }
+      - { label: Lock up, say: "lock up", tool: orbit.lock }
+      - label: Lock a door
+        say: "lock the {door}"
+        tool: orbit.lock
+        fields: { door: { label: Door, pick: locks } }
+      - label: Unlock a door
+        say: "unlock the {door}"
+        tool: orbit.unlock
+        fields: { door: { label: Door, pick: locks } }
+      - label: Turn a light on or off
+        say: "turn {state} the {light}"
+        tool: orbit.light
+        fields:
+          light: { label: Light, pick: lights }
+          state: { label: "On or off", choices: ["on", "off"] }
+      - label: Dim a light
+        say: "set the {light} to {level}%"
+        tool: orbit.light
+        fields:
+          light: { label: Light, pick: lights }
+          level: { label: Brightness (%), number: true, placeholder: "40" }
+      - label: Set the thermostat
+        say: "set the thermostat to {temp}"
+        tool: orbit.thermostat
+        fields: { temp: { label: Temperature, number: true, placeholder: "72" } }
+      - label: Turn a TV on or off
+        say: "turn {state} the {tv}"
+        tool: orbit.tv_power
+        fields:
+          tv: { label: TV, pick: tvs }
+          state: { label: "On or off", choices: ["on", "off"] }
+      - label: Switch a TV's input
+        say: "switch the {tv} to {input}"
+        tool: orbit.tv_input
+        fields:
+          tv: { label: TV, pick: tvs }
+          input: { label: Input, placeholder: "HDMI 2" }
+      - label: What a TV is showing
+        say: "what's the {tv} showing"
+        tool: orbit.tv_status
+        fields: { tv: { label: TV, pick: tvs } }
+      - { label: Find my TVs, say: "find my tvs", tool: orbit.tv_discover }
+      - { label: Nicknames, say: "show my nicknames", tool: orbit.aliases }
+
+  - name: constellation
+    label: Constellation
+    about: Your devices and computers
+    commands:
+      - { label: Device status, say: "show my devices", tool: constellation.devices }
+      - { label: My computers, say: "show my computers", tool: constellation.devices }
+      - { label: What's on my screens, say: "what's on my screens", tool: constellation.screens }
+      - label: How a computer is doing
+        say: "how is the {target} doing"
+        tool: constellation.health
+        fields: { target: { label: Computer, pick: computers } }
+      - label: Open something on a computer
+        say: "open {what} on the {target}"
+        tool: constellation.open
+        fields:
+          what: { label: What, placeholder: "youtube, vlc, a website" }
+          target: { label: Computer, pick: computers }
+      - label: Look at a screen
+        say: "look at the {target} screen"
+        tool: constellation.look
+        fields: { target: { label: Computer, pick: computers } }
+      - label: Watch a screen live
+        say: "show me the {target} screen live"
+        tool: constellation.watch
+        fields: { target: { label: Computer, pick: computers } }
+      - label: Wake a computer
+        say: "wake the {target}"
+        tool: constellation.wake
+        fields: { target: { label: Computer, pick: computers } }
+      - label: Lock a computer
+        say: "lock the {target}"
+        tool: constellation.power
+        fields: { target: { label: Computer, pick: computers } }
+      - label: Put a computer to sleep
+        say: "put the {target} to sleep"
+        tool: constellation.power
+        fields: { target: { label: Computer, pick: computers } }
+      - label: Restart a computer
+        say: "restart the {target}"
+        tool: constellation.restart
+        fields: { target: { label: Computer, pick: computers } }
+      - label: Set a computer's volume
+        say: "set the sound on the {target} to {level}"
+        tool: constellation.sound
+        fields:
+          target: { label: Computer, pick: computers }
+          level: { label: Volume (%), number: true, placeholder: "30" }
+      - label: Send a note
+        say: "send a note to the {to} saying {text}"
+        tool: constellation.send
+        fields:
+          to: { label: To, pick: displays }
+          text: { label: Note, placeholder: "Dinner's ready" }
+      - { label: Shared clipboard, say: "show my clipboard", tool: constellation.clipboard }
+      - label: Gaming mode
+        say: "gaming mode on the {target}"
+        tool: constellation.mode
+        fields: { target: { label: Computer, pick: computers } }
+      - label: Apps on a computer
+        say: "what apps are on the {target}"
+        tool: constellation.apps
+        fields: { target: { label: Computer, pick: computers } }
+
+  - name: quasar
+    label: Quasar
+    about: Video and music — YouTube, your library, Spotify, the queue
+    commands:
+      - { label: My YouTube, say: "show my youtube", tool: quasar.youtube }
+      - { label: YouTube subscriptions, say: "show my youtube subscriptions", tool: quasar.youtube }
+      - { label: Watch Later, say: "show my youtube watch later", tool: quasar.youtube }
+      - label: Search YouTube
+        say: "search youtube for {q}"
+        tool: quasar.youtube
+        fields: { q: { label: Search for, placeholder: "lo-fi beats" } }
+      - { label: My video library, say: "what can I watch", tool: quasar.find }
+      - { label: My movies, say: "show my movies", tool: quasar.find }
+      - { label: My shows, say: "show my shows", tool: quasar.find }
+      - { label: My music, say: "show my music", tool: quasar.find }
+      - label: Play something
+        say: "play {what}[ on the {on}]"
+        tool: quasar.play
+        fields:
+          what: { label: What, placeholder: "a movie, a show, an album" }
+          "on": { label: On, pick: computers, optional: true }
+      - { label: My queue, say: "show my queue", tool: quasar.queue }
+      - label: Add to my queue
+        say: "add {what} to my queue"
+        tool: quasar.queue
+        fields: { what: { label: From your library, placeholder: "a movie or a show" } }
+      - { label: Skip to the next one, say: "skip", tool: constellation.media }
+      - { label: Pause, say: "pause", tool: constellation.media }
+      - { label: Resume, say: "resume", tool: constellation.media }
+      - { label: Stop, say: "stop the video", tool: constellation.media }
+      - { label: Clear my queue, say: "clear my queue", tool: quasar.queue }
+      - { label: Turn autoplay off, say: "turn off autoplay", tool: quasar.queue }
+      - { label: Turn autoplay on, say: "turn on autoplay", tool: quasar.queue }
+      - { label: What's on Spotify, say: "what's playing on spotify", tool: quasar.spotify }
+      - label: Play on Spotify
+        say: "play {what} on spotify"
+        tool: quasar.play
+        fields: { what: { label: What, placeholder: "a song, an album, a playlist" } }
+
+  - name: beacon
+    label: Beacon
+    about: Your email and calendars
+    commands:
+      - { label: My email, say: "show my email", tool: beacon.inbox }
+      - { label: All my email, say: "show all my email", tool: beacon.inbox }
+      - label: Search my email
+        say: "search my email for {q}"
+        tool: beacon.search_email
+        fields: { q: { label: Search for, placeholder: "receipt" } }
+      - { label: Today's calendar, say: "what's on my calendar today", tool: beacon.agenda }
+      - label: My calendar for a day
+        say: "what's on my calendar {day}"
+        tool: beacon.agenda
+        fields: { day: { label: When, placeholder: "tomorrow, friday, next week", sample: "tomorrow" } }
+      - label: Add an event
+        say: "add {say} to my calendar"
+        tool: beacon.add_event
+        fields: { say: { label: Event, placeholder: "dentist thursday at 3pm" } }
+      - label: Remove an event
+        say: "remove {which} from my calendar"
+        tool: beacon.remove_event
+        fields: { which: { label: Which event, placeholder: "dentist" } }
+      - { label: What's set up, say: "is my email connected", tool: beacon.status }
+      - { label: Set up email and calendars, say: "set up my email", tool: beacon.setup }
+
+  - name: pulsar
+    label: Pulsar
+    about: Automations, routines and what's worth knowing
+    commands:
+      - { label: My automations, say: "show my automations", tool: pulsar.automations }
+      - { label: Worth knowing, say: "show my notices", tool: pulsar.notices }
+      - label: New automation
+        say: "{say}"
+        tool: pulsar.automate
+        fields: { say: { label: In your words, placeholder: "when the front door unlocks, turn on the kitchen light" } }
+      - label: Pause an automation
+        say: "pause the {which} automation"
+        tool: pulsar.pause
+        fields: { which: { label: Which, placeholder: "porch light" } }
+      - label: Resume an automation
+        say: "resume the {which} automation"
+        tool: pulsar.resume
+        fields: { which: { label: Which, placeholder: "porch light" } }
+
+  - name: admiral
+    label: Admiral
+    about: Reminders, scheduled commands and plans
+    commands:
+      - { label: What's scheduled, say: "what's scheduled", tool: admiral.scheduled }
+      - label: Remind me
+        say: "remind me to {say}"
+        tool: admiral.schedule
+        fields: { say: { label: What and when, placeholder: "take out the trash at 8pm" } }
+      - { label: My plans, say: "show my plans", tool: admiral.plans }
+      - label: Make a plan
+        say: "make a plan to {goal}"
+        tool: admiral.plan
+        fields: { goal: { label: Goal, placeholder: "set up the projector PC" } }
+
+  - name: kepler
+    label: Kepler
+    about: Research, explanations and what you've learned
+    commands:
+      - label: Research something
+        say: "research {question}"
+        tool: kepler.research
+        fields: { question: { label: Question, placeholder: "best NAS for a home lab" } }
+      - label: Explain something
+        say: "explain {subject}"
+        tool: kepler.explain
+        fields: { subject: { label: What, placeholder: "DNS" } }
+      - label: Quiz me
+        say: "quiz me on {subject}"
+        tool: kepler.quiz
+        fields: { subject: { label: Subject, placeholder: "Azure networking" } }
+      - { label: My research library, say: "show my research library", tool: kepler.recall }
+      - label: What I learned about…
+        say: "what did I learn about {query}"
+        tool: kepler.recall
+        fields: { query: { label: Topic, placeholder: "kubernetes" } }
+
+  - name: nebula
+    label: Nebula
+    about: The web — search, read, download
+    commands:
+      - label: Search the web
+        say: "search the web for {q}"
+        tool: nebula.search
+        fields: { q: { label: Search for } }
+      - label: Read a page
+        say: "read {url}"
+        tool: nebula.read
+        fields: { url: { label: Address, placeholder: "https://…" } }
+      - label: Download a file
+        say: "download {url}"
+        tool: nebula.download
+        fields: { url: { label: Address, placeholder: "https://…" } }
+
+  - name: parallax
+    label: Parallax
+    about: Your digest and the mailbox
+    commands:
+      - { label: My digest, say: "show my digest", tool: parallax.digest }
+      - { label: Waiting for you, say: "show my mailbox", tool: parallax.mailbox }
+      - { label: Look at my patterns, say: "analyze", tool: parallax.analyze }
+
+  - name: mnemosyne
+    label: Mnemosyne
+    about: What I remember, and my own history
+    commands:
+      - { label: What you remember, say: "what do you remember about me", tool: mnemosyne.facts }
+      - label: Remember something
+        say: "remember that {fact}"
+        tool: mnemosyne.remember
+        fields: { fact: { label: What, placeholder: "my sister's birthday is May 3" } }
+      - label: Find a conversation
+        say: "what did we talk about {query}"
+        tool: mnemosyne.recall
+        fields: { query: { label: About, placeholder: "the projector" } }
+      - { label: The roadmap, say: "show the roadmap", tool: mnemosyne.roadmap }
+      - { label: What's new with you, say: "what's new with you", tool: mnemosyne.history }
+      - { label: Model budget, say: "show my model budget", tool: mnemosyne.budget }
+
+  - name: morpho
+    label: Morpho
+    about: Your skills, and what no longer asks
+    commands:
+      - { label: My skills, say: "show my skills", tool: morpho.skills }
+      - { label: What no longer asks, say: "what do you do without asking", tool: morpho.trusts }
+
+  - name: lagrange
+    label: Lagrange
+    about: Services you've connected
+    commands:
+      - { label: My connections, say: "show my connections", tool: lagrange.connections }
+      - { label: Connect a service, say: "connect a service", tool: lagrange.connect_form }
+
+  - name: swallowtail
+    label: Swallowtail
+    about: Field checks of each release
+    commands:
+      - { label: How the last checks went, say: "how did the last release's checks go", tool: swallowtail.checks }
+      - { label: Run the latest checks, say: "run the checks", tool: swallowtail.run }
+      - { label: Start the checks that act, say: "start the checks", tool: swallowtail.start }
+
+  - name: chrysalis
+    label: Chrysalis
+    about: Releases and updates
+    commands:
+      - { label: Last release, say: "what was the last release", tool: chrysalis.releases }
+      - { label: Releases, say: "show my releases", tool: chrysalis.releases }
+      - { label: Update status, say: "update status", tool: chrysalis.status }
+
+  - name: probe
+    label: Probe
+    about: How my functions are doing
+    commands:
+      - { label: My functions, say: "show my functions", tool: probe.functions }

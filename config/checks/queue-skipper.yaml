@@ -1,0 +1,61 @@
+# Field checks for Phase 12.5: Quasar's queue and Skipper.
+# Done when: near the end of a video a panel suggests what's next (your YouTube feed, or your library), what you
+# add plays in order by itself, and with nothing queued the top suggestion plays; and on your phone any command is a
+# few taps away (function, command, its details) while a panel from anywhere else still takes over.
+release: Quasar's queue and Skipper (Phase 12.5)
+phase: "12.5"
+checks:
+  - id: queue-show
+    name: The queue opens from its own words
+    say: "show my queue on the {tv_computer}"
+    expect: { route: fastpath, tool: quasar.queue, status: completed }
+
+  - id: queue-says-whats-next
+    name: '"What plays next" is the queue'
+    say: "what plays next on the {tv_computer}"
+    expect: { route: fastpath, tool: quasar.queue, status: completed }
+
+  - id: youtube-suggestions
+    name: Near the end of a YouTube video, I suggest what's next from your feed
+    needs_you: "Say “show my youtube” and tap a short video (under 10 minutes) to play it on the {tv_computer}. Wait until about 2 minutes are left (halfway, if it's under 4 minutes)."
+    question: "Did your phone show a “Pick what's next” bar, and did tapping it open your YouTube feed (without the video that's playing)?"
+
+  - id: queue-in-order
+    name: What you add plays in order, by itself
+    needs_you: "On that panel, tap two videos and press “Add 2 to queue”. Let the video finish."
+    question: "When it ended, did the first video you picked start on its own, and then the second after it?"
+
+  - id: autoplay
+    name: With nothing queued, the top suggestion plays
+    needs_you: "Let the last queued video play to its end without adding anything."
+    question: "Did the video the panel named under “autoplay plays …” start on its own?"
+
+  - id: stop-means-stop
+    name: Stopping it means nothing follows
+    needs_you: "While that one plays, say “stop”."
+    question: "Did it stop, with nothing starting after it?"
+
+  - id: library-suggestions
+    name: Your library suggests what's next for your library
+    needs_you: "Play an episode or a movie from your library on the {tv_computer} and skip to the last few minutes (“go to …”)."
+    question: "Did the what's-next panel offer your library (next up, continue, recently added)?"
+
+  - id: skipper-menu
+    name: Your phone opens on my functions
+    needs_you: "Open me on your phone with no panels showing."
+    question: "Do you see a scrollable list of my functions (Orbit, Constellation, Quasar…)?"
+
+  - id: skipper-command
+    name: A command is two taps, and you're back where you were
+    needs_you: "Tap Constellation, then Device status. Close the panel that opens."
+    question: "Did your devices open as a panel, and were you back on Constellation's commands after closing it?"
+
+  - id: skipper-details
+    name: A command's details are a form, with your own names to pick
+    needs_you: "Tap Orbit → Turn a light on or off. Pick a light, tap “on”, and press Run."
+    question: "Did your lights show as choices, and did that light turn on?"
+
+  - id: skipper-takeover
+    name: A panel from elsewhere still takes over your phone
+    needs_you: "With the menu showing on your phone, say “show my devices” on another display, then “send it to my phone”."
+    question: "Did the devices panel open over the menu on your phone?"

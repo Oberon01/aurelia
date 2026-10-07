@@ -114,6 +114,19 @@ TOOLS = [
             "limit": {"type": "integer", "minimum": 1, "maximum": 60}}},
         cancellable=False, freshness_seconds=120, display="panel"),
     registry.ToolSpec(
+        name="queue", description="The queue on one of his computers: what plays after what's playing, in order "
+                                  "(YouTube and his library together). action: show; add (ids: the yt:/jf: ids from a "
+                                  "panel, or what: a title in his library); next (the same, first in line; or what: "
+                                  "'number 3' to move that one up); remove (which: its number or title); clear; "
+                                  "autoplay_on / autoplay_off (with nothing queued, the top suggestion plays when a "
+                                  "video ends). on: which computer (leave out for the one playing). With nothing "
+                                  "playing there, add starts the first one now.",
+        input_schema={"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["show", "add", "next", "remove", "clear", "autoplay_on", "autoplay_off"]},
+            "ids": {"type": "string"}, "what": {"type": "string"}, "which": {"type": "string"}, "on": {"type": "string"}},
+            "required": ["action"]},
+        cancellable=False, display="panel"),
+    registry.ToolSpec(
         name="spotify", description="His Spotify (he has Premium): action play (what: a song, album, artist or one "
                                     "of his playlists; kind to say which), pause, resume, next, previous, volume "
                                     "(level 0-100), now (what's playing where) or devices (his Spotify speakers). on: "
@@ -383,6 +396,14 @@ async def _queue(jf: Jellyfin, it: dict, args: dict, app) -> list[dict]:
     """What to play, in order, for what he picked."""
     t = it.get("Type")
     cfg = app.state.config.current.quasar
+    if args.get("_one"):                                    # from the queue: just this one (a show: its next up)
+        if t == "Series":
+            up = await jf.next_up(it["Id"], 1)
+            eps = up or (await jf.episodes(it["Id"]))[:1]
+            if not eps:
+                raise ValueError(f"{it.get('Name')} has no episodes in your library.")
+            return eps[:1]
+        return [it]
     if t == "Series":
         eps = await jf.episodes(it["Id"])
         if not eps:
@@ -582,6 +603,8 @@ async def play(app, user: str, args: dict) -> dict:
             if not hits:
                 raise ValueError(f"YouTube has nothing for “{what_said}”.")
             vid, title = hits[0]["id"], hits[0].get("title") or what_said
+        if not args.get("_auto"):                       # he chose: autoplay counts afresh, and an old "stop" is done
+            await app.state.redis.delete("aurelia:queue:{}:auto".format(node["id"]), "aurelia:queue:{}:stopped".format(node["id"]))
         return await play_youtube(app, user, node, vid, title)
     if service == "spotify":                               # "play X on spotify (on the TV)"
         return await spotify_tool(app, user, {"action": "play", "what": what_said, "on": tv_said,
@@ -639,6 +662,8 @@ async def play(app, user: str, args: dict) -> dict:
         raise ValueError(f"{node['name']} is running an older agent without my player; it updates itself within ten minutes.")
     cfg = app.state.config.current.quasar
     redis = app.state.redis
+    if not args.get("_auto"):                           # he chose: autoplay counts afresh, and an old "stop" is done
+        await redis.delete("aurelia:queue:{}:auto".format(node["id"]), "aurelia:queue:{}:stopped".format(node["id"]))
     raw = await redis.get(STATE.format(node["id"]))
     before = json.loads(raw) if raw else {}
     items = []
@@ -732,6 +757,8 @@ async def youtube(app, user: str, args: dict) -> dict:
     d = await constellation._ask_new(app, node, "youtube_feed", {"feed": feed, "query": q,
                                                                  "limit": int(args.get("limit") or 30)}, timeout=150)
     items = [yt_shape(x) for x in d.get("items") or [] if YT_ID.match(str(x.get("id") or ""))]
+    from . import quasar_queue
+    await quasar_queue.remember_seen(app.state.redis, items)          # a queued id can say its name later
     what = f"YouTube for “{q}”" if feed == "search" else YT_FEEDS[feed]
     out = {"headline": f"{what} · {len(items)} video{'s' if len(items) != 1 else ''}" if items else f"{what}: nothing",
            "catalog": {"source": "youtube", "node": node["name"], "items": items}}
@@ -1055,7 +1082,12 @@ async def spotify_callback(request: Request, code: str = "", state: str = "", er
     return HTMLResponse(page.format("Spotify is connected. I can play your music now."))
 
 
-HANDLERS = {"find": find, "play": play, "youtube": youtube, "spotify": spotify_tool, "speaker": speaker}
+async def queue_tool(app, user: str, args: dict) -> dict:
+    from . import quasar_queue
+    return await quasar_queue.tool(app, user, args)
+
+
+HANDLERS = {"find": find, "play": play, "youtube": youtube, "spotify": spotify_tool, "speaker": speaker, "queue": queue_tool}
 
 
 # ---- the computers' side: streams and what their players say ------------------------------------------
@@ -1119,6 +1151,8 @@ async def player_state(body: PlayerState, request: Request):
     except (NotSetUp, ValueError) as exc:
         log.info("couldn't report playback to Jellyfin: %s", exc)
     await publish_now(redis, f"node-{dev['id']}", now_block(dev["name"], st))
+    from . import quasar_queue
+    quasar_queue.schedule(request.app, dev, st)                     # near the end: what's next; at the end: play it
     return {"ok": True}
 
 

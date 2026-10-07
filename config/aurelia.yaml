@@ -34,6 +34,11 @@ quasar:
   spotify_client_id: "66b36ae7746e41308ecc47154b46c2b4"
   spotify_redirect_uri: "https://docker-home.tail0150f0.ts.net:8443/quasar/spotify/callback"
   librespot_version: "0.8.0"   # a computer builds this with cargo where Ubuntu doesn't package librespot
+  # The queue (each computer has its own): what you add plays in order after what's playing. Near the end of a
+  # video I suggest what's next (your YouTube feed, or your library); with nothing queued, the top one plays.
+  autoplay: true
+  autoplay_limit: 5        # this many autoplayed in a row with no word from you, then it stops and says so
+  suggest_seconds: 120     # suggestions this long before a video ends (halfway, for videos under 4 minutes)
 
 notifications:
   # Apple refuses pushes signed with an unreachable contact (localhost), so this is Aurelia's own address.
@@ -105,10 +110,140 @@ fastpath:
       args: { say: "{say|}{say2|}{say3|}" }
       reply: "Here's the automation."
     - name: automate-when
-      match: '^(?P<say>(?:when(?:ever)?|each\s+time|every\s+time|any\s+time)\s+(?:i\s+open\s+(?:the\s+|my\s+)?[\w'' -]+?|(?:the\s+|my\s+)?[\w'' -]+?\s+(?:comes?\s+(?:back\s+)?(?:online|on)|is\s+(?:back\s+)?(?:online|on)|turns?\s+on|wakes?(?:\s+up)?|boots?(?:\s+up)?|starts?(?:\s+up)?|goes\s+(?:offline|off|to\s+sleep)|turns?\s+off|shuts?\s+down|is\s+(?:offline|off)|opens|is\s+opened|gets\s+opened))\s*,?\s+.+)$|^(?!(?:what|when|where|who|why|how|is|are|was|were|do|does|did|can|could|will|would|should|which|tell|check|show)\b)(?P<say2>.+\s+(?:when(?:ever)?|each\s+time|every\s+time|any\s+time)\s+(?:i\s+open\s+(?:the\s+|my\s+)?[\w'' -]+?|(?:the\s+|my\s+)?[\w'' -]+?\s+(?:comes?\s+(?:back\s+)?(?:online|on)|is\s+(?:back\s+)?(?:online|on)|turns?\s+on|wakes?(?:\s+up)?|boots?(?:\s+up)?|starts?(?:\s+up)?|goes\s+(?:offline|off|to\s+sleep)|turns?\s+off|shuts?\s+down|is\s+(?:offline|off)|opens|is\s+opened|gets\s+opened)))$'
+      match: '^(?P<say>(?:when(?:ever)?|each\s+time|every\s+time|any\s+time)\s+(?:i\s+open\s+(?:the\s+|my\s+)?[\w'' -]+?|(?:the\s+|my\s+)?[\w'' -]+?\s+(?:comes?\s+(?:back\s+)?(?:online|on)|is\s+(?:back\s+)?(?:online|on)|turns?\s+on|wakes?(?:\s+up)?|boots?(?:\s+up)?|starts?(?:\s+up)?|goes\s+(?:offline|off|to\s+sleep)|turns?\s+off|shuts?\s+down|is\s+(?:offline|off)|opens|is\s+opened|gets\s+opened))\s*,?\s+.+)$|^(?!(?:what|when|where|who|why|how|is|are|was|were|do|does|did|can|could|will|would|should|which|tell|check|show)\b)(?P<say2>.+\s+(?:when(?:ever)?|each\s+time|every\s+time|any\s+time)\s+(?:i\s+open\s+(?:the\s+|my\s+)?[\w'' -]+?|(?:the\s+|my\s+)?[\w'' -]+?\s+(?:comes?\s+(?:back\s+)?(?:online|on)|is\s+(?:back\s+)?(?:online|on)|turns?\s+on|wakes?(?:\s+up)?|boots?(?:\s+up)?|starts?(?:\s+up)?|goes\s+(?:offline|off|to\s+sleep)|turns?\s+off|shuts?\s+down|is\s+(?:offline|off)|opens|is\s+opened|gets\s+opened))(?:(?:\s*,?\s+(?:and\s+|but\s+only\s+|only\s+)?(?:(?:during|in)\s+(?:the\s+)?quiet\s+hours|at\s+night|overnight|between\s+(?:\d{1,2}(?::\d{2})?\s*(?:[ap]\.?\s?m\.?)?|noon|midnight)(?!\s*(?:minutes?|mins?|hours?|hrs?|seconds?|secs?|days?|weeks?)\b)\s+and\s+(?:\d{1,2}(?::\d{2})?\s*(?:[ap]\.?\s?m\.?)?|noon|midnight)(?!\s*(?:minutes?|mins?|hours?|hrs?|seconds?|secs?|days?|weeks?)\b)|from\s+(?:\d{1,2}(?::\d{2})?\s*(?:[ap]\.?\s?m\.?)?|noon|midnight)(?!\s*(?:minutes?|mins?|hours?|hrs?|seconds?|secs?|days?|weeks?)\b)\s+(?:to|until|till|til)\s+(?:\d{1,2}(?::\d{2})?\s*(?:[ap]\.?\s?m\.?)?|noon|midnight)(?!\s*(?:minutes?|mins?|hours?|hrs?|seconds?|secs?|days?|weeks?)\b)|after\s+(?:\d{1,2}(?::\d{2})?\s*(?:[ap]\.?\s?m\.?)?|noon|midnight)(?!\s*(?:minutes?|mins?|hours?|hrs?|seconds?|secs?|days?|weeks?)\b)|before\s+(?:\d{1,2}(?::\d{2})?\s*(?:[ap]\.?\s?m\.?)?|noon|midnight)(?!\s*(?:minutes?|mins?|hours?|hrs?|seconds?|secs?|days?|weeks?)\b)|(?:on\s+)?(?:weekdays|weeknights|weekends|the\s+weekend)|on\s+(?:mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:r(?:s(?:day)?)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)s?(?:(?:\s*(?:,|and|&|or)\s*(?:and\s+)?|\s+)(?:mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:r(?:s(?:day)?)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)s?)*(?!\w)))*))$'
       tool: pulsar.automate
       args: { say: "{say|}{say2|}" }
-      reply: "Here''s the automation."
+      reply: "Here's the automation."
+    # Home events (Lagrange and Orbit): a device changing state, me coming or going, a webhook in being called.
+    - name: automate-home
+      match: '^(?P<say>(?:when(?:ever)?|each\s+time|every\s+time|any\s+time)\s+(?:i\s+(?:get|come|arrive)\s+(?:back\s+)?home|i\s+arrive|i\s+get\s+back|i''?m\s+home|i\s+am\s+home|i\s+leave(?:\s+home|\s+the\s+house)?|i\s+go\s+out|i''?m\s+away|(?:the\s+|my\s+)?[\w'' -]+?\s+(?:(?:web)?hook\s+(?:is\s+called|gets\s+called|fires|is\s+triggered|goes\s+off|rings)|unlocks|is\s+unlocked|gets\s+unlocked|is\s+left\s+unlocked|locks|is\s+locked|gets\s+locked|closes|is\s+closed|gets\s+closed|shuts|is\s+open|detects\s+(?:water|a\s+leak|motion|movement)|gets\s+wet|is\s+wet|finds\s+water|sees\s+(?:motion|movement|someone)|gets\s+(?:back\s+)?home|arrives(?:\s+home)?|comes\s+home|is\s+home|leaves(?:\s+home)?|goes\s+out|is\s+away|is\s+turned\s+(?:on|off)|comes\s+on|goes\s+on|switches\s+(?:on|off)))(?:(?:\s*,?\s+(?:and\s+|but\s+only\s+|only\s+)?(?:(?:during|in)\s+(?:the\s+)?quiet\s+hours|at\s+night|overnight|between\s+(?:\d{1,2}(?::\d{2})?\s*(?:[ap]\.?\s?m\.?)?|noon|midnight)(?!\s*(?:minutes?|mins?|hours?|hrs?|seconds?|secs?|days?|weeks?)\b)\s+and\s+(?:\d{1,2}(?::\d{2})?\s*(?:[ap]\.?\s?m\.?)?|noon|midnight)(?!\s*(?:minutes?|mins?|hours?|hrs?|seconds?|secs?|days?|weeks?)\b)|from\s+(?:\d{1,2}(?::\d{2})?\s*(?:[ap]\.?\s?m\.?)?|noon|midnight)(?!\s*(?:minutes?|mins?|hours?|hrs?|seconds?|secs?|days?|weeks?)\b)\s+(?:to|until|till|til)\s+(?:\d{1,2}(?::\d{2})?\s*(?:[ap]\.?\s?m\.?)?|noon|midnight)(?!\s*(?:minutes?|mins?|hours?|hrs?|seconds?|secs?|days?|weeks?)\b)|after\s+(?:\d{1,2}(?::\d{2})?\s*(?:[ap]\.?\s?m\.?)?|noon|midnight)(?!\s*(?:minutes?|mins?|hours?|hrs?|seconds?|secs?|days?|weeks?)\b)|before\s+(?:\d{1,2}(?::\d{2})?\s*(?:[ap]\.?\s?m\.?)?|noon|midnight)(?!\s*(?:minutes?|mins?|hours?|hrs?|seconds?|secs?|days?|weeks?)\b)|(?:on\s+)?(?:weekdays|weeknights|weekends|the\s+weekend)|on\s+(?:mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:r(?:s(?:day)?)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)s?(?:(?:\s*(?:,|and|&|or)\s*(?:and\s+)?|\s+)(?:mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:r(?:s(?:day)?)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)s?)*(?!\w)))*)\s*,?\s+.+)$|^(?!(?:what|when|where|who|why|how|is|are|was|were|do|does|did|can|could|will|would|should|which|tell|check|show)\b)(?P<say2>.+\s+(?:when(?:ever)?|each\s+time|every\s+time|any\s+time)\s+(?:i\s+(?:get|come|arrive)\s+(?:back\s+)?home|i\s+arrive|i\s+get\s+back|i''?m\s+home|i\s+am\s+home|i\s+leave(?:\s+home|\s+the\s+house)?|i\s+go\s+out|i''?m\s+away|(?:the\s+|my\s+)?[\w'' -]+?\s+(?:(?:web)?hook\s+(?:is\s+called|gets\s+called|fires|is\s+triggered|goes\s+off|rings)|unlocks|is\s+unlocked|gets\s+unlocked|is\s+left\s+unlocked|locks|is\s+locked|gets\s+locked|closes|is\s+closed|gets\s+closed|shuts|is\s+open|detects\s+(?:water|a\s+leak|motion|movement)|gets\s+wet|is\s+wet|finds\s+water|sees\s+(?:motion|movement|someone)|gets\s+(?:back\s+)?home|arrives(?:\s+home)?|comes\s+home|is\s+home|leaves(?:\s+home)?|goes\s+out|is\s+away|is\s+turned\s+(?:on|off)|comes\s+on|goes\s+on|switches\s+(?:on|off)))(?:(?:\s*,?\s+(?:and\s+|but\s+only\s+|only\s+)?(?:(?:during|in)\s+(?:the\s+)?quiet\s+hours|at\s+night|overnight|between\s+(?:\d{1,2}(?::\d{2})?\s*(?:[ap]\.?\s?m\.?)?|noon|midnight)(?!\s*(?:minutes?|mins?|hours?|hrs?|seconds?|secs?|days?|weeks?)\b)\s+and\s+(?:\d{1,2}(?::\d{2})?\s*(?:[ap]\.?\s?m\.?)?|noon|midnight)(?!\s*(?:minutes?|mins?|hours?|hrs?|seconds?|secs?|days?|weeks?)\b)|from\s+(?:\d{1,2}(?::\d{2})?\s*(?:[ap]\.?\s?m\.?)?|noon|midnight)(?!\s*(?:minutes?|mins?|hours?|hrs?|seconds?|secs?|days?|weeks?)\b)\s+(?:to|until|till|til)\s+(?:\d{1,2}(?::\d{2})?\s*(?:[ap]\.?\s?m\.?)?|noon|midnight)(?!\s*(?:minutes?|mins?|hours?|hrs?|seconds?|secs?|days?|weeks?)\b)|after\s+(?:\d{1,2}(?::\d{2})?\s*(?:[ap]\.?\s?m\.?)?|noon|midnight)(?!\s*(?:minutes?|mins?|hours?|hrs?|seconds?|secs?|days?|weeks?)\b)|before\s+(?:\d{1,2}(?::\d{2})?\s*(?:[ap]\.?\s?m\.?)?|noon|midnight)(?!\s*(?:minutes?|mins?|hours?|hrs?|seconds?|secs?|days?|weeks?)\b)|(?:on\s+)?(?:weekdays|weeknights|weekends|the\s+weekend)|on\s+(?:mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:r(?:s(?:day)?)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)s?(?:(?:\s*(?:,|and|&|or)\s*(?:and\s+)?|\s+)(?:mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:r(?:s(?:day)?)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)s?)*(?!\w)))*))$'
+      tool: pulsar.automate
+      args: { say: "{say|}{say2|}" }
+      reply: "Here's the automation."
+    # Beacon (Phase 12): your email and calendars. Before Lagrange ("connect my email" is Beacon's setup) and the
+    # scheduling phrases ("add the dentist thursday at 3pm to my calendar" is an event, never a reminder). Sending,
+    # adding and removing are drafts read back for your OK.
+    - name: beacon-setup
+      match: '^(?:(?:set\s*up|connect|link|add|change|update)\s+(?:my\s+)?(?:e-?mail|gmail|calendars?|google\s+calendar|ntfy|backup\s+notifications|e-?mail\s+and\s+(?:my\s+)?calendars?|calendars?\s+and\s+(?:my\s+)?e-?mail)(?:\s+(?:password|settings|account))?|(?:open\s+)?(?:the\s+)?(?:beacon|e-?mail|calendar)\s+(?:setup|settings))$'
+      tool: beacon.setup
+      args: {}
+      reply: "Here's the setup form."
+    - name: beacon-status
+      match: '^(?:is\s+my\s+(?:e-?mail|gmail|calendar)\s+(?:connected|set\s*up|working)|(?:beacon|e-?mail|gmail|calendar)\s+status)\??$'
+      tool: beacon.status
+      args: {}
+      reply: "Checking."
+    - name: beacon-inbox
+      match: '^(?:(?:show|check|open)\s+(?:me\s+)?)?(?:my\s+)?(?:e-?mails?|inbox|gmail|e-?mail\s+inbox)\??$|^(?:any|do\s+i\s+have\s+(?:any\s+)?)\s*(?:new\s+|important\s+)?(?:e-?mails?|mail)\??$|^what(?:''s|s|\s+is)\s+(?:new\s+)?in\s+my\s+(?:inbox|e-?mail)\??$|^(?:anything|any)\s+important\s+in\s+my\s+(?:e-?mail|inbox)\??$|^(?:show\s+(?:me\s+)?)?(?:my\s+)?important\s+e-?mails?\??$'
+      tool: beacon.inbox
+      args: {}
+      reply: "Here's your email."
+    - name: beacon-inbox-all
+      match: '^(?:show|list)\s+(?:me\s+)?all\s+(?:of\s+)?(?:my\s+)?(?:e-?mails?|mail|inbox)(?:\s+from\s+(?:today|the\s+last\s+two\s+days))?$'
+      tool: beacon.inbox
+      args: { all: "true" }
+      reply: "Here's all of it."
+    - name: beacon-read-id
+      match: '^read\s+(?:the\s+)?e-?mail\s+(?P<id>\d{6,25})$'
+      tool: beacon.read_email
+      args: { id: "{id}" }
+      reply: "Reading it."
+    - name: beacon-read
+      match: '^(?:read|open|show)\s+(?:me\s+)?(?:the\s+|my\s+)?(?:latest\s+|last\s+|newest\s+|new\s+)?(?:e-?mail|message|mail)(?:\s+(?:from|about)\s+(?P<which>.+?))?$'
+      tool: beacon.read_email
+      args: { which: "{which|}" }
+      reply: "Reading it."
+    - name: beacon-search
+      match: '^(?:search|look\s+through)\s+(?:in\s+)?my\s+(?:e-?mail|gmail|inbox|mail)\s+for\s+(?P<q>.+)$|^find\s+(?:my\s+|the\s+)?e-?mails?\s+about\s+(?P<q2>.+)$'
+      tool: beacon.search_email
+      args: { query: "{q|}{q2|}" }
+      reply: "Searching your email."
+    - name: beacon-search-from
+      match: '^(?:find|show|search)\s+(?:me\s+)?(?:my\s+|the\s+|all\s+)?e-?mails?\s+from\s+(?P<who>[\w.@+-]+)$'
+      tool: beacon.search_email
+      args: { query: "from:{who}" }
+      reply: "Searching your email."
+    - name: beacon-agenda
+      match: '^what(?:''s|s|\s+is)\s+on\s+my\s+(?:calendar|schedule|agenda)(?:\s+(?:for\s+)?(?P<day>today|tomorrow|tonight|(?:this|next)\s+week|the\s+weekend|this\s+weekend|(?:on\s+)?(?:mon|tues|wednes|thurs|fri|satur|sun)day|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\w*\.?\s+\d{1,2}))?\??$|^what(?:''s|s|\s+is)\s+on\s+(?P<day2>today|tomorrow|(?:this|next)\s+week|the\s+weekend|this\s+weekend|(?:mon|tues|wednes|thurs|fri|satur|sun)day)\??$|^(?:show|open)\s+(?:me\s+)?my\s+(?:calendar|schedule|agenda)(?:\s+for\s+(?P<day3>today|tomorrow|(?:this|next)\s+week|the\s+weekend|(?:mon|tues|wednes|thurs|fri|satur|sun)day))?$|^(?:my\s+)?(?:calendar|agenda)(?:\s+(?P<day4>today|tomorrow|this\s+week))?$|^what\s+do\s+i\s+have\s+(?:on\s+)?(?P<day5>today|tomorrow|tonight|this\s+week|next\s+week|(?:mon|tues|wednes|thurs|fri|satur|sun)day)\??$'
+      tool: beacon.agenda
+      args: { day: "{day|}{day2|}{day3|}{day4|}{day5|}" }
+      reply: "Here's your calendar."
+    - name: beacon-add-event
+      match: '^(?:add|put|schedule)\s+(?P<say>.+?)\s+(?:to|on|in)(?:to)?\s+my\s+calendar$|^(?:add|put)\s+(?:to|on)\s+my\s+calendar\s*[:,]?\s+(?P<say2>.+)$'
+      tool: beacon.add_event
+      args: { say: "{say|}{say2|}" }
+      reply: "Here's the event."
+    - name: beacon-remove-event
+      match: '^(?:remove|delete|cancel|take)\s+(?:the\s+|my\s+)?(?P<which>.+?)\s+(?:from|off(?:\s+of)?)\s+my\s+calendar$'
+      tool: beacon.remove_event
+      args: { which: "{which}" }
+      reply: "Here's what I'd remove."
+    # Lagrange: connections to other services (before the home's "turn off the …" and "show …" phrases).
+    - name: lagrange-list
+      match: '^(?:(?:show|list|open)(?: me)?\s+(?:my\s+|the\s+|all\s+)?(?:connections|connected\s+services|integrations|webhooks)|what(?:''s|\s+is|\s+are)\s+(?:you\s+)?connected(?:\s+to)?|what\s+(?:services\s+)?(?:are\s+you|am\s+i)\s+connected\s+to|(?:my\s+)?connections)\??$'
+      tool: lagrange.connections
+      args: {}
+      reply: "Here's what's connected."
+    - name: lagrange-form-ha
+      match: '^(?:connect|add|set\s+up|link)\s+(?:to\s+)?(?:my\s+)?(?:home\s*assistant|ha)$'
+      tool: lagrange.connect
+      args: { name: "home assistant" }
+      reply: "Connecting Home Assistant."
+    - name: lagrange-form-hook
+      match: '^(?:connect|add|set\s+up|make|create)\s+(?:a\s+|an\s+|another\s+|a\s+new\s+|new\s+)?(?:incoming\s+|outgoing\s+)?web\s*hook$'
+      tool: lagrange.connect_form
+      args: { kind: hook_in }
+      reply: "Here's the form."
+    - name: lagrange-form
+      match: '^(?:connect|add|set\s+up|link)\s+(?:a\s+|an\s+|another\s+|a\s+new\s+|new\s+)(?:service|integration|connection|mcp\s+server|server|app)$|^(?:open\s+)?(?:the\s+)?connect(?:ion)?\s+form$'
+      tool: lagrange.connect_form
+      args: {}
+      reply: "Here's the form."
+    - name: lagrange-tools
+      match: '^(?:(?:show|open|list)(?: me)?\s+(?:the\s+|my\s+)?(?P<name>[\w'' -]+?)\s+connection|what\s+can\s+(?:the\s+|my\s+)?(?P<name2>[\w'' -]+?)\s+connection\s+do)\??$'
+      tool: lagrange.connection
+      args: { name: "{name}{name2}" }
+      reply: "Here it is."
+    - name: lagrange-approve
+      match: '^approve\s+(?:the\s+)?(?:new\s+|changed\s+|new\s+or\s+changed\s+)?(?P<name>[\w'' -]+?)\s+tools$'
+      tool: lagrange.approve
+      args: { name: "{name}" }
+      reply: "Approving them."
+    - name: lagrange-refresh
+      match: '^(?:refresh\s+(?:the\s+)?(?P<name>[\w'' -]+?)\s+connection|check\s+(?:the\s+)?(?P<name2>[\w'' -]+?)\s+(?:connection\s+)?for\s+new\s+tools)$'
+      tool: lagrange.refresh
+      args: { name: "{name}{name2}" }
+      reply: "Asking it."
+    - name: lagrange-disconnect
+      match: '^(?:disconnect|remove\s+the\s+connection\s+to|forget\s+the\s+connection\s+to)\s+(?!.*\b(?:from|to|tv|pc|computer|laptop|desktop|speakers?|bluetooth|headphones|headset|airpods|wi-?fi|vpn|projector|monitor|display|screen|phone|iphone|spotify|internet|network)\b)(?:the\s+|my\s+)?(?P<name>[\w'' -]+?)(?:\s+connection)?$'
+      tool: lagrange.disconnect
+      args: { name: "{name}" }
+      reply: "Disconnecting it."
+    - name: lagrange-off
+      match: '^(?:turn|switch)\s+off\s+(?:the\s+|my\s+)?(?P<name>[\w'' -]+?)\s+connection$|^(?:turn|switch)\s+(?:the\s+|my\s+)?(?P<name2>[\w'' -]+?)\s+connection\s+off$|^stop\s+using\s+(?:the\s+|my\s+)?(?P<name3>[\w'' -]+?)\s+connection$'
+      tool: lagrange.turn_off
+      args: { name: "{name}{name2}{name3}" }
+      reply: "Turning it off."
+    - name: lagrange-on
+      match: '^(?:turn|switch)\s+on\s+(?:the\s+|my\s+)?(?P<name>[\w'' -]+?)\s+connection$|^(?:turn|switch)\s+(?:the\s+|my\s+)?(?P<name2>[\w'' -]+?)\s+connection\s+(?:back\s+)?on$|^start\s+using\s+(?:the\s+|my\s+)?(?P<name3>[\w'' -]+?)\s+(?:connection\s+)?again$'
+      tool: lagrange.turn_on
+      args: { name: "{name}{name2}{name3}" }
+      reply: "Turning it on."
+    - name: lagrange-sign-in
+      match: '^sign\s+(?:in|back\s+in)\s+to\s+(?!.*\s(?:on|in)\s)(?:the\s+|my\s+)?(?P<name>[\w'' -]+?)\s+(?:connection(?:\s+again)?|again)$'
+      tool: lagrange.sign_in
+      args: { name: "{name}" }
+      reply: "Here's the sign-in."
+    - name: lagrange-connect-draft
+      match: '^connect\s+the\s+(?P<name>[\w'' -]+?)\s+draft$'
+      tool: lagrange.connect
+      args: { name: "{name}" }
+      reply: "Connecting it."
+    - name: lagrange-connect
+      match: '^connect\s+(?!.*\b(?:to|with|tv|pc|computer|laptop|desktop|speakers?|bluetooth|headphones|headset|airpods|wi-?fi|vpn|projector|monitor|display|screen|phone|iphone|spotify)\b)(?:the\s+|my\s+)?(?P<name>[\w'' -]+?)(?:\s+draft)?$'
+      tool: lagrange.connect
+      args: { name: "{name}" }
+      reply: "Connecting it."
     - name: routine-make
       match: '^(?P<say>(?:make|create|add|set\s+up|save|build)\s+(?:me\s+)?(?:a\s+|an\s+|the\s+|my\s+)?(?:new\s+)?(?:[\w''" -]+?\s+)?routine\b.+)$'
       tool: pulsar.routine
@@ -440,6 +575,58 @@ fastpath:
       tool: quasar.spotify
       args: { action: devices }
       reply: "Here are your Spotify speakers."
+    # The queue (Phase 12.5): what plays after what's playing on a computer, YouTube and your library together.
+    # Panels add by id ("add yt:… to my queue"); you can add a title from your library by its name.
+    - name: queue-show
+      match: '^(?:(?:show|open|list)(?: me)? (?:my |the )?(?:video |watch )?queue|what(?:''s| is) (?:in|on) (?:my |the )?queue|what(?:''s| is) (?:playing|on) next|what plays next)(?:\s+on\s+(?!(?:the\s+|my\s+)?(?:calendar|agenda|schedule|list|to-?do|plan)\b)(?:the\s+|my\s+)?(?P<on>.+?))?\??$'
+      tool: quasar.queue
+      args: { action: show, "on": "{on|}" }
+      reply: "Here's your queue."
+    - name: queue-add-ids
+      match: '^(?:add|queue(?: up)?) (?P<ids>(?:(?:yt|jf):[A-Za-z0-9_-]+(?:\s*,\s*(?:and\s+)?|\s+and\s+|\s+)?)+) to (?:my |the )?queue(?:\s+on\s+(?:the\s+|my\s+)?(?P<on>.+?))?$'
+      tool: quasar.queue
+      args: { action: add, ids: "{ids}", "on": "{on|}" }
+      reply: "Added to your queue."
+    - name: queue-next-ids
+      match: '^play (?P<ids>(?:(?:yt|jf):[A-Za-z0-9_-]+(?:\s*,\s*(?:and\s+)?|\s+and\s+|\s+)?)+) next(?:\s+on\s+(?:the\s+|my\s+)?(?P<on>.+?))?$'
+      tool: quasar.queue
+      args: { action: next, ids: "{ids}", "on": "{on|}" }
+      reply: "That plays next."
+    - name: queue-add-title
+      match: '^(?:add|queue(?: up)?) (?P<what>.+?) to (?:my |the )?queue(?:\s+on\s+(?:the\s+|my\s+)?(?P<on>.+?))?$'
+      tool: quasar.queue
+      args: { action: add, what: "{what}", "on": "{on|}" }
+      reply: "Added {what} to your queue."
+    - name: queue-next-title
+      match: '^play (?!(?:the\s+)?next\b|(?:it|this|that|this one|that one|whatever(?:''s)?|what(?:''s| is))(?:\s+up)?\s+next\b)(?P<what>.+?) (?:up )?next(?:\s+on\s+(?:the\s+|my\s+)?(?P<on>.+?))?$'
+      tool: quasar.queue
+      args: { action: next, what: "{what}", "on": "{on|}" }
+      reply: "{what} plays next."
+    - name: queue-remove
+      match: '^(?:remove|take|drop) (?:number |#)?(?P<which>.+?) (?:from|off|out of) (?:my |the )?queue(?:\s+on\s+(?:the\s+|my\s+)?(?P<on>.+?))?$'
+      tool: quasar.queue
+      args: { action: remove, which: "{which}", "on": "{on|}" }
+      reply: "Removed from your queue."
+    - name: queue-clear
+      match: '^(?:clear|empty)(?: out)? (?:my |the )?queue(?:\s+on\s+(?:the\s+|my\s+)?(?P<on>.+?))?$'
+      tool: quasar.queue
+      args: { action: clear, "on": "{on|}" }
+      reply: "Cleared your queue."
+    - name: autoplay-off
+      match: '^(?:turn |switch )?(?:off autoplay|autoplay off)|(?:stop|disable|pause) autoplay(?:ing)?|no (?:more )?autoplay$'
+      tool: quasar.queue
+      args: { action: autoplay_off }
+      reply: "Autoplay is off."
+    - name: autoplay-on
+      match: '^(?:turn |switch )?(?:on autoplay|autoplay (?:back )?on)|(?:start|enable|resume) autoplay(?:ing)?$'
+      tool: quasar.queue
+      args: { action: autoplay_on }
+      reply: "Autoplay is on."
+    - name: media-skip
+      match: '^skip(?: (?:this|it|this one|this video|this episode))?(?:\s+on\s+(?:the\s+|my\s+)?(?P<target>.+?))?$'
+      tool: constellation.media
+      args: { action: next, target: "{target|}" }
+      reply: "Skipping."
     - name: youtube-play-id
       match: '^play the youtube video (?P<id>yt:[A-Za-z0-9_-]{11})(?:\s+on\s+(?:the |my )?(?P<on>.+?))?$'
       tool: quasar.play
@@ -612,7 +799,7 @@ fastpath:
       reply: "Stopped."
     - name: media-play-title
       # "play Frieren on the TV", "put on Big Buck", "watch Dune on the TV": my player, from his library.
-      match: '^(?:play|put on|start playing|watch)\s+(?!(?:the |my )?(?:sign[- ]?in|screen|live)\b)(?!.*\bscreen$)(?P<what>.+?)(?:\s+(?:on|onto)\s+(?:the |my )?(?P<on>.+?))?$'
+      match: '^(?:play|put on|start playing|watch)\s+(?!(?:the |my )?(?:sign[- ]?in|screen|live)\b)(?!.*\bscreen$)(?!(?:it|this|that|this one|that one|whatever(?:''s)?|what(?:''s| is))(?:\s+up)?\s+next$)(?P<what>.+?)(?:\s+(?:on|onto)\s+(?:the |my )?(?P<on>.+?))?$'
       tool: quasar.play
       args: { what: "{what}", "on": "{on|}" }
       reply: "On it."
