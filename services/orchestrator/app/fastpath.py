@@ -28,14 +28,32 @@ _POLITE = re.compile(r"^(?:(?:hey\s+)?(?:aura|aurelia)[,:]?\s+)?(?:(?:please|can
                      r"(?P<rest>.*?)(?:[,\s]+please)?$", re.IGNORECASE)
 
 
+_COMPILED: dict[str, re.Pattern | None] = {}   # each pattern compiled once (None: it doesn't compile)
+
+
+def compiled(pattern: str) -> re.Pattern | None:
+    """The pattern, compiled once for the life of the process (Python's own cache holds only 512, and the
+    fast paths, skills and connections together could outgrow it)."""
+    got = _COMPILED.get(pattern, False)
+    if got is False:
+        try:
+            got = re.compile(pattern, re.IGNORECASE)
+        except re.error:
+            got = None
+        if len(_COMPILED) > 4000:                    # (old versions of edited patterns)
+            _COMPILED.clear()
+        _COMPILED[pattern] = got
+    return got
+
+
 def match(text: str, patterns: list[FastPathPattern]) -> FastPathMatch | None:
     cleaned = " ".join(text.strip().rstrip(".!?").split())
     cleaned = _POLITE.match(cleaned).group("rest") or cleaned
     for p in patterns:
-        try:
-            m = re.fullmatch(p.match, cleaned, flags=re.IGNORECASE)
-        except re.error:
+        rx = compiled(p.match)
+        if rx is None:
             continue  # a bad pattern in config never breaks the rest
+        m = rx.fullmatch(cleaned)
         if m:
             groups = {k: v for k, v in m.groupdict().items()}
             args = {k: _fill(v, groups) for k, v in p.args.items()}

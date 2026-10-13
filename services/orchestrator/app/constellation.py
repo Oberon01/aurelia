@@ -407,15 +407,21 @@ def site_for(name: str) -> str | None:
     return SITES.get(" ".join(name.lower().replace("the ", "", 1).split()))
 
 
+async def _nodes_now(app) -> list[dict]:
+    """His computers, with just what targeting needs, and whether each is online (one MGET for all)."""
+    rows = await db.pool().fetch(
+        "SELECT id, name, info->>'hostname' AS hostname, info->>'shell' AS shell, info->>'mode' AS mode, "
+        "info->>'mode_until' AS mode_until FROM devices WHERE kind='node' AND status='approved'")
+    up = await app.state.redis.mget([nodes.ONLINE.format(r["id"]) for r in rows]) if rows else []
+    return [{"id": r["id"], "name": r["name"], "hostname": r["hostname"], "shell": r["shell"], "online": bool(u),
+             "mode": r["mode"], "mode_until": float(r["mode_until"]) if r["mode_until"] else None}
+            for r, u in zip(rows, up)]
+
+
 async def target(app, asked: str | None, screen: bool = False) -> dict:
     """The node a request means. Clear failures, never a guess between two machines.
     screen: it's about what a screen shows, so with no name, the one computer running her shell."""
-    rows = await db.pool().fetch("SELECT id, name, info FROM devices WHERE kind='node' AND status='approved'")
-    ns = []
-    for r in rows:
-        info = r["info"] if isinstance(r["info"], dict) else json.loads(r["info"] or "{}")
-        ns.append({"id": r["id"], "name": r["name"], "hostname": info.get("hostname"), "shell": info.get("shell"),
-                   "online": await nodes.online(app, r["id"]), "mode": info.get("mode"), "mode_until": info.get("mode_until")})
+    ns = await _nodes_now(app)
     if not ns:
         raise NoSuchNode("None of your computers runs my node yet.")
     if asked and asked.strip():
@@ -475,14 +481,11 @@ async def node_on_tv(app, asked: str) -> dict | None:
     """The online computer plugged into the TV he named (by its `screens` link), if exactly one."""
     if not asked.strip():
         return None
-    rows = await db.pool().fetch("SELECT id, name, info FROM devices WHERE kind='node' AND status='approved'")
     hits = []
-    for r in rows:
-        info = r["info"] if isinstance(r["info"], dict) else json.loads(r["info"] or "{}")
-        n = {"id": r["id"], "name": r["name"], "hostname": info.get("hostname"), "shell": info.get("shell")}
+    for n in await _nodes_now(app):
         link = tv_link(app, n)
-        if link and link["tv"] and _match(asked, link["tv"], None) and await nodes.online(app, r["id"]):
-            hits.append(n)
+        if link and link["tv"] and _match(asked, link["tv"], None) and n["online"]:
+            hits.append({k: n[k] for k in ("id", "name", "hostname", "shell")})
     return hits[0] if len(hits) == 1 else None
 
 
@@ -1602,6 +1605,14 @@ async def screens(app, user: str, args: dict) -> dict:
         every = [d for d in every if _match(asked, d["name"], d.get("hostname"))]
         if not every:
             raise ValueError(f"I don't know a display called \"{asked}\".")
+    async def showing_on(d: dict) -> str | None:
+        try:
+            showing = await _ask_node(app, {"id": d["node"]["id"], "name": d["name"]}, "showing", {}, timeout=4)
+            return (showing.get("title") or "something I opened") if showing.get("content") else None
+        except Exception:
+            return None
+    asking = [d for d in every if d["node"] and d["open"]]
+    shown = dict(zip([d["id"] for d in asking], await asyncio.gather(*(showing_on(d) for d in asking))))   # all at once
     out = []
     for d in every:
         rep = await screen_report(app, d["id"])
@@ -1615,13 +1626,8 @@ async def screens(app, user: str, args: dict) -> dict:
         kept = await app.state.redis.llen(DISPLAY_QUEUE.format(d["id"]))
         if kept:
             item["kept"] = kept // 3                  # sent while it wasn't open: shown when it opens
-        if d["node"] and d["open"]:
-            try:
-                showing = await _ask_node(app, {"id": d["node"]["id"], "name": d["name"]}, "showing", {}, timeout=4)
-                if showing.get("content"):
-                    item["showing"] = showing.get("title") or "something I opened"
-            except Exception:
-                pass
+        if shown.get(d["id"]):
+            item["showing"] = shown[d["id"]]
         out.append(item)
     n = sum(len(x["panels"]) for x in out)
     head = (f"{len(out)} display{'s' if len(out) != 1 else ''} · {n} panel{'s' if n != 1 else ''}" if out
@@ -2080,13 +2086,29 @@ async def live_keep(node_id: int, request: Request):
     return {"online": await nodes.online(request.app, node_id), **await nodes.live_state(request.app.state.redis, node_id)}
 
 
+_viewers: dict[tuple, float] = {}                       # (display, node) → when it was last allowed to watch
+VIEWER_KEEP = 30.0
+
+
 @router.get("/live/{node_id}/frame.jpg", include_in_schema=False)
 async def live_frame(node_id: int, request: Request):
-    await _viewer(request, node_id)
-    data = await request.app.state.redis.get(nodes.LIVE_FRAME.format(node_id))
+    """The newest frame. Its number is the ETag: a display that already has it gets a 304 (no picture again)."""
+    import time as _t
+    who = (request.headers.get("x-aurelia-device"), node_id)
+    if _t.monotonic() - _viewers.get(who, 0.0) > VIEWER_KEEP:     # allowed to watch: checked every 30 s, not per frame
+        await _viewer(request, node_id)
+        if len(_viewers) > 200:
+            _viewers.clear()
+        _viewers[who] = _t.monotonic()
+    redis = request.app.state.redis
+    meta_raw, data = await redis.mget([nodes.LIVE_META.format(node_id), nodes.LIVE_FRAME.format(node_id)])
     if not data:
         return Response(status_code=204, headers={"Cache-Control": "no-store"})
-    return Response(data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+    seq = (json.loads(meta_raw) if meta_raw else {}).get("seq")
+    etag = f'"{node_id}-{seq}"' if seq is not None else None
+    if etag and request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "no-cache"})
+    return Response(data, media_type="image/jpeg", headers={"Cache-Control": "no-cache", **({"ETag": etag} if etag else {})})
 
 
 HANDLERS = {"devices": devices, "open": open_, "apps": apps, "home": home, "look": look, "click": click, "type": type_,

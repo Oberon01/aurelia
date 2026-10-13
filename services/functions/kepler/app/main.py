@@ -199,12 +199,13 @@ async def research(ctx: TaskContext) -> dict:
 
     # 2. Search, then pick sources across the angles.
     await ctx.progress(1, total, "Searching the web")
-    lists = []
-    for q in queries:
+    async def search(q: str) -> list | None:          # every angle at once, kept in the planned order
         try:
-            lists.append((await o.run("nebula.search", {"query": q, "count": 8}, lambda: ctx.cancelled)).get("results") or [])
+            return (await o.run("nebula.search", {"query": q, "count": 8}, lambda: ctx.cancelled)).get("results") or []
         except KeplerError as exc:
             log.info("search %r failed: %s", q, exc)
+            return None
+    lists = [x for x in await asyncio.gather(*(search(q) for q in queries)) if x is not None]
     candidates = R.pick_sources(lists, int(ru["max_per_site"]))
     if not candidates:
         raise KeplerError("The web search didn't turn up anything I could read.")

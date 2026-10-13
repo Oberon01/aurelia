@@ -11,6 +11,7 @@ from fastapi import APIRouter, Request
 
 from . import db, registry
 from .tasks import StartTask, launch
+from . import net
 
 log = logging.getLogger("aurelia.digest")
 router = APIRouter(prefix="/digest", tags=["digest"])
@@ -35,7 +36,7 @@ async def maybe_show(app, user: str = "owner", device: int | None = None) -> dic
         if resolved is None:
             await redis.delete(lock)
             return {"shown": False, "why": "Parallax isn't running"}
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with net.session(15) as client:
             r = await client.get(f"{resolved.url}/digest")
             r.raise_for_status()
             content = r.json()

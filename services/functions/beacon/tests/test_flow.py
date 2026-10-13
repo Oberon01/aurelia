@@ -459,7 +459,7 @@ async def test_forgetting_your_email_stops_a_slow_read_and_keeps_nothing(env, mo
     FakeGmail.inbox = [inbox_msg(40 + i, f"p{i}@example.com", f"Slow {i}") for i in range(3)]
     started, slow = asyncio.Event(), asyncio.Event()
 
-    async def classify(m):                                   # a model check that takes its time
+    async def classify(m, contact=None):                     # a model check that takes its time
         started.set()
         await slow.wait()
         return True, "slow"
@@ -501,3 +501,29 @@ async def test_forgetting_clears_what_was_kept_and_the_form_refuses_odd_input(en
     no_proxy = {k: v for k, v in OWNER.items() if k != "x-forwarded-host"}
     r = await asgi.post("/beacon/setup", json={"gmail_password": "x"}, headers=no_proxy)
     assert r.status_code == 403                                             # only through the proxy
+
+
+async def test_the_calendar_cache_changes_only_what_changed_and_forgets_the_past(env):
+    st = M.store()
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    start, end = now - timedelta(hours=1), now + timedelta(days=14)
+    ev = lambda uid, h, title: {"uid": uid, "start": now + timedelta(hours=h), "end": now + timedelta(hours=h + 1),
+                                "all_day": False, "title": title, "location": ""}
+    db = await asyncpg.connect(DB)
+    try:
+        await db.execute("DELETE FROM calendar_events WHERE source='google'")
+        await db.execute("INSERT INTO calendar_events (source, uid, starts_at, ends_at, all_day, title) VALUES "
+                         "('google', 'old', now() - interval '5 days', now() - interval '5 days' + interval '1 hour', "
+                         "false, 'Last week')")
+        await st.replace_events("google", start, end, [ev("a", 2, "Dentist"), ev("b", 5, "Gym")])
+        before = {r["uid"]: r["xmin"] for r in await db.fetch("SELECT uid, xmin::text FROM calendar_events WHERE source='google'")}
+        assert set(before) == {"a", "b"}                                       # last week's is gone
+        await st.replace_events("google", start, end, [ev("a", 2, "Dentist"), ev("c", 7, "Call mom")])
+        after = {r["uid"]: (r["xmin"], r["title"]) for r in
+                 await db.fetch("SELECT uid, xmin::text, title FROM calendar_events WHERE source='google'")}
+        assert set(after) == {"a", "c"} and after["a"][0] == before["a"]       # unchanged: not written again
+        await st.replace_events("google", start, end, [ev("a", 2, "Dentist (moved room)"), ev("c", 7, "Call mom")])
+        assert (await db.fetchval("SELECT title FROM calendar_events WHERE uid='a'")) == "Dentist (moved room)"
+    finally:
+        await db.execute("DELETE FROM calendar_events WHERE source='google'")
+        await db.close()

@@ -448,7 +448,7 @@ button.gl:hover{color:var(--ink-strong)}
 .dev.changed{animation:flash 1.4s ease-out}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
 @keyframes sweep{0%{transform:translateX(-100%)}100%{transform:translateX(250%)}}
-@keyframes slide{0%{margin-left:-30%}100%{margin-left:100%}}
+@keyframes slide{0%{transform:translateX(-100%)}100%{transform:translateX(334%)}}
 @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 @media (max-width:640px){
   body{grid-template-rows:auto 84px minmax(0,1fr) auto}
@@ -895,6 +895,7 @@ function renderNowSlot() {
   slot._draw();
 }
 setInterval(() => {
+  if (!nowItems.size) return;
   const slot = document.getElementById("nowslot");
   if (slot && !slot.hidden && slot._draw) slot._draw();
   let gone = false;                             // a player that went quiet without saying it stopped
@@ -916,7 +917,7 @@ function hourLabel(h) { return h === 0 ? "12A" : h === 12 ? "12P" : h < 12 ? `${
 function drawTape() {
   const t = document.getElementById("tape");
   if (!isHud() || !t.clientWidth) return;
-  const phone = matchMedia("(max-width:640px)").matches;
+  const phone = innerWidth <= 640;
   const span = (phone ? 12 : 24) * 3600e3, lead = (phone ? 0.5 : 2) * 3600e3, now = Date.now(), start = now - lead;
   const W = t.clientWidth, x = ms => (ms - start) / span * W, kids = [];
   const first = new Date(start); first.setMinutes(0, 0, 0);
@@ -961,7 +962,12 @@ function drawTape() {
   if (!marks.some(m => m.kind !== "digest")) kids.push(el("div", "empty", "Nothing scheduled"));
   t.replaceChildren(...kids);
 }
-addEventListener("resize", () => drawTape());
+let resizeDue = false;                          // one pass per frame however fast the window is dragged
+addEventListener("resize", () => {
+  if (resizeDue) return;
+  resizeDue = true;
+  requestAnimationFrame(() => { resizeDue = false; drawTape(); relayout(); fitReply(); });
+});
 
 // The ambient screen: dim (how dim is set on the server), the weather, dark at quiet hours.
 let ambientTimer = null;
@@ -1055,7 +1061,8 @@ function el(tag, cls, text) {
 
 // ---------------------------------------------------------------- layout
 const STICKY = ["running", "refreshing", "asking"];      // never sent to the queue
-const maxVisible = () => (skipMode() ? 1 : matchMedia("(max-width:640px)").matches ? 2 : 4);   // a phone: one at a time
+const NARROW = matchMedia("(max-width:640px)");          // made once, read on every layout
+const maxVisible = () => (skipMode() ? 1 : NARROW.matches ? 2 : 4);   // a phone: one at a time
 let queueClock = 0;
 
 // Decide what's on screen: at most maxVisible() panels. Past that, the panel
@@ -1110,7 +1117,7 @@ function place(visible) {
                                            || dom.indexOf(a.node) - dom.indexOf(b.node));
   recs().filter(p => p.queued).forEach(p => { p.node.style.gridRow = p.node.style.gridColumn = ""; });
   let rows;
-  if (matchMedia("(max-width:640px)").matches) rows = list.map(p => [p]);
+  if (NARROW.matches) rows = list.map(p => [p]);
   else if (list.length <= 2) rows = [list];
   else if (list.length === 3) {
     const big = list.find(p => weight(p) === 3);
@@ -1121,7 +1128,7 @@ function place(visible) {
   rows.forEach((row, ri) => {
     if (row.length === 1) {
       const w = weight(row[0]);
-      row[0].node.style.gridColumn = rows.length > 1 || matchMedia("(max-width:640px)").matches ? "1 / -1"
+      row[0].node.style.gridColumn = rows.length > 1 || NARROW.matches ? "1 / -1"
         : w === 1 ? "4 / span 6" : w === 2 ? "2 / span 10" : "1 / -1";
       row[0].node.style.gridRow = String(ri + 1);
       return;
@@ -1157,7 +1164,16 @@ function renderRail(waiting) {
   });
 }
 
+let layoutDue = false;
 function relayout() {
+  if (layoutDue) return;
+  layoutDue = true;
+  requestAnimationFrame(layoutNow);
+  setTimeout(layoutNow, 100);
+}
+function layoutNow() {
+  if (!layoutDue) return;
+  layoutDue = false;
   reportSoon();
   document.body.classList.toggle("busy", recs().some(p => !p.queued));   // the ambient clock steps back
   const { visible, waiting } = arrange();
@@ -1168,7 +1184,6 @@ function relayout() {
   document.getElementById("connText").textContent =
     ws && ws.readyState === 1 ? (running ? `${running} running · ${shown}` : shown) : connWord;
 }
-addEventListener("resize", () => relayout());
 
 // Looking at or using a panel keeps it on screen longest.
 function track(rec) {
@@ -1211,6 +1226,7 @@ function setFocus(rec) {
 
 // What's on screen, by number, sent with each request so she sees what you see.
 function screenState() {
+  layoutNow();
   const list = recs().filter(p => p.num && p.state !== "asking" && !p.node.classList.contains("leaving"))
     .map(p => ({ n: p.num, task_id: (p.state === "refreshing" && p.memo && p.memo.taskId) || p.latestTask || p.taskId,
                  tool: p.tool, title: panelTitle(p), queued: !!p.queued }));
@@ -1222,6 +1238,7 @@ function screenState() {
 let reportTimer = null;
 function reportSoon() { clearTimeout(reportTimer); reportTimer = setTimeout(reportScreen, 300); }
 function reportScreen() {
+  layoutNow();                                  // (settles a pending layout first; its own report is this one)
   clearTimeout(reportTimer);
   const ids = new Map();
   panels.forEach((rec, id) => { if (!ids.has(rec)) ids.set(rec, []); ids.get(rec).push(id); });
@@ -1233,7 +1250,7 @@ function reportScreen() {
                                                         app: matchMedia("(display-mode: standalone)").matches || navigator.standalone === true }) })
     .catch(() => {});
 }
-setInterval(reportScreen, 60000);
+setInterval(() => { if (document.visibilityState === "visible") reportScreen(); }, 60000);
 // Back on screen (a phone out of a pocket): say so, and pick up anything kept for this display meanwhile.
 document.addEventListener("visibilitychange", async () => {
   reportScreen();
@@ -1325,10 +1342,11 @@ function loadNow() {
 
 const dismissed = new Set();                    // release panels you closed: don't replay them
 const closedPlans = new Set();               // plan panels he closed: their updates don't reopen them
+function keepLast(c, n) { while (c.size > n) c.delete(c.keys().next().value); }   // oldest out first
 function remove(rec, delay) {
-  if (rec.tool === "chrysalis.release") dismissed.add(rec.taskId);
-  if (rec.data && rec.data.plan && delay === undefined) closedPlans.add(rec.taskId);   // admiral.plan or morpho.run
-  if (rec.tool === "quasar.now" && rec.nowKey && rec.nowTitle && delay === undefined) nowDismissed.set(rec.nowKey, rec.nowTitle);
+  if (rec.tool === "chrysalis.release") { dismissed.add(rec.taskId); keepLast(dismissed, 200); }
+  if (rec.data && rec.data.plan && delay === undefined) closedPlans.add(rec.taskId), keepLast(closedPlans, 200);   // admiral.plan or morpho.run
+  if (rec.tool === "quasar.now" && rec.nowKey && rec.nowTitle && delay === undefined) nowDismissed.set(rec.nowKey, rec.nowTitle), keepLast(nowDismissed, 50);
   if (rec === focused) setFocus(null);
   setTimeout(() => {
     rec.node.classList.add("leaving");
@@ -3114,7 +3132,9 @@ function liveView(lv) {
   box.append(scr, bar);
   let paused = false, lastKeep = 0, busy = false, shown = 0, stopped = false, url = null;
   const base = `/constellation/live/${lv.node_id}`;
-  const say = (text, cls) => { left.textContent = ""; left.append(el("span", "dot"), document.createTextNode(text));
+  let said = null;
+  const say = (text, cls) => { if (said === text + "|" + cls) return; said = text + "|" + cls;
+                               left.textContent = ""; left.append(el("span", "dot"), document.createTextNode(text));
                                box.classList.toggle("paused", cls === "paused"); box.classList.toggle("stale", cls === "stale"); };
   say(`${lv.node} · starting`, "stale");
   scr.addEventListener("click", () => { paused = !paused; if (!paused) lastKeep = 0; say(paused ? `${lv.node} · paused (tap to resume)` : `${lv.node} · resuming`, paused ? "paused" : ""); });
@@ -3129,21 +3149,25 @@ function liveView(lv) {
       else if (m.problem) right.textContent = m.problem;
     } catch (e) {}
   }
+  let etag = null;                                    // the frame shown: the server answers 304 until there's a new one
   async function tick() {
     if (stopped || !box.isConnected) { if (url) URL.revokeObjectURL(url); return; }
-    const visible = document.visibilityState === "visible";
+    // Only while it can be seen: a hidden tab or a panel waiting in the strip asks for nothing (and the
+    // computer stops sending once nobody keeps it going).
+    const visible = document.visibilityState === "visible" && box.offsetParent !== null;
     if (!paused && visible) {
       if (Date.now() - lastKeep > 4000) { lastKeep = Date.now(); keep(); }
       if (!busy) {
         busy = true;
         try {
-          const r = await fetch(`${base}/frame.jpg`, { cache: "no-store" });
+          const r = await fetch(`${base}/frame.jpg`, { cache: "no-store", headers: etag ? { "If-None-Match": etag } : {} });
           if (r.status === 200) {
             const next = URL.createObjectURL(await r.blob());
             img.src = next; try { await img.decode(); } catch (e) {}
             if (url) URL.revokeObjectURL(url);
             url = next; shown = Date.now(); img.style.visibility = ""; wait.style.display = "none";
-          }
+            etag = r.headers.get("ETag");
+          } else if (r.status === 304) shown = Date.now();            // the same picture is still the current one
         } catch (e) {}
         busy = false;
       }
@@ -3774,7 +3798,7 @@ function onEvent(ev) {
   if (ev.tool === "quasar.next") {                    // what's next near the end of a video
     if (SCREEN) return;                               // (the TV is showing the video)
     if (skipMode()) {                                 // the phone: a bar, until he taps it
-      if (ev.type === "panel.result") { upnext.set(id, d); showUpbar(id); }
+      if (ev.type === "panel.result") { upnext.set(id, d); keepLast(upnext, 20); showUpbar(id); }
       if (ev.type === "panel.close" && d.close_after) hideUpbarSoon(id, d.close_after);
       if (!panels.has(id)) return;
     }
@@ -3796,8 +3820,8 @@ function onEvent(ev) {
     refreshOpen(["parallax.mailbox"], new Set());
     return;
   }
-  if (ev.type === "panel.open" && SYSTEM_USERS.has(d.user)) { hidden.add(id); return; }
-  if (ev.type === "panel.open" && d.display === "brief") { hidden.add(id); glanceSoon(); return; }   // answered in her reply
+  if (ev.type === "panel.open" && SYSTEM_USERS.has(d.user)) { hidden.add(id); keepLast(hidden, 500); return; }
+  if (ev.type === "panel.open" && d.display === "brief") { hidden.add(id); keepLast(hidden, 500); glanceSoon(); return; }   // answered in her reply
   if (hidden.has(id)) { if (ev.type === "panel.close") hidden.delete(id); return; }
   let rec = panels.get(id);
   switch (ev.type) {
@@ -3829,10 +3853,13 @@ function onEvent(ev) {
       }
       break;
     }
-    case "panel.progress":
+    case "panel.progress": {
+      const had = !!rec;
       rec = rec || makePanel(id, ev.tool);
       if (rec.state === "running") renderProgress(rec, d);
+      if (had) return;
       break;
+    }
     case "panel.result": {
       if (!rec && d.plan && closedPlans.has(id)) return;           // he closed this plan's panel
       rec = rec || makePanel(id, ev.tool);
@@ -4122,7 +4149,6 @@ reply.addEventListener("pointerleave", () => { exchanges.forEach(e => { if (!e.p
 document.addEventListener("pointerdown", e => {
   if (reply.classList.contains("open") && !reply.contains(e.target) && e.target !== more) openReply(false);
 });
-addEventListener("resize", fitReply);
 
 // ---- worth a glance: only what's off or in motion, at the edges of the screen ------------
 let glanceTimer = null;
@@ -4172,6 +4198,7 @@ function tick() {
 tick(); setInterval(tick, 10000);
 function say(text) {                            // a reply that isn't to something you typed (a confirmation)
   exchanges.push({ text: null, reply: text, pending: false, at: Date.now() });
+  if (exchanges.length > 12) exchanges.splice(0, exchanges.length - 12);
   showExchanges();
 }
 

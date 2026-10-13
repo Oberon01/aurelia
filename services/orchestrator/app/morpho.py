@@ -204,20 +204,37 @@ def phrase_regex(phrase: str) -> re.Pattern | None:
         return None
 
 
+_matchers: dict[str, Any] = {"ids": None, "list": []}   # his skills' phrases, compiled (until the skills change)
+
+
+async def _phrase_matchers() -> list[tuple[dict, re.Pattern, set]]:
+    """(skill, compiled phrase, its slot names) for every active skill: rebuilt only when which skills are active
+    changes (one small query per message instead of reading and compiling them all)."""
+    ids = await db.pool().fetchval("SELECT coalesce(array_agg(id ORDER BY id), '{}') FROM skills WHERE status='active'")
+    ids = tuple(ids or ())
+    if _matchers["ids"] != ids:
+        out = []
+        for sk in await active_skills():
+            names = {x["name"] for x in sk["slots"]}
+            for ph in sk["phrases"]:
+                if not phrase_ok(ph, short_ok=sk.get("source") == "routine"):
+                    continue
+                rx = phrase_regex(ph)
+                if rx is not None:
+                    out.append((sk, rx, names))
+        _matchers.update(ids=ids, list=out)
+    return _matchers["list"]
+
+
 async def match_phrase(app, text: str) -> tuple[dict, dict] | None:
     """One of his skills' phrases, said: (the skill, its slot values). Checked like a fast path."""
     from . import fastpath
     t = " ".join(str(text or "").strip().rstrip(".!?").split())
     t = fastpath._POLITE.match(t).group("rest") or t
-    for sk in await active_skills():
-        names = {s["name"] for s in sk["slots"]}
-        for ph in sk["phrases"]:
-            if not phrase_ok(ph, short_ok=sk.get("source") == "routine"):
-                continue
-            rx = phrase_regex(ph)
-            m = rx.fullmatch(t) if rx else None
-            if m and set(m.groupdict()) == names:
-                return sk, {k: v.strip() for k, v in m.groupdict().items()}
+    for sk, rx, names in await _phrase_matchers():
+        m = rx.fullmatch(t)
+        if m and set(m.groupdict()) == names:
+            return sk, {k: v.strip() for k, v in m.groupdict().items()}
     return None
 
 

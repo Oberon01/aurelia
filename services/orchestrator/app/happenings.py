@@ -18,6 +18,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 
 from . import db, registry
+from . import net
 
 log = logging.getLogger("aurelia.happenings")
 router = APIRouter(prefix="/pulsar", tags=["pulsar"])
@@ -150,12 +151,19 @@ async def hook_called(request: Request):
 
 # ---- reading it from his words -------------------------------------------------------------------------
 
+ORBIT_DEVICES = "aurelia:happenings:orbit"
+ORBIT_KEEP = 45                                     # seconds: one automation sentence asks Orbit once, not per reading
+
+
 async def entities(app) -> list[dict]:
-    """Everything whose changes I hear about: Orbit's devices and Home Assistant's entities."""
+    """Everything whose changes I hear about: Orbit's devices (kept ORBIT_KEEP s) and Home Assistant's entities."""
     from . import pulsar
     from .tasks import StartTask, launch, wait_for_result
     out: list[dict] = []
-    if await registry.resolve(app.state.redis, "orbit.status") is not None:
+    raw = await app.state.redis.get(ORBIT_DEVICES)
+    if raw:
+        out = json.loads(raw)
+    elif await registry.resolve(app.state.redis, "orbit.status") is not None:
         try:
             tid = await launch(app, StartTask(tool="orbit.status", args={}, user=pulsar.SYSTEM_USER, trigger=pulsar.NAME,
                                               display="brief"))
@@ -163,12 +171,14 @@ async def entities(app) -> list[dict]:
             for d in ((res or {}).get("result") or {}).get("devices") or []:
                 if d.get("name"):
                     out.append({"source": "orbit", "id": str(d["name"]).lower(), "name": d["name"], "kind": d.get("kind")})
+            if out:
+                await app.state.redis.set(ORBIT_DEVICES, json.dumps(out), ex=ORBIT_KEEP)
         except Exception as exc:
             log.warning("orbit devices: %s", exc)
     fn = await registry.get_function(app.state.redis, "lagrange")
     if fn is not None:
         try:
-            async with httpx.AsyncClient(timeout=10) as c:
+            async with net.session(10) as c:
                 r = await c.get(f"{fn.url}/ha/entities")
                 if r.is_success:
                     out += [e for e in r.json().get("entities") or [] if isinstance(e, dict)]

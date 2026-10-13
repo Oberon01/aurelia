@@ -164,7 +164,8 @@ async def send_one(sub: dict, message: dict, urgency: str = "normal",
     if message.get("tag"):
         headers["Topic"] = "".join(c for c in str(message["tag"]) if c.isalnum() or c in "-_")[:32]
     try:
-        async with httpx.AsyncClient(timeout=15, transport=transport) as c:
+        from . import net
+        async with (httpx.AsyncClient(timeout=15, transport=transport) if transport is not None else net.session(15)) as c:
             r = await c.post(sub["endpoint"], content=data, headers=headers)
     except httpx.HTTPError as exc:
         log.info("push to device %s failed: %s", sub.get("device_id"), exc.__class__.__name__)

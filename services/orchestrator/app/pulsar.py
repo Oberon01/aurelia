@@ -30,6 +30,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 import shutil
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -314,8 +315,26 @@ async def _what(app, what: str) -> tuple[str, str, dict, list[str]]:
     return "tool", title, {"tool": tool, "args": args}, notes
 
 
+_PARSED: dict[tuple[str, str], tuple[float, dict]] = {}   # (user, words) → (when, draft): checking a fast path
+PARSED_KEEP = 60.0                                          # and then running it read the words once, not twice
+
+
 async def parse(app, say: str, user: str = "owner") -> dict:
-    """His words -> a draft automation (nothing is saved). ValueError with a plain question when it isn't clear."""
+    """His words -> a draft automation (nothing is saved). ValueError with a plain question when it isn't clear.
+    The same words from the same person within a minute reuse the draft (a copy)."""
+    import copy
+    key = (user, " ".join(str(say or "").split()).lower())
+    hit = _PARSED.get(key)
+    if hit is not None and time.monotonic() - hit[0] < PARSED_KEEP:
+        return copy.deepcopy(hit[1])
+    d = await _parse(app, say, user)
+    if len(_PARSED) > 64:
+        _PARSED.clear()
+    _PARSED[key] = (time.monotonic(), copy.deepcopy(d))
+    return d
+
+
+async def _parse(app, say: str, user: str = "owner") -> dict:
     from . import engine
     t = _clean(say)
     if not t:
@@ -616,13 +635,18 @@ async def automations_tool(app, user: str, args: dict) -> dict:
     from . import engine, morpho
     n = engine.now()
     items = []
-    for j in await _mine(user):
+    mine = await _mine(user)
+    recent: dict[int, list] = {}
+    for r in await db.pool().fetch(                      # the last 3 runs of each, in one query
+            "SELECT job_id, outcome, started_at, note FROM (SELECT job_id, outcome, started_at, note, row_number() OVER "
+            "(PARTITION BY job_id ORDER BY started_at DESC, id DESC) AS k FROM job_runs WHERE job_id = ANY($1::bigint[])) x "
+            "WHERE k <= 3 ORDER BY job_id, started_at DESC", [j["id"] for j in mine]):
+        recent.setdefault(r["job_id"], []).append(r)
+    for j in mine:
         v = engine.view(j, n)
-        runs = await db.pool().fetch("SELECT outcome, started_at, note FROM job_runs WHERE job_id=$1 "
-                                     "ORDER BY id DESC LIMIT 3", j["id"])
         z = ZoneInfo(j["tz"])
         v["last"] = [{"outcome": r["outcome"], "when": when.say(r["started_at"].astimezone(z), n),
-                      **({"note": r["note"]} if r["note"] else {})} for r in runs]
+                      **({"note": r["note"]} if r["note"] else {})} for r in recent.get(j["id"], [])]
         if j["fails_in_row"]:
             v["fails_in_row"] = j["fails_in_row"]
         items.append(v)
@@ -805,8 +829,17 @@ async def notice(app, kind: str, key: str, title: str, text: str = "") -> dict |
     return dict(row)
 
 
-async def clear(app, kind: str, key: str) -> bool:
-    """It went away (the door was locked, the computer came back): closed, and its card taken back."""
+async def open_notices(kinds: tuple[str, ...]) -> set[tuple[str, str]]:
+    """(kind, key) of the notices of these kinds that are open: a watcher clears only what's actually open."""
+    rows = await db.pool().fetch("SELECT kind, key FROM notices WHERE status='open' AND kind = ANY($1::text[])", list(kinds))
+    return {(r["kind"], r["key"]) for r in rows}
+
+
+async def clear(app, kind: str, key: str, open_: set | None = None) -> bool:
+    """It went away (the door was locked, the computer came back): closed, and its card taken back. open_: the
+    open notices, if the caller already has them (nothing to clear: no write)."""
+    if open_ is not None and (kind, key) not in open_:
+        return False
     from . import mailbox
     row = await db.pool().fetchrow("UPDATE notices SET status='cleared', cleared_at=now(), held=false WHERE kind=$1 "
                                    "AND key=$2 AND status='open' RETURNING *", kind, key)
@@ -947,23 +980,32 @@ async def events_step(app, spec: dict) -> dict | None:
     from . import engine, happenings, nodes
     from .constellation import DISPLAY_SEEN
     redis = app.state.redis
-    seen_now: dict[str, str] = {}
-    for r in await db.pool().fetch("SELECT id FROM devices WHERE kind='node' AND status='approved'"):
-        seen_now[f"node:{r['id']}"] = "1" if await nodes.online(app, r["id"]) else "0"
-    for r in await db.pool().fetch("SELECT id FROM devices WHERE kind IN ('browser','screen') AND status='approved'"):
-        seen_now[f"display:{r['id']}"] = "1" if await redis.exists(DISPLAY_SEEN.format(r["id"])) else "0"
-    before = {(k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v)
-              for k, v in (await redis.hgetall(SNAP) or {}).items()}
-    if seen_now:
-        await redis.hset(SNAP, mapping=seen_now)
+    dec = lambda x: x.decode() if isinstance(x, bytes) else x
+    devs = [(("node" if r["kind"] == "node" else "display"), r["id"]) for r in await db.pool().fetch(
+        "SELECT id, kind FROM devices WHERE kind IN ('node','browser','screen') AND status='approved'")]
+    async with redis.pipeline(transaction=False) as p:   # every device's state, and what I saw last time, in one trip
+        for what, i in devs:
+            p.exists(nodes.ONLINE.format(i) if what == "node" else DISPLAY_SEEN.format(i))
+        p.hgetall(SNAP)
+        p.hgetall(OFFLINE_SINCE)
+        got = await p.execute()
+    seen_now = {f"{what}:{i}": "1" if n else "0" for (what, i), n in zip(devs, got[:len(devs)])}
+    before = {dec(k): dec(v) for k, v in (got[-2] or {}).items()}
+    away = {dec(k) for k in (got[-1] or {})}
+    now_ts = str(engine.now().timestamp())
+    async with redis.pipeline(transaction=False) as p:
+        if seen_now and seen_now != {k: before.get(k) for k in seen_now}:
+            p.hset(SNAP, mapping=seen_now)
+        for k, v in seen_now.items():                    # how long each computer has been away (for computer_down)
+            what, _, dev = k.partition(":")
+            if what == "node" and v == "0" and dev not in away:
+                p.hset(OFFLINE_SINCE, dev, now_ts)
+            elif what == "node" and v == "1" and dev in away:
+                p.hdel(OFFLINE_SINCE, dev)
+        await p.execute()
     happened = []
     for k, v in seen_now.items():
         what, _, dev = k.partition(":")
-        if what == "node":                                   # how long each computer has been away (for computer_down)
-            if v == "0" and not await redis.hexists(OFFLINE_SINCE, dev):
-                await redis.hset(OFFLINE_SINCE, dev, str(engine.now().timestamp()))
-            elif v == "1":
-                await redis.hdel(OFFLINE_SINCE, dev)
         was = before.get(k)
         if was is None or was == v:
             continue                                         # first look, or no change
@@ -1023,6 +1065,10 @@ async def _watch_computers(app) -> None:
     since = {(k.decode() if isinstance(k, bytes) else k): float(v) for k, v in
              (await app.state.redis.hgetall(OFFLINE_SINCE) or {}).items()}
     watched = 0
+    open_ = await open_notices(("computer_down",))
+    turned_off = {r["id"] for r in await db.pool().fetch(       # he turned these off (or put them to sleep) himself
+        "SELECT DISTINCT (spec->'node'->>'id')::int AS id FROM jobs WHERE name='constellation.power_watch' "
+        "AND spec->>'kind' IN ('shutdown','sleep') AND created_at > now() - interval '12 hours'")}
     for r in await db.pool().fetch("SELECT id, kind, name, role, info FROM devices WHERE kind='node' AND status='approved'"):
         role = await auth.role_of(r)
         if role != "server" and r["name"].lower() not in always:
@@ -1030,14 +1076,12 @@ async def _watch_computers(app) -> None:
         watched += 1
         key = f"node:{r['id']}"
         if await nodes.online(app, r["id"]):
-            await clear(app, "computer_down", key)
+            await clear(app, "computer_down", key, open_)
             continue
         info = json.loads(r["info"]) if isinstance(r["info"], str) else (r["info"] or {})
         if info.get("mode") == "exam" and float(info.get("mode_until") or 0) > engine.now().timestamp():
             continue
-        if await db.pool().fetchval(                       # he turned it off (or put it to sleep) himself
-                "SELECT 1 FROM jobs WHERE name='constellation.power_watch' AND (spec->'node'->>'id')::int=$1 "
-                "AND spec->>'kind' IN ('shutdown','sleep') AND created_at > now() - interval '12 hours'", r["id"]):
+        if r["id"] in turned_off:
             continue
         gone = since.get(str(r["id"]))
         if gone is not None and engine.now().timestamp() - gone >= mins * 60:
@@ -1115,6 +1159,7 @@ async def _watch_home(app) -> None:
             await _check(app, k, f"can't check: {why}"[:200])
         return
     devices = (res.get("result") or {}).get("devices") or []
+    open_ = await open_notices(("door_unlocked_at_night", "water_leak", "battery_low"))
     w = rules(app)["watch"]
     quiet = is_quiet(app)
     from . import engine
@@ -1126,18 +1171,18 @@ async def _watch_home(app) -> None:
                          f"It's {local.strftime('%I:%M %p').lstrip('0')} and {name} is still unlocked. Say \"lock the "
                          f"{name.lower()}\" to lock it.")
         elif d.get("kind") == "lock" and (d.get("locked") is True or not quiet):
-            await clear(app, "door_unlocked_at_night", name)
+            await clear(app, "door_unlocked_at_night", name, open_)
         if d.get("kind") == "leak_sensor":
             if d.get("active") is True:
                 await notice(app, "water_leak", name, f"Water: {name} is wet", f"{name} detects water. Check it now.")
             else:
-                await clear(app, "water_leak", name)
+                await clear(app, "water_leak", name, open_)
         bat = d.get("battery")
         if isinstance(bat, (int, float)):
             if bat <= float(w["battery_low_percent"]):
                 await notice(app, "battery_low", name, f"{name}: battery at {bat:g}%", "Replace it soon.")
             elif bat > float(w["battery_low_percent"]) + 5:
-                await clear(app, "battery_low", name)
+                await clear(app, "battery_low", name, open_)
     locks = sum(1 for d in devices if d.get("kind") == "lock")
     await _check(app, "door_unlocked_at_night", f"ok ({locks} lock{'s' if locks != 1 else ''}" +
                  (", checked now: quiet hours)" if quiet else "; only flagged during quiet hours)"))

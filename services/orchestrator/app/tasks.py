@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from . import auth, db, mailbox, memory, registry
 from .events import PanelEvent, publish
+from . import net
 
 log = logging.getLogger("aurelia.tasks")
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -136,7 +137,7 @@ async def start_task(body: StartTask, request: Request):
     await publish(_redis(request), PanelEvent(type="panel.open", task_id=task_id, tool=name, data=open_data,
                                               device=body.device))
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with net.session(10) as client:
             r = await client.post(f"{resolved.url}/tools/{resolved.tool.name}/invoke",
                                   json={"task_id": task_id, "args": body.args})
             r.raise_for_status()
@@ -193,7 +194,7 @@ async def cancel_task(task_id: str, request: Request):
     await _redis(request).set(CANCEL_PREFIX + task_id, 1, ex=3600)
     if resolved is not None:  # fast path: tell the function directly
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
+            async with net.session(5) as client:
                 await client.post(f"{resolved.url}/cancel/{task_id}")
         except httpx.HTTPError:
             pass  # the flag above still reaches it
@@ -212,6 +213,22 @@ async def task_summary(request: Request, days: int = 7, function: str | None = N
         "WHERE started_at > now() - make_interval(days => $1) AND ($2::text IS NULL OR tool LIKE $2 || '.%') "
         "AND user_id <> ALL($3::text[]) GROUP BY tool ORDER BY tool", min(max(days, 1), 365), function, system)
     return {"days": days, "tools": [{**dict(r), "last_run": r["last_run"].isoformat()} for r in rows]}
+
+
+@router.get("/last")
+async def task_last(request: Request, days: int = 365):
+    """When each tool was last used by a person (not a system check): a hop through the (tool, started_at)
+    index per tool instead of a year of runs."""
+    system = [u for u, e in request.app.state.governance.charter.users.items() if e.role == "system"]
+    rows = await db.pool().fetch(
+        "WITH RECURSIVE t AS (SELECT min(tool) AS tool FROM task_runs "
+        "  UNION ALL SELECT (SELECT min(tool) FROM task_runs WHERE tool > t.tool) FROM t WHERE t.tool IS NOT NULL) "
+        "SELECT t.tool, l.last_run FROM t CROSS JOIN LATERAL ("
+        "  SELECT started_at AS last_run FROM task_runs x WHERE x.tool = t.tool "
+        "  AND x.started_at > now() - make_interval(days => $1) AND x.user_id <> ALL($2::text[]) "
+        "  ORDER BY started_at DESC LIMIT 1) l WHERE t.tool IS NOT NULL ORDER BY t.tool",
+        min(max(days, 1), 3650), system)
+    return {"days": days, "tools": [{"tool": r["tool"], "last_run": r["last_run"].isoformat()} for r in rows]}
 
 
 @router.get("/{task_id}")
@@ -239,21 +256,47 @@ async def launch(app, body: StartTask, task_id: str | None = None) -> str:
     return (await start_task(body, ctx))["task_id"]
 
 
+DONE = "aurelia:done:{}"                     # a task finished (one token, put back for any other waiter)
+DONE_KEEP = 300
+SIGNAL: dict[str, Any] = {"redis": None}     # set at startup: how a waiter hears a task finish on any replica
+
+
+async def _finished_row(task_id: str) -> dict[str, Any] | None:
+    row = await db.pool().fetchrow(
+        "SELECT status, partial, result, error, duration_ms FROM task_runs WHERE id=$1", uuid.UUID(task_id))
+    if row and row["status"] != "running":
+        out = dict(row)
+        out["result"] = json.loads(out["result"]) if out["result"] else None
+        return out
+    return None
+
+
 async def wait_for_result(task_id: str, seconds: float) -> dict[str, Any] | None:
-    """Poll until the task finishes or `seconds` pass. None = still running."""
+    """Wait until the task finishes or `seconds` pass. None = still running. Woken the moment it finishes
+    (a Redis token from _finish, on whichever replica), with the database checked every few seconds besides."""
     import asyncio
-    import json
-    deadline = asyncio.get_running_loop().time() + seconds
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + seconds
+    redis = SIGNAL["redis"]
+    key = DONE.format(task_id)
     while True:
-        row = await db.pool().fetchrow(
-            "SELECT status, partial, result, error, duration_ms FROM task_runs WHERE id=$1", uuid.UUID(task_id))
-        if row and row["status"] != "running":
-            out = dict(row)
-            out["result"] = json.loads(out["result"]) if out["result"] else None
+        out = await _finished_row(task_id)
+        if out is not None:
             return out
-        if asyncio.get_running_loop().time() >= deadline:
+        left = deadline - loop.time()
+        if left <= 0:
             return None
-        await asyncio.sleep(0.2)
+        if redis is None:
+            await asyncio.sleep(min(0.2, left))
+            continue
+        try:
+            got = await redis.blpop([key], timeout=max(0.01, min(left, 5.0)))
+        except Exception:                                   # Redis trouble: the database still says
+            await asyncio.sleep(min(0.5, left))
+            continue
+        if got:                                             # put it back for anyone else waiting on it
+            await redis.lpush(key, "1")
+            await redis.expire(key, DONE_KEEP)
 
 
 async def _finish(request: Request, task_id: str, tool: str, body: Result) -> None:
@@ -264,6 +307,13 @@ async def _finish(request: Request, task_id: str, tool: str, body: Result) -> No
         uuid.UUID(task_id), body.status, body.partial, _json(body.data), body.error,
     )
     redis = _redis(request)
+    try:                                         # whoever waits on it hears now (wait_for_result)
+        async with redis.pipeline(transaction=False) as p:
+            p.lpush(DONE.format(task_id), "1")
+            p.expire(DONE.format(task_id), DONE_KEEP)
+            await p.execute()
+    except Exception:
+        log.exception("couldn't signal task %s finished (waiters still see it within seconds)", task_id)
     device = await db.pool().fetchval("SELECT device FROM task_runs WHERE id=$1", uuid.UUID(task_id))
     if body.status == "failed":                  # a trusted action that went wrong goes back to asking
         row = await db.pool().fetchrow("SELECT tool, args, trusted_grant FROM task_runs WHERE id=$1", uuid.UUID(task_id))

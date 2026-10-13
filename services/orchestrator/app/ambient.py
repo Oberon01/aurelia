@@ -12,6 +12,7 @@ import httpx
 from fastapi import APIRouter, Request
 
 from . import auth, db
+from . import net
 
 log = logging.getLogger("aurelia.ambient")
 router = APIRouter(tags=["ambient"])
@@ -43,7 +44,7 @@ async def weather(app) -> dict | None:
         return json.loads(cached)
     unit = "celsius" if cfg.units == "celsius" else "fahrenheit"
     try:
-        async with httpx.AsyncClient(timeout=8) as c:
+        async with net.session(8) as c:
             r = await c.get("https://api.open-meteo.com/v1/forecast", params={
                 "latitude": cfg.latitude, "longitude": cfg.longitude, "current": "temperature_2m,weather_code",
                 "daily": "temperature_2m_max,temperature_2m_min", "forecast_days": 1, "temperature_unit": unit,

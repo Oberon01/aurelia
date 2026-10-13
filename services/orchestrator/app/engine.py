@@ -33,7 +33,7 @@ log = logging.getLogger("aurelia.engine")
 router = APIRouter(prefix="/admiral/jobs", tags=["admiral"])
 
 LEASE = 120                       # seconds a claim lasts; renewed while a job runs
-TICK = 2.0                        # longest the runner sleeps between looks
+TICK = 30.0                       # longest the runner sleeps between looks (it's woken when a job becomes due)
 STEP_WAIT = 600                   # how long a scheduled tool may run before it's called failed
 ME = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"   # unique per process, even as pid 1
 _wake = asyncio.Event()
@@ -349,8 +349,32 @@ async def claim(limit: int = 20) -> list[dict]:
 _live: set[asyncio.Task] = set()             # running jobs, kept referenced until they finish
 
 
+async def _listen(app) -> None:
+    """Postgres says when a job became due anywhere (another orchestrator, a script): look now. If it can't
+    listen, the runner still looks every TICK."""
+    from .settings import settings
+    import asyncpg
+    while True:
+        conn = None
+        try:
+            conn = await asyncpg.connect(settings.database_url)
+            await conn.add_listener("aurelia_jobs", lambda *_: poke())
+            while not conn.is_closed():
+                await asyncio.sleep(15)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.info("not listening for due jobs right now (%s); looking every %ss meanwhile", exc, TICK)
+        finally:
+            if conn is not None and not conn.is_closed():
+                await conn.close()
+        await asyncio.sleep(5)
+
+
 async def loop(app) -> None:
     await asyncio.sleep(0)
+    listener = asyncio.create_task(_listen(app))
+    _live.add(listener)
     try:
         await ensure_system_jobs(app)
     except Exception:
@@ -362,7 +386,9 @@ async def loop(app) -> None:
                 t = asyncio.create_task(_execute(app, job))
                 _live.add(t)
                 t.add_done_callback(_live.discard)
-            nxt = await db.pool().fetchval("SELECT min(next_at) FROM jobs WHERE status='scheduled'")
+            nxt = await db.pool().fetchval(
+                "SELECT least((SELECT min(next_at) FROM jobs WHERE status='scheduled'), "
+                "(SELECT min(lease_until) FROM jobs WHERE status='running'))")   # (a stuck run is retaken on time)
             wait = TICK if nxt is None else max(0.05, min(TICK, (nxt - now()).total_seconds()))
         except Exception:
             log.exception("engine round failed")
@@ -502,7 +528,10 @@ async def _finish(app, job: dict, outcome: str, note: str | None = None, task_id
         final = {"done": "done", "unconfirmed": "done", "failed": "failed", "missed": "missed"}
         await _mine("UPDATE jobs SET status=$2, runs=runs+1, last_outcome=$3, last_run_at=now(), lease_until=NULL, "
                     "updated_at=now() WHERE id=$1", job["id"], final.get(outcome, "done"), outcome)
-    await _log(job["id"], _planned(job), outcome, task_id or job.get("task_id"), note, job.get("_started"))
+    # My own heartbeats (every minute or so) leave no row when they simply worked: the job keeps its count and
+    # time (runs, last_run_at), and a failure or anything with a note is still logged.
+    if not (job["kind"] == "system" and every is not None and outcome == "done" and not note):
+        await _log(job["id"], _planned(job), outcome, task_id or job.get("task_id"), note, job.get("_started"))
     if auto and outcome in ("failed", "unconfirmed"):
         await _too_many_failures(app, job)
 
@@ -517,7 +546,7 @@ async def _too_many_failures(app, job: dict) -> None:
     if await pause(app, job["id"], f"{fails} failures in a row") is None:
         return
     last = await db.pool().fetchval("SELECT note FROM job_runs WHERE job_id=$1 AND outcome IN ('failed','unconfirmed') "
-                                    "ORDER BY id DESC LIMIT 1", job["id"])
+                                    "ORDER BY started_at DESC, id DESC LIMIT 1", job["id"])
     await pulsar.notice(app, "automation_paused", f"job:{job['id']}:{job['runs']}",
                         f"Paused an automation: {job['title']}",
                         f"It didn't work {fails} times in a row" + (f" (last: {last})" if last else "") +

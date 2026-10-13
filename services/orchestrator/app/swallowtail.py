@@ -557,15 +557,29 @@ async def _wait_answer(rid: int, asking: str, text: str, app, run_id: int) -> bo
     await _set(rid, status="needs_you", asking=asking, question=text[:500], answer=None)
     await publish(app, run_id)
     deadline = time.monotonic() + ANSWER_WAIT
-    while time.monotonic() < deadline:
-        a = await db.pool().fetchval("SELECT answer FROM check_results WHERE id=$1", rid)
-        if a is not None:
-            await _set(rid, asking=None)
-            return bool(a)
-        await _touch(run_id)
-        await asyncio.sleep(1)
+    ev = _answered.setdefault(rid, asyncio.Event())
+    touched = time.monotonic()
+    try:
+        while time.monotonic() < deadline:
+            a = await db.pool().fetchval("SELECT answer FROM check_results WHERE id=$1", rid)
+            if a is not None:
+                await _set(rid, asking=None)
+                return bool(a)
+            if time.monotonic() - touched > 15:          # (the run's heartbeat also keeps it fresh)
+                await _touch(run_id)
+                touched = time.monotonic()
+            try:                                         # his tap here wakes this at once; another replica's,
+                await asyncio.wait_for(ev.wait(), 3)     # within 3 s
+            except asyncio.TimeoutError:
+                pass
+            ev.clear()
+    finally:
+        _answered.pop(rid, None)
     await _set(rid, asking=None)
     return None
+
+
+_answered: dict[int, asyncio.Event] = {}                # checks waiting for his tap, by result id (this process)
 
 
 async def run_one(app, run_id: int, r: dict, mode: str) -> None:
@@ -772,6 +786,8 @@ async def answer(rid: int, yes: bool, asking: str | None = None) -> str:
                                    "RETURNING id", rid, yes, asking)
     if got is None:
         raise ValueError("That check isn't waiting for an answer.")
+    if rid in _answered:
+        _answered[rid].set()
     return "Thanks."
 
 

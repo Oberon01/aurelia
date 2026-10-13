@@ -43,6 +43,7 @@ import base64
 import configparser
 import ctypes
 import hashlib
+import functools
 import json
 import os
 import platform
@@ -58,7 +59,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.7.2"
+VERSION = "0.8.0"
 IS_WINDOWS = platform.system() == "Windows"
 EXIT_REVOKED = 3                                   # the service manager doesn't restart after this
 EXIT_UPDATED = 75                                  # restart me: a new version is in place
@@ -196,20 +197,32 @@ SESSION_KEYS = ("DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "DBUS_SESSION_B
                 "XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE")
 
 
+_SESSION = {"at": 0.0, "vars": {}}
+SESSION_KEEP = 30.0                  # seconds a found graphical session is reused (not a systemctl call each time)
+
+
 def session_env() -> dict:
     """The graphical session's variables, even if this service started before the login
-    (Linux: systemd's user environment, which the desktop fills in when it starts)."""
+    (Linux: systemd's user environment, which the desktop fills in when it starts). Kept SESSION_KEEP
+    seconds once a desktop is found; until then, asked each time (so a login is noticed at once)."""
     env = dict(os.environ)
     if IS_WINDOWS or not shutil.which("systemctl"):
         return env
+    if time.monotonic() - _SESSION["at"] < SESSION_KEEP:
+        env.update(_SESSION["vars"])
+        return env
+    found = {}
     try:
         r = subprocess.run(["systemctl", "--user", "show-environment"], capture_output=True, text=True, timeout=5)
         for line in r.stdout.splitlines():
             k, _, v = line.partition("=")
             if k in SESSION_KEYS and v:
-                env[k] = v
+                found[k] = v
     except Exception:
         pass
+    if found.get("DISPLAY") or found.get("WAYLAND_DISPLAY"):
+        _SESSION.update(at=time.monotonic(), vars=found)
+    env.update(found)
     return env
 
 
@@ -378,7 +391,7 @@ def _linux_procs() -> dict[int, dict]:
         name = stat[stat.find("(") + 1:stat.rfind(")")]
         f = stat[stat.rfind(")") + 2:].split()
         uid = None
-        for line in _read(d / "status").splitlines():
+        for line in _read(d / "status").splitlines():       # (the real owner; the folder's owner can be root)
             if line.startswith("Uid:"):
                 uid = int(line.split()[1])
                 break
@@ -399,6 +412,7 @@ def _boot_time() -> float:
     return time.time() - float(_read(PROC / "uptime", "0").split()[0] or 0)
 
 
+@functools.lru_cache(maxsize=256)
 def _user(uid) -> str:
     try:
         import pwd
@@ -720,12 +734,31 @@ def _protected(pid: int, name: str) -> bool:
     return name.lower() in PROTECTED_WINDOWS if IS_WINDOWS else name in PROTECTED_LINUX
 
 
-def _alive(pid: int, start_key: str) -> bool:
+def _linux_start(pid: int) -> str | None:
+    """One process's start time (its identity with the pid), read from its own stat file only."""
+    stat = _read(PROC / str(pid) / "stat")
+    if ")" not in stat:
+        return None
+    f = stat[stat.rfind(")") + 2:].split()
+    try:
+        return None if f[0] in ("Z", "X") else str(int(f[19]))
+    except (IndexError, ValueError):
+        return None
+
+
+def _alive(pid: int, start_key: str, procs: dict | None = None) -> bool:
     if IS_WINDOWS:
-        p = _windows_procs().get(pid)
+        p = (procs if procs is not None else _windows_procs()).get(pid)
         return bool(p) and str(p["start"]) == start_key
-    p = _linux_procs().get(pid)
-    return bool(p) and str(p["start"]) == start_key
+    return _linux_start(pid) == start_key
+
+
+def _still_alive(sent: list[dict]) -> list[dict]:
+    """The ones still running: on Windows one process list for all of them, on Linux each one's own file."""
+    if not IS_WINDOWS:
+        return [s for s in sent if _alive(s["pid"], s["key"])]
+    procs = _windows_procs()
+    return [s for s in sent if _alive(s["pid"], s["key"], procs)]
 
 
 def _windows_close(pid: int, force: bool) -> bool:
@@ -793,9 +826,10 @@ def do_kill(args: dict) -> dict:
                 continue
         sent.append({"pid": pid, "name": p["name"], "key": key})
     deadline = time.time() + 5
-    while time.time() < deadline and any(_alive(s["pid"], s["key"]) for s in sent):
+    while time.time() < deadline and _still_alive(sent):
         time.sleep(0.25)
-    closed = [s for s in sent if not _alive(s["pid"], s["key"])]
+    left = _still_alive(sent)
+    closed = [s for s in sent if s not in left]
     still = [{"pid": s["pid"], "name": s["name"]} for s in sent if s not in closed]
     return {"closed": [{"pid": s["pid"], "name": s["name"]} for s in closed], "still_running": still,
             "refused": refused, "force": force}
@@ -808,8 +842,38 @@ LINUX_APP_DIRS = ["/usr/share/applications", "/usr/local/share/applications", "~
                   "/var/lib/snapd/desktop/applications"]
 
 
+_APPS = {"key": None, "apps": []}
+
+
+def _app_dirs_key() -> tuple:
+    """When the app folders last changed (an install or removal changes their modification time)."""
+    if IS_WINDOWS:
+        roots = [Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "Microsoft/Windows/Start Menu/Programs",
+                 Path(os.environ.get("APPDATA", "")) / "Microsoft/Windows/Start Menu/Programs"]
+        dirs = [d for r in roots if r.is_dir() for d in [r, *(x for x in r.iterdir() if x.is_dir())]]
+    else:
+        dirs = [Path(d).expanduser() for d in LINUX_APP_DIRS]
+    out = []
+    for d in dirs:
+        try:
+            out.append((str(d), d.stat().st_mtime_ns))
+        except OSError:
+            out.append((str(d), None))
+    return tuple(out)
+
+
 def installed_apps() -> list[dict]:
-    """[{'name', 'id', 'path'}] of apps a person would launch (no hidden or helper entries)."""
+    """[{'name', 'id', 'path'}] of apps a person would launch (no hidden or helper entries). Read again only
+    when an app folder changed."""
+    key = _app_dirs_key()
+    if _APPS["key"] == key:
+        return [dict(a) for a in _APPS["apps"]]
+    apps = _installed_apps()
+    _APPS.update(key=key, apps=apps)
+    return [dict(a) for a in apps]
+
+
+def _installed_apps() -> list[dict]:
     apps, seen = [], set()
     if IS_WINDOWS:
         roots = [Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "Microsoft/Windows/Start Menu/Programs",
@@ -965,7 +1029,9 @@ def launched_file() -> Path:
 
 
 def _start_key(pid: int) -> str | None:
-    p = (_windows_procs() if IS_WINDOWS else _linux_procs()).get(pid)
+    if not IS_WINDOWS:
+        return _linux_start(pid)
+    p = _windows_procs().get(pid)
     return str(p["start"]) if p else None
 
 
@@ -1459,6 +1525,7 @@ class Mpv:
         self.lock = threading.Lock()
         self.reporting = False
         self.ended: dict | None = None                                  # where the one it just left got to
+        self.conn = None                                                # the control connection, kept open
 
     def argv(self, exe: str) -> list[str]:
         extra = os.environ.get("AURELIA_MPV_ARGS", "").split()          # tests: --vo=null --ao=null
@@ -1487,6 +1554,7 @@ class Mpv:
             except OSError:
                 pass
         kw = {} if IS_WINDOWS else {"start_new_session": True}
+        self._drop()                                                    # (a connection to an old player is no use)
         self.proc = subprocess.Popen(self.argv(exe), env=session_env(), stdin=subprocess.DEVNULL,
                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True, **kw)
         deadline = time.monotonic() + 8
@@ -1508,30 +1576,47 @@ class Mpv:
         s.connect(self.path)
         return s.makefile("rwb", buffering=0), s
 
+    def _drop(self) -> None:
+        conn, self.conn = getattr(self, "conn", None), None
+        if conn:
+            for x in conn:
+                try:
+                    if x is not None:
+                        x.close()
+                except OSError:
+                    pass
+
     def command(self, *args):
         """A command by position, or one dict with named arguments (loadfile with per-file options:
-        the same on old and new mpv, whose positional loadfile arguments differ)."""
+        the same on old and new mpv, whose positional loadfile arguments differ). One control connection, kept
+        open between commands (opened again if the player went away)."""
         with self.lock:
             self.next_id += 1
             rid = self.next_id
-            opened = self._open()
-            f, sock = opened if isinstance(opened, tuple) else (opened, None)
-            try:
-                cmd = args[0] if len(args) == 1 and isinstance(args[0], dict) else list(args)
-                f.write((json.dumps({"command": cmd, "request_id": rid}) + "\n").encode())
-                while True:
-                    line = f.readline()
-                    if not line:
-                        raise OSError("the player closed its control socket")
-                    msg = json.loads(line)
-                    if msg.get("request_id") == rid:
-                        if msg.get("error") not in (None, "success"):
-                            raise ValueError(str(msg["error"]))
-                        return msg.get("data")
-            finally:
-                f.close()
-                if sock:
-                    sock.close()
+            cmd = args[0] if len(args) == 1 and isinstance(args[0], dict) else list(args)
+            for attempt in (0, 1):
+                if getattr(self, "conn", None) is None:
+                    opened = self._open()
+                    self.conn = opened if isinstance(opened, tuple) else (opened, None)
+                f = self.conn[0]
+                try:
+                    f.write((json.dumps({"command": cmd, "request_id": rid}) + "\n").encode())
+                    while True:
+                        line = f.readline()
+                        if not line:
+                            raise OSError("the player closed its control socket")
+                        msg = json.loads(line)
+                        if msg.get("request_id") == rid:
+                            if msg.get("error") not in (None, "success"):
+                                raise ValueError(str(msg["error"]))
+                            return msg.get("data")
+                except json.JSONDecodeError:                    # a garbled line: start a fresh connection
+                    self._drop()
+                    raise
+                except OSError:
+                    self._drop()
+                    if attempt:
+                        raise
 
     def get(self, prop: str, default=None):
         try:
@@ -3703,15 +3788,36 @@ def live_start(tab: "Tab") -> None:
              everyNthFrame=1)
 
 
+def send_frame(server: str, key: str, body: dict, timeout: float = 10) -> dict:
+    """One live frame: the JPEG itself as the body (not base64 in JSON), what's around it in headers."""
+    import base64
+    jpeg = base64.b64decode(body["jpeg"]) if body.get("jpeg") else b""
+    headers = {"Content-Type": "image/jpeg", "User-Agent": f"aurelia-node/{VERSION}", "Authorization": f"Bearer {key}",
+               "X-Live-W": str(int(body.get("w") or 0)), "X-Live-H": str(int(body.get("h") or 0)),
+               "X-Live-Title": urllib.parse.quote(str(body.get("title") or "")[:120]),
+               "X-Live-Site": urllib.parse.quote(str(body.get("site") or "")[:80]),
+               "X-Live-Problem": urllib.parse.quote(str(body.get("problem") or "")[:200])}
+    req = urllib.request.Request(server.rstrip("/") + "/nodes/live/frame", data=jpeg, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            raise Revoked() from e
+        raise RuntimeError(f"{e.code}: {e.read().decode(errors='replace')[:200]}") from e
+
+
 def live_stream(server: str, key: str, stop: threading.Event) -> None:
     tab, tab_id = None, None
+    t, looked = None, 0.0
     try:
         while not stop.is_set():
             started = time.monotonic()
             try:
                 if not (SHELL and SHELL.running()):
                     raise ValueError("my shell isn't running on this computer")
-                t = live_target()
+                if t is None or started - looked >= 1.0:          # which page: at most once a second
+                    t, looked = live_target(), started
                 if tab is None or t["id"] != tab_id:              # it switched pages: follow it
                     if tab:
                         tab.close()
@@ -3727,10 +3833,10 @@ def live_stream(server: str, key: str, stop: threading.Event) -> None:
             except (CDPError, OSError, ValueError, KeyError) as exc:
                 if tab:
                     tab.close()
-                tab, tab_id = None, None
+                tab, tab_id, t = None, None, None
                 body = {"problem": str(exc)[:160]}
             try:
-                r = call(server, "/nodes/live/frame", body, key, timeout=10)
+                r = send_frame(server, key, body, timeout=10)
             except (Revoked, OSError, RuntimeError, ValueError):
                 return
             if not r.get("keep"):                                 # nobody is watching any more

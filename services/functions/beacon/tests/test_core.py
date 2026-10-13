@@ -345,3 +345,31 @@ def test_folded_headers_are_unfolded_and_a_reply_to_a_long_thread_builds():
                      reply_to={"message_id": m["message_id"], "references": m["references"]})
     assert r["References"] == "<a@x.com> <b@x.com> <m1@example.com>"
     assert MAIL.one_line("a\r\n\tb\x00c\nd") == "a b c d"
+
+
+async def test_an_unchanged_google_feed_is_neither_downloaded_nor_parsed_again():
+    import httpx
+    CAL._FEEDS.clear()
+    body = {"text": WEEKLY, "etag": '"v1"'}
+    seen = []
+
+    def handler(req):
+        seen.append(req.headers.get("if-none-match"))
+        if body["etag"] and req.headers.get("if-none-match") == body["etag"]:
+            return httpx.Response(304)
+        return httpx.Response(200, text=body["text"], headers={"ETag": body["etag"]} if body["etag"] else {})
+    t = httpx.MockTransport(handler)
+    url = "https://calendar.google.com/calendar/ical/x/private-abc/basic.ics"
+    cal, changed = await CAL.google_feed(url, t)
+    assert changed and seen == [None]
+    again, changed = await CAL.google_feed(url, t)
+    assert again is cal and not changed and seen[-1] == '"v1"'                  # 304: nothing sent, nothing parsed
+    body["etag"] = None                                                        # a server without ETags, same feed
+    same, changed = await CAL.google_feed(url, t)
+    assert same is cal and not changed
+    body["text"] = WEEKLY.replace("Standup", "Retro")
+    new, changed = await CAL.google_feed(url, t)
+    assert changed and new is not cal
+    start = datetime(2026, 10, 5, tzinfo=CHI)
+    assert "Retro" in [e["title"] for e in CAL.expand(new, start, start + timedelta(days=7), "America/Chicago")]
+    CAL._FEEDS.clear()

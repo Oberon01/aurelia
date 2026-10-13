@@ -127,3 +127,14 @@ def test_recall_falls_back_to_words_without_embeddings(stack):
     finally:
         cfg.write_text(before)                                          # later tests expect embeddings on
         time.sleep(2.5)
+
+
+def test_last_use_per_tool_skips_system_checks(stack):
+    import httpx
+    run_task(stack, "testfn.status")
+    sql(stack, "INSERT INTO task_runs (id, tool, args, status, user_id, started_at) "
+               "VALUES (gen_random_uuid(), 'testfn.status', '{}', 'completed', 'pulsar', now() + interval '1 hour')")
+    tools = {t["tool"]: t["last_run"] for t in httpx.get(f"{stack['orch']}/tasks/last").json()["tools"]}
+    summary = {t["tool"]: t["last_run"] for t in
+               httpx.get(f"{stack['orch']}/tasks/summary", params={"days": 365}).json()["tools"]}
+    assert tools["testfn.status"] == summary["testfn.status"]            # the person's run, not the later check

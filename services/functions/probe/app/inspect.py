@@ -4,7 +4,7 @@ without the network: main.py gathers the inputs, these functions shape them.
 Inputs, all from the orchestrator:
 - registered: GET /registry/functions  (functions running now, with their tools)
 - policies:   GET /governance/functions (every function with a policy, running or not)
-- week, year: GET /tasks/summary?days=7 and ?days=365 (people's use, per tool)
+- week, year: GET /tasks/summary?days=7 and /tasks/last (people's use, per tool; year only needs last_run)
 - seen:       GET /registry/seen (every function that has ever run → last heartbeat)
 - health:     each running function's own GET /health
 """

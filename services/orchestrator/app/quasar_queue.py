@@ -94,6 +94,33 @@ async def remember_seen(redis, items: list[dict]) -> None:
         await redis.expire(SEEN, 3 * 86400)
 
 
+def _library_entry(it: dict) -> dict:
+    s = quasar.shape(it)
+    out = {"id": f"jf:{it['Id']}", "kind": "library", "title": quasar.label(it), "art": s["art"]}
+    if s.get("minutes"):
+        out["minutes"] = s["minutes"]
+    return out
+
+
+async def _entries_for(app, ids: list[str]) -> list[dict]:
+    """Queue entries for these ids, in order: YouTube titles from what I've shown him, his library's from Jellyfin
+    in one request."""
+    lib = [i[3:] for i in ids if i.startswith("jf:")]
+    found: dict[str, dict] = {}
+    if lib:
+        for it in await quasar.Jellyfin(app.state.redis).items(ids=",".join(lib)):
+            found[str(it.get("Id"))] = _library_entry(it)
+    out = []
+    for ident in ids:
+        if ident.startswith("jf:"):
+            if ident[3:] not in found:
+                raise ValueError("That isn't in your library any more.")
+            out.append(found[ident[3:]])
+        else:
+            out.append(await _entry(app, ident))
+    return out
+
+
 async def _entry(app, ident: str, jf=None) -> dict:
     """One queue entry for an id: its title and picture (a library item read from Jellyfin)."""
     if ident.startswith("yt:"):
@@ -103,12 +130,7 @@ async def _entry(app, ident: str, jf=None) -> dict:
                 "art": f"/quasar/ytart/{ident[3:]}", **({"minutes": seen["minutes"]} if seen.get("minutes") else {}),
                 **({"channel": seen["channel"]} if seen.get("channel") else {})}
     jf = jf or quasar.Jellyfin(app.state.redis)
-    it = await jf.item(ident[3:])
-    s = quasar.shape(it)
-    out = {"id": f"jf:{it['Id']}", "kind": "library", "title": quasar.label(it), "art": s["art"]}
-    if s.get("minutes"):
-        out["minutes"] = s["minutes"]
-    return out
+    return _library_entry(await jf.item(ident[3:]))
 
 
 def _state(raw) -> dict:
@@ -130,13 +152,12 @@ async def _node(app, on: str) -> dict:
         return await quasar._where(app, on)
     redis = app.state.redis
     playing = []
-    async for k in redis.scan_iter(match=quasar.STATE.format("*")):
-        key = k.decode() if isinstance(k, bytes) else k
-        if key.count(":") != 2:
-            continue
-        st = _state(await redis.get(key))
-        if st.get("active"):
-            playing.append(((st.get("kind") or "video") == "video", st.get("at") or 0, int(key.rsplit(":", 1)[1])))
+    ids = [int(k[5:]) for k, _ in await quasar.playing_keys(redis) if k.startswith("node-") and k[5:].isdigit()]
+    if ids:
+        for nid, raw in zip(ids, await redis.mget([quasar.STATE.format(i) for i in ids])):
+            st = _state(raw)
+            if st.get("active"):
+                playing.append(((st.get("kind") or "video") == "video", st.get("at") or 0, nid))
     if playing:
         from . import db
         nid = max(playing)[2]                          # video first, then the latest
@@ -219,12 +240,8 @@ async def tool(app, user: str, args: dict) -> dict:
             await redis.delete(AUTO.format(nid))
             return {"headline": f"{moved['title']} plays next on {node['name']}"[:140], "queue": await view(app, node)}
     new: list[dict] = []
-    jf = None
     if ids:
-        for ident in dict.fromkeys(ids):                    # in order, once each
-            if ident.startswith("jf:") and jf is None:
-                jf = quasar.Jellyfin(redis)
-            new.append(await _entry(app, ident, jf))
+        new = await _entries_for(app, list(dict.fromkeys(ids)))   # in order, once each
     elif what:                                              # a title from his library
         jf = quasar.Jellyfin(redis)
         it = quasar.best(await jf.search(what, "any", 25), what)
@@ -448,11 +465,12 @@ async def _suggest(app, node: dict, item: str) -> dict:
     else:
         jf = quasar.Jellyfin(redis)
         cur = item[3:] if item.startswith("jf:") else ""
-        up = [i for i in await jf.next_up(limit=10) if i.get("Id") != cur]
-        resume = [i for i in await jf.items(filters="IsResumable", sortBy="DatePlayed", sortOrder="Descending",
-                                            includeItemTypes="Movie,Episode", limit=10) if i.get("Id") != cur]
-        recent_added = [i for i in await jf.items(sortBy="DateCreated", sortOrder="Descending",
-                                                  includeItemTypes="Movie,Series", limit=10) if i.get("Id") != cur]
+        got = await asyncio.gather(                          # the three at once
+            jf.next_up(limit=10),
+            jf.items(filters="IsResumable", sortBy="DatePlayed", sortOrder="Descending", includeItemTypes="Movie,Episode",
+                     limit=10),
+            jf.items(sortBy="DateCreated", sortOrder="Descending", includeItemTypes="Movie,Series", limit=10))
+        up, resume, recent_added = ([i for i in g if i.get("Id") != cur] for g in got)
         seen: set = set()
         groups = []
         for name, its in (("Next up", up), ("Continue", resume), ("Recently added", recent_added)):

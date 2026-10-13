@@ -42,6 +42,7 @@ class Usage:
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_tokens: int = 0
+    cache_write_tokens: int = 0              # written to the prompt cache this call (billed a little above input)
 
 
 @dataclass

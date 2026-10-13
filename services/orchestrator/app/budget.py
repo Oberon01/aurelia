@@ -59,16 +59,16 @@ async def budget(app, user: str, args: dict) -> dict:
     start, nxt = month_bounds(now, tz)
     cloud = list(CLOUD_PROVIDERS)
     rows = await db.pool().fetch(
-        "SELECT model, count(*) AS calls, COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens FROM llm_calls "
+        "SELECT model, count(*) AS calls, COALESCE(SUM(input_tokens + cache_write_tokens + output_tokens), 0) AS tokens FROM llm_calls "
         "WHERE provider = ANY($1::text[]) AND at >= $2 GROUP BY model ORDER BY tokens DESC", cloud, start)
     used = sum(int(r["tokens"]) for r in rows)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     today = await db.pool().fetchval(
-        "SELECT COALESCE(SUM(input_tokens + output_tokens), 0) FROM llm_calls WHERE provider = ANY($1::text[]) AND at >= $2",
+        "SELECT COALESCE(SUM(input_tokens + cache_write_tokens + output_tokens), 0) FROM llm_calls WHERE provider = ANY($1::text[]) AND at >= $2",
         cloud, today_start) or 0
     week_from = max(start, today_start - timedelta(days=7))
     week = await db.pool().fetchval(
-        "SELECT COALESCE(SUM(input_tokens + output_tokens), 0) FROM llm_calls WHERE provider = ANY($1::text[]) "
+        "SELECT COALESCE(SUM(input_tokens + cache_write_tokens + output_tokens), 0) FROM llm_calls WHERE provider = ANY($1::text[]) "
         "AND at >= $2 AND at < $3", cloud, week_from, today_start) or 0
     local = await db.pool().fetchval(
         "SELECT count(*) FROM llm_calls WHERE NOT (provider = ANY($1::text[])) AND at >= $2", cloud, start) or 0

@@ -253,8 +253,17 @@ async def _job(p: dict[str, Any], ok: bool) -> str:
 
 # ---- reading ---------------------------------------------------------------------------
 
-async def _wake_and_expire() -> None:
-    """Deferred items come back when their date passes; long-forgotten ones expire."""
+_woke = {"at": 0.0}
+WAKE_EVERY = 20.0                     # seconds: reads in between don't write (dates pass slowly)
+
+
+async def _wake_and_expire(force: bool = False) -> None:
+    """Deferred items come back when their date passes; long-forgotten ones expire. At most every WAKE_EVERY
+    seconds per process: a read of the mailbox is a read, not two updates each time."""
+    import time as _time
+    if not force and _time.monotonic() - _woke["at"] < WAKE_EVERY:
+        return
+    _woke["at"] = _time.monotonic()
     await db.pool().execute("UPDATE mailbox_items SET status='waiting', defer_until=NULL, updated_at=now() "
                             "WHERE status='deferred' AND defer_until <= now()")
     await db.pool().execute("UPDATE mailbox_items SET status='expired', updated_at=now() WHERE status IN "
@@ -265,7 +274,8 @@ async def _wake_and_expire() -> None:
 async def counts() -> dict[str, int]:
     await _wake_and_expire()
     row = await db.pool().fetchrow("SELECT count(*) FILTER (WHERE status='waiting') AS waiting, "
-                                   "count(*) FILTER (WHERE status='waiting' AND urgent) AS urgent FROM mailbox_items")
+                                   "count(*) FILTER (WHERE status='waiting' AND urgent) AS urgent FROM mailbox_items "
+                                   "WHERE status='waiting'")
     return {"waiting": row["waiting"], "urgent": row["urgent"]}
 
 
@@ -289,7 +299,7 @@ def view(r: dict[str, Any]) -> dict[str, Any]:
 
 @router.get("")
 async def list_items(status: str = "waiting", limit: int = 50):
-    await _wake_and_expire()
+    await _wake_and_expire(force=True)                  # he's looking: exactly as of now
     rows = await db.pool().fetch(
         "SELECT * FROM mailbox_items WHERE ($1 = 'all' OR status = $1) ORDER BY urgent DESC, created_at DESC LIMIT $2",
         status, min(max(limit, 1), 200))
@@ -298,6 +308,7 @@ async def list_items(status: str = "waiting", limit: int = 50):
 
 @router.get("/count")
 async def count():
+    await _wake_and_expire(force=True)                  # asked from outside: exactly as of now
     return await counts()
 
 

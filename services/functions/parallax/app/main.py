@@ -82,9 +82,9 @@ async def history(days: int = 35) -> list[dict]:
 
 
 async def current_settings() -> tuple[dict[str, str], dict[str, int]]:
-    levels = {r["tool"]: r["level"] for r in await app.state.db.fetch("SELECT tool, level FROM tool_criticality")}
-    kept = {r["tool"]: r["hot_days"] for r in await app.state.db.fetch("SELECT tool, hot_days FROM tool_retention")}
-    return levels, kept
+    levels, kept = await asyncio.gather(app.state.db.fetch("SELECT tool, level FROM tool_criticality"),
+                                        app.state.db.fetch("SELECT tool, hot_days FROM tool_retention"))
+    return {r["tool"]: r["level"] for r in levels}, {r["tool"]: r["hot_days"] for r in kept}
 
 
 async def orchestrator(method: str, path: str, **kw) -> dict:
@@ -104,8 +104,7 @@ async def run_analysis(progress: Callable[[int, str], Awaitable[None]] | None = 
     now = datetime.now(timezone.utc)
     r = rules()
     await step(0, "Reading history")
-    rows = await history()
-    levels, kept = await current_settings()
+    rows, (levels, kept) = await asyncio.gather(history(), current_settings())
     await step(1, "Looking for habits")
     ideas = analysis.recurrences(rows, now, r)
     await step(2, "Weighing what matters most")
@@ -141,44 +140,57 @@ def _summary(results: list[dict], days: int) -> str:
 
 
 async def build_digest() -> dict:
+    """Every section is read at the same time (the pool's few connections share the queries)."""
     now = datetime.now(timezone.utc)
     r = rules()
-    rows = await history()
-    waiting = (await orchestrator("GET", "/mailbox"))["items"]
-    releases = [dict(x) for x in await app.state.db.fetch(
-        "SELECT sha, message, status FROM releases WHERE started_at > now() - interval '24 hours' "
-        "AND status IN ('live', 'rolled_back', 'failed', 'held') ORDER BY id DESC")]
-    computers = []
-    try:                                   # Constellation keeps each computer's latest health problems
-        for c in await app.state.db.fetch(
-                "SELECT name, info->'issues' AS issues FROM devices WHERE kind='node' AND status='approved' "
-                "AND jsonb_array_length(COALESCE(info->'issues', '[]'::jsonb)) > 0 "
-                "AND last_seen > now() - interval '1 day' ORDER BY name"):
-            computers.append({"name": c["name"], "issues": json.loads(c["issues"]) if isinstance(c["issues"], str) else c["issues"]})
-    except Exception as exc:               # an older database without devices: no section
-        log.info("no computer health for the digest: %s", exc)
-    notices = []
-    try:                                   # what Pulsar noticed: open now, or raised in the last day
-        rank = {"critical": 0, "high": 1, "normal": 2, "low": 3}
-        notices = sorted([dict(x) for x in await app.state.db.fetch(
-            "SELECT title, severity, status FROM notices WHERE status='open' OR first_at > now() - interval '24 hours' "
-            "ORDER BY first_at DESC LIMIT 20")], key=lambda n: (n["status"] != "open", rank.get(n["severity"], 9)))
-    except Exception as exc:               # an older database without notices: no section
-        log.info("no notices for the digest: %s", exc)
-    calendar, email = [], []
-    try:                                   # Beacon: today on your calendars, and important email since yesterday
-        tz = ZoneInfo(r.timezone)
-        start = datetime.combine(now.astimezone(tz).date(), datetime.min.time(), tz)
-        calendar = [dict(x) for x in await app.state.db.fetch(
-            "SELECT title, starts_at, ends_at, all_day, location, source FROM calendar_events WHERE starts_at < $2 "
-            "AND COALESCE(ends_at, starts_at) > $1 ORDER BY all_day DESC, starts_at LIMIT 30", start, start + timedelta(days=1))]
-        email = [dict(x) for x in await app.state.db.fetch(
-            "SELECT from_name, from_addr, subject, why FROM mail_items WHERE important AND received_at > now() - "
-            "interval '24 hours' ORDER BY received_at DESC LIMIT 20")]
-    except Exception as exc:               # an older database without Beacon's tables: no sections
-        log.info("no calendar or email for the digest: %s", exc)
-    return analysis.digest(rows, now, r, waiting, releases, analysis.drift(rows, now, r), computers, notices,
-                           calendar, email)
+
+    async def releases() -> list[dict]:
+        return [dict(x) for x in await app.state.db.fetch(
+            "SELECT sha, message, status FROM releases WHERE started_at > now() - interval '24 hours' "
+            "AND status IN ('live', 'rolled_back', 'failed', 'held') ORDER BY id DESC")]
+
+    async def computers() -> list[dict]:
+        try:                               # Constellation keeps each computer's latest health problems
+            return [{"name": c["name"], "issues": json.loads(c["issues"]) if isinstance(c["issues"], str) else c["issues"]}
+                    for c in await app.state.db.fetch(
+                        "SELECT name, info->'issues' AS issues FROM devices WHERE kind='node' AND status='approved' "
+                        "AND jsonb_array_length(COALESCE(info->'issues', '[]'::jsonb)) > 0 "
+                        "AND last_seen > now() - interval '1 day' ORDER BY name")]
+        except Exception as exc:           # an older database without devices: no section
+            log.info("no computer health for the digest: %s", exc)
+            return []
+
+    async def notices() -> list[dict]:
+        try:                               # what Pulsar noticed: open now, or raised in the last day
+            rank = {"critical": 0, "high": 1, "normal": 2, "low": 3}
+            return sorted([dict(x) for x in await app.state.db.fetch(
+                "SELECT title, severity, status FROM notices WHERE status='open' OR first_at > now() - interval '24 hours' "
+                "ORDER BY first_at DESC LIMIT 20")], key=lambda n: (n["status"] != "open", rank.get(n["severity"], 9)))
+        except Exception as exc:           # an older database without notices: no section
+            log.info("no notices for the digest: %s", exc)
+            return []
+
+    async def beacon() -> tuple[list[dict], list[dict]]:
+        try:                               # Beacon: today on your calendars, and important email since yesterday
+            tz = ZoneInfo(r.timezone)
+            start = datetime.combine(now.astimezone(tz).date(), datetime.min.time(), tz)
+            calendar = [dict(x) for x in await app.state.db.fetch(
+                "SELECT title, starts_at, ends_at, all_day, location, source FROM calendar_events WHERE starts_at < $2 "
+                "AND COALESCE(ends_at, starts_at) > $1 ORDER BY all_day DESC, starts_at LIMIT 30", start, start + timedelta(days=1))]
+            email = [dict(x) for x in await app.state.db.fetch(
+                "SELECT from_name, from_addr, subject, why FROM mail_items WHERE important AND received_at > now() - "
+                "interval '24 hours' ORDER BY received_at DESC LIMIT 20")]
+            return calendar, email
+        except Exception as exc:           # an older database without Beacon's tables: no sections
+            log.info("no calendar or email for the digest: %s", exc)
+            return [], []
+
+    async def waiting() -> list[dict]:
+        return (await orchestrator("GET", "/mailbox"))["items"]
+
+    rows, waits, rel, comps, notes, (calendar, email) = await asyncio.gather(
+        history(), waiting(), releases(), computers(), notices(), beacon())
+    return analysis.digest(rows, now, r, waits, rel, analysis.drift(rows, now, r), comps, notes, calendar, email)
 
 
 async def analysis_loop() -> None:

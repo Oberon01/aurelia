@@ -795,7 +795,7 @@ def test_live_follows_the_screen_and_stops_when_nobody_watches(monkeypatch):
                        {"id": "s", "url": "https://accounts.spotify.com/login?continue=secret-token", "title": "Log in - Spotify"}])
     monkeypatch.setattr(agent, "SHELL", shell)
     monkeypatch.setattr(agent, "Tab", FakeTab)
-    monkeypatch.setattr(agent, "call", lambda server, path, body, key, timeout=10: (sent.append((path, body)), {"keep": next(keeps)})[1])
+    monkeypatch.setattr(agent, "send_frame", lambda server, key, body, timeout=10: (sent.append(("/nodes/live/frame", body)), {"keep": next(keeps)})[1])
     agent.live_stream("https://aurelia", "k", agent.threading.Event())
     assert len(sent) == 3 and all(p == "/nodes/live/frame" for p, _ in sent)
     assert "jpeg" not in sent[1][1]                                           # the page didn't change: no new frame
@@ -807,7 +807,7 @@ def test_live_follows_the_screen_and_stops_when_nobody_watches(monkeypatch):
 def test_live_shows_her_own_view_when_nothing_else_is_open_and_says_why_it_cant(monkeypatch):
     sent = []
     monkeypatch.setattr(agent, "Tab", FakeTab)
-    monkeypatch.setattr(agent, "call", lambda server, path, body, key, timeout=10: (sent.append(body), {"keep": False})[1])
+    monkeypatch.setattr(agent, "send_frame", lambda server, key, body, timeout=10: (sent.append(body), {"keep": False})[1])
     monkeypatch.setattr(agent, "SHELL", FakeShell([{"id": "v", "url": "https://aurelia/view", "title": "Aurelia"}]))
     agent.live_stream("https://aurelia", "k", agent.threading.Event())
     assert sent[-1]["jpeg"] and sent[-1]["site"] == ""                      # her own view: no site to name
@@ -824,9 +824,50 @@ def test_live_ends_when_the_server_cant_be_reached(monkeypatch):
         raise OSError("down")
     monkeypatch.setattr(agent, "Tab", FakeTab)
     monkeypatch.setattr(agent, "SHELL", FakeShell([{"id": "s", "url": "https://x.example/", "title": "x"}]))
-    monkeypatch.setattr(agent, "call", down)
+    monkeypatch.setattr(agent, "send_frame", down)
     agent.live_stream("https://aurelia", "k", agent.threading.Event())
     assert calls == [1]                                                     # back to waiting, not a busy loop
+
+
+def test_a_live_frame_goes_as_the_picture_itself(monkeypatch):
+    import base64
+    import io
+    seen = {}
+
+    class R(io.BytesIO):
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def urlopen(req, timeout=10):
+        seen.update(headers={k.lower(): v for k, v in req.header_items()}, data=req.data, url=req.full_url)
+        return R(b'{"keep": true}')
+    monkeypatch.setattr(agent.urllib.request, "urlopen", urlopen)
+    jpeg = b"\xff\xd8picture"
+    out = agent.send_frame("https://aurelia/", "k", {"jpeg": base64.b64encode(jpeg).decode(), "w": 1280, "h": 720,
+                                                     "title": "Log in · Spotify", "site": "accounts.spotify.com"})
+    assert out == {"keep": True} and seen["data"] == jpeg and seen["url"] == "https://aurelia/nodes/live/frame"
+    h = seen["headers"]
+    assert h["content-type"] == "image/jpeg" and h["authorization"] == "Bearer k" and h["x-live-w"] == "1280"
+    assert agent.urllib.parse.unquote(h["x-live-title"]) == "Log in · Spotify"
+    agent.send_frame("https://aurelia", "k", {"problem": "my shell isn't running"})
+    assert seen["data"] == b"" and agent.urllib.parse.unquote(seen["headers"]["x-live-problem"]) == "my shell isn't running"
+
+
+def test_the_desktop_session_is_looked_up_once_it_exists(monkeypatch):
+    runs = []
+
+    class Done:
+        def __init__(self, out): self.stdout = out
+    outs = iter(["PATH=/bin\n", "DISPLAY=:0\nXDG_RUNTIME_DIR=/run/user/1000\n", "DISPLAY=:1\n"])
+    monkeypatch.setattr(agent, "IS_WINDOWS", False)
+    monkeypatch.setattr(agent.shutil, "which", lambda name: "/bin/systemctl")
+    monkeypatch.setattr(agent.subprocess, "run", lambda *a, **k: (runs.append(1), Done(next(outs)))[1])
+    agent._SESSION.update(at=0.0, vars={})
+    assert "DISPLAY" not in agent.session_env() or agent.os.environ.get("DISPLAY")   # no desktop yet: asked again next time
+    assert agent.session_env()["DISPLAY"] == ":0" and len(runs) == 2
+    assert agent.session_env()["DISPLAY"] == ":0" and len(runs) == 2                  # found: kept a while
+    agent._SESSION.update(at=0.0)
+    assert agent.session_env()["DISPLAY"] == ":1" and len(runs) == 3
 
 
 # ---- her player ----------------------------------------------------------------------------------
@@ -1250,7 +1291,7 @@ def test_going_home_closes_the_apps_she_opened_there_and_only_those(monkeypatch,
     monkeypatch.setattr(agent, "player_busy", lambda: False)
     monkeypatch.setattr(agent.time, "sleep", lambda s: None)
     running = {501: "100", 502: "200"}                                        # pid: start time
-    monkeypatch.setattr(agent, "_linux_procs", lambda: {p: {"start": k, "name": "x"} for p, k in running.items()})
+    monkeypatch.setattr(agent, "_linux_start", lambda pid: running.get(pid))
     killed = []
     monkeypatch.setattr(agent.os, "kill", lambda pid, sig: (killed.append(pid), running.pop(pid, None)))
     agent.remember_launched(501, "gnome-text-edit")
@@ -1268,7 +1309,7 @@ def test_going_home_says_which_app_wont_close(monkeypatch, tmp_path):
     monkeypatch.setattr(agent.time, "sleep", lambda s: None)
     t = iter(range(0, 100, 5))
     monkeypatch.setattr(agent.time, "monotonic", lambda: next(t))
-    monkeypatch.setattr(agent, "_linux_procs", lambda: {601: {"start": "1", "name": "x"}})
+    monkeypatch.setattr(agent, "_linux_start", lambda pid: "1" if pid == 601 else None)
     monkeypatch.setattr(agent.os, "kill", lambda pid, sig: None)                          # it ignores the request
     agent.remember_launched(601, "stubborn")
     monkeypatch.setattr(agent, "SHELL", HomeShell([{"id": "v", "url": "https://aurelia/view", "title": "Aurelia"}]))

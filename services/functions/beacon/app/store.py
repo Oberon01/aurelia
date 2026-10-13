@@ -77,20 +77,38 @@ class Store:
                 "INSERT INTO mail_contacts (addr, last_at) VALUES ($1, $2) ON CONFLICT (addr) DO UPDATE "
                 "SET last_at=GREATEST(mail_contacts.last_at, $2)", [(a.lower(), t) for a, t in addrs.items()])
 
+    async def count_mail(self, since: datetime) -> int:
+        return int(await self.db.fetchval("SELECT count(*) FROM mail_items WHERE received_at >= $1", since) or 0)
+
+    async def contacts_among(self, addrs: list[str]) -> set[str]:
+        """Which of these addresses he has written to (one query for a whole batch)."""
+        rows = await self.db.fetch("SELECT addr FROM mail_contacts WHERE addr = ANY($1::text[])",
+                                   list({(a or "").lower() for a in addrs}))
+        return {r["addr"] for r in rows}
+
     async def is_contact(self, addr: str) -> bool:
         return bool(await self.db.fetchval("SELECT 1 FROM mail_contacts WHERE addr=$1", (addr or "").lower()))
 
     # ---- calendars ----------------------------------------------------------------------------------------
 
     async def replace_events(self, source: str, start: datetime, end: datetime, events: list[dict]) -> None:
-        """This source's events in [start, end), as they are now (one transaction: readers never see it empty)."""
+        """This source's events in [start, end), as they are now, changing only what changed (one transaction:
+        readers never see it empty). Events that ended more than two days ago go."""
+        rows = {}
+        for e in events:                                        # (the same occurrence twice: the last one)
+            rows[(e["uid"][:300], e["start"])] = (source, e["uid"][:300], e["start"], e.get("end"), bool(e.get("all_day")),
+                                                   (e.get("title") or "")[:300], (e.get("location") or "")[:300])
         async with self.db.acquire() as c, c.transaction():
-            await c.execute("DELETE FROM calendar_events WHERE source=$1 AND starts_at < $3 AND "
-                            "COALESCE(ends_at, starts_at) >= $2", source, start, end)
-            if events:
+            await c.execute(
+                "DELETE FROM calendar_events WHERE source=$1 AND starts_at < $3 AND COALESCE(ends_at, starts_at) >= $2 "
+                "AND NOT ((uid, starts_at) IN (SELECT * FROM unnest($4::text[], $5::timestamptz[])))",
+                source, start, end, [k[0] for k in rows], [k[1] for k in rows])
+            if rows:
                 await c.executemany(
                     "INSERT INTO calendar_events (source, uid, starts_at, ends_at, all_day, title, location) VALUES "
                     "($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (source, uid, starts_at) DO UPDATE SET ends_at=$4, "
-                    "all_day=$5, title=$6, location=$7",
-                    [(source, e["uid"][:300], e["start"], e.get("end"), bool(e.get("all_day")),
-                      (e.get("title") or "")[:300], (e.get("location") or "")[:300]) for e in events])
+                    "all_day=$5, title=$6, location=$7 WHERE (calendar_events.ends_at, calendar_events.all_day, "
+                    "calendar_events.title, calendar_events.location) IS DISTINCT FROM ($4, $5, $6, $7)",
+                    list(rows.values()))
+            await c.execute("DELETE FROM calendar_events WHERE source=$1 AND COALESCE(ends_at, starts_at) < now() - "
+                            "interval '2 days'", source)

@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from . import registry, when
+from . import net
 
 log = logging.getLogger("aurelia.beacon")
 router = APIRouter(tags=["beacon"])
@@ -92,7 +93,7 @@ async def second_path(app, notice: dict) -> bool:
         resolved = await registry.resolve(app.state.redis, "beacon.status")
         if resolved is None:
             return False
-        async with httpx.AsyncClient(timeout=10) as c:
+        async with net.session(10) as c:
             r = await c.post(f"{resolved.url.rstrip('/')}/notify", json={
                 "title": str(notice.get("title") or "")[:120], "text": str(notice.get("text") or "")[:400],
                 "severity": notice.get("severity"), "tag": f"notice-{notice.get('id')}"})

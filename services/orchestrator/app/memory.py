@@ -23,6 +23,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from . import db
+from . import net
 
 log = logging.getLogger("aurelia.memory")
 router = APIRouter(prefix="/memory", tags=["memory"])
@@ -171,7 +172,7 @@ class Embedder:
         if not (e.enabled and base and texts):
             return None
         try:
-            async with httpx.AsyncClient(timeout=e.timeout_seconds) as client:
+            async with net.session(e.timeout_seconds) as client:
                 r = await client.post(f"{base.rstrip('/')}/api/embed", json={"model": e.model, "input": texts})
                 r.raise_for_status()
                 vecs = r.json().get("embeddings") or []
@@ -233,8 +234,8 @@ async def maintain(config, embedder: Embedder | None = None, now: datetime | Non
                max(duration_ms)
         FROM task_runs
         WHERE started_at < date_trunc('day', $1::timestamptz)
-          AND (started_at::date >= ($1::timestamptz)::date - 1
-               OR started_at::date NOT IN (SELECT day FROM tool_stats_daily))
+          -- from the day before the last one rolled up (late finishers) on; everything the first time
+          AND started_at >= COALESCE((SELECT max(day) FROM tool_stats_daily) - 1, '-infinity'::date)
           AND status <> 'running'
         GROUP BY 1, 2
         ON CONFLICT (day, tool) DO UPDATE SET runs=EXCLUDED.runs, completed=EXCLUDED.completed,
@@ -254,11 +255,53 @@ async def maintain(config, embedder: Embedder | None = None, now: datetime | Non
             if vecs is None:
                 await pool.execute("UPDATE panel_snapshots SET embed_tried_at=now() WHERE task_id = ANY($1)", ids)
             else:
-                for tid, vec in zip(ids, vecs):
-                    await pool.execute("UPDATE panel_snapshots SET embedding=$2::vector, embed_tried_at=now() "
-                                       "WHERE task_id=$1", tid, vector_literal(vec))
+                await pool.executemany("UPDATE panel_snapshots SET embedding=$2::vector, embed_tried_at=now() "
+                                       "WHERE task_id=$1", [(tid, vector_literal(vec)) for tid, vec in zip(ids, vecs)])
                 stats["embedded"] = len(vecs)
+    stats.update(await prune(cfg))
     return stats
+
+
+BATCH = 5000                                          # rows per delete, so no one statement holds things up
+
+
+async def _delete(sql: str, *args) -> int:
+    """Delete in batches until nothing's left (sql selects ctids, LIMIT {BATCH})."""
+    n = 0
+    while True:
+        status = await db.pool().execute(sql, *args)
+        got = int(status.split()[-1])
+        n += got
+        if got < BATCH:
+            return n
+
+
+async def prune(cfg) -> dict[str, int]:
+    """History that would otherwise grow forever: kept retention.history_days (a pinned panel keeps its task);
+    my own background jobs' run log retention.system_runs_days. The daily rollups (tool_stats_daily) stay."""
+    days, sys_days = int(cfg.retention.history_days), int(cfg.retention.system_runs_days)
+    out = {}
+    out["runs_pruned"] = await _delete(
+        "DELETE FROM job_runs WHERE ctid IN (SELECT r.ctid FROM job_runs r JOIN jobs j ON j.id = r.job_id "
+        "WHERE (j.created_by = 'system' AND r.started_at < now() - make_interval(days => $2)) "
+        "OR r.started_at < now() - make_interval(days => $1) LIMIT %d)" % BATCH, days, sys_days)
+    out["jobs_pruned"] = await _delete(
+        "DELETE FROM jobs WHERE ctid IN (SELECT ctid FROM jobs WHERE status IN ('done','cancelled','missed','failed') "
+        "AND updated_at < now() - make_interval(days => $1) LIMIT %d)" % BATCH, min(days, 90))
+    out["tasks_pruned"] = await _delete(
+        "DELETE FROM task_runs WHERE ctid IN (SELECT t.ctid FROM task_runs t WHERE t.started_at < now() - make_interval(days => $1) "
+        "AND status <> 'running' AND NOT EXISTS (SELECT 1 FROM panel_snapshots s WHERE s.task_id = t.id AND s.pinned) "
+        "LIMIT %d)" % BATCH, days)
+    out["requests_pruned"] = await _delete(
+        "DELETE FROM ask_requests WHERE ctid IN (SELECT ctid FROM ask_requests WHERE created_at < now() - make_interval(days => $1) "
+        "LIMIT %d)" % BATCH, days)
+    out["model_calls_pruned"] = await _delete(
+        "DELETE FROM llm_calls WHERE ctid IN (SELECT ctid FROM llm_calls WHERE at < now() - make_interval(days => $1) "
+        "LIMIT %d)" % BATCH, days)
+    out["denials_pruned"] = await _delete(
+        "DELETE FROM governance_denials WHERE ctid IN (SELECT ctid FROM governance_denials "
+        "WHERE at < now() - make_interval(days => $1) LIMIT %d)" % BATCH, min(days, 90))
+    return out
 
 
 async def maintenance_job(app, spec: dict) -> dict | None:

@@ -452,27 +452,34 @@ async def _run_llm(app, body: Ask, history: list[dict[str, Any]], request_id: st
         return out
 
     named = await _named_connection(app, body.text)
-    tools, by_api, functions = await _tool_defs(app, body.user, only=named[0].name if named else None)
+    from . import history as my_history
+
+    async def about() -> str:
+        try:
+            return await my_history.self_context(app)    # where I am on the roadmap, my latest releases
+        except Exception:
+            log.exception("couldn't read my own history for the prompt")
+            return ""
+
+    async def facts() -> list:
+        # What's on screen, what earlier turns found, and what she knows about you that fits
+        # this request go with this request only, as data.
+        try:
+            r = mnemosyne.rules(app)
+            return profile.relevant_lines(await profile.relevant(
+                app, body.user, body.text, int(r["recall_facts"]), float(r["recall_min_score"])))
+        except Exception:
+            log.exception("couldn't recall facts for this request")
+            return []
+    # None of these depends on another: all at once (the slowest, recalling facts, sets the wait).
+    (tools, by_api, functions), about_me, core, chosen_style, known = await asyncio.gather(
+        _tool_defs(app, body.user, only=named[0].name if named else None), about(), profile.core(body.user),
+        style.current(app.state.redis, body.user), facts())
     if body.screen and body.screen.panels:
         tools = tools + [PANEL_TOOL]
-    from . import history as my_history
-    try:
-        about_me = await my_history.self_context(app)    # where I am on the roadmap, my latest releases
-    except Exception:
-        log.exception("couldn't read my own history for the prompt")
-        about_me = ""
-    system = _system_prompt(app, functions, profile.core_prompt(await profile.core(body.user)), about_me)
-    if (extra := style.prompt(await style.current(app.state.redis, body.user))):
+    system = _system_prompt(app, functions, profile.core_prompt(core), about_me)
+    if (extra := style.prompt(chosen_style)):
         system += "\n\n" + extra          # last, so the rest of the prompt stays cached
-    # What's on screen, what earlier turns found, and what she knows about you that fits
-    # this request go with this request only, as data.
-    try:
-        r = mnemosyne.rules(app)
-        known = profile.relevant_lines(await profile.relevant(
-            app, body.user, body.text, int(r["recall_facts"]), float(r["recall_min_score"])))
-    except Exception:
-        log.exception("couldn't recall facts for this request")
-        known = []
     ctx = await context.block(body.screen, history, known)
     messages = context.messages(history) + [Message("user", f"{ctx}\n\n{body.text}" if ctx else body.text)]
 
@@ -802,12 +809,24 @@ def _with_display(schema: dict) -> dict:
     return s
 
 
-def _system_prompt(app, functions: list[dict], core: str = "", about_me: str = "") -> str:
-    identity_path = Path(settings.config_path).parent / "identity.md"
+_IDENTITY: dict[str, Any] = {"key": None, "text": ""}
+
+
+def _identity() -> str:
+    """config/identity.md, read again only when it changes."""
+    p = Path(settings.config_path).parent / "identity.md"
     try:
-        identity = identity_path.read_text().strip()
+        st = p.stat()
     except FileNotFoundError:
-        identity = "You are Aurelia, a personal assistant."
+        return "You are Aurelia, a personal assistant."
+    key = (str(p), st.st_mtime_ns, st.st_size)
+    if _IDENTITY["key"] != key:
+        _IDENTITY.update(key=key, text=p.read_text().strip())
+    return _IDENTITY["text"]
+
+
+def _system_prompt(app, functions: list[dict], core: str = "", about_me: str = "") -> str:
+    identity = _identity()
     principles = app.state.governance.charter.principles
     if principles:
         identity += "\n\nCharter principles:\n" + "\n".join(f"- {p}" for p in principles)
@@ -859,16 +878,16 @@ async def _cloud_tokens_this_month() -> int:
     from . import budget
     start, _ = budget.month_bounds(datetime.now(timezone.utc), budget.tz_name())
     return await db.pool().fetchval(
-        "SELECT COALESCE(SUM(input_tokens + output_tokens), 0) FROM llm_calls "
+        "SELECT COALESCE(SUM(input_tokens + cache_write_tokens + output_tokens), 0) FROM llm_calls "
         "WHERE provider = ANY($1::text[]) AND at >= $2", list(CLOUD_PROVIDERS), start) or 0
 
 
 async def _log_llm_call(request_id: str, completion, started: float) -> None:
     await db.pool().execute(
-        "INSERT INTO llm_calls (request_id, provider, model, input_tokens, output_tokens, cache_read_tokens, latency_ms) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        "INSERT INTO llm_calls (request_id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         uuid.UUID(request_id), completion.provider, completion.model, completion.usage.input_tokens,
-        completion.usage.output_tokens, completion.usage.cache_read_tokens,
+        completion.usage.output_tokens, completion.usage.cache_read_tokens, completion.usage.cache_write_tokens,
         int((time.monotonic() - started) * 1000),
     )
 

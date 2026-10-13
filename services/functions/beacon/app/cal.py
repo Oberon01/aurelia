@@ -4,6 +4,7 @@ secret iCal address: read only).
 Repeating events are expanded into each time they happen (recurring_ical_events), in your time zone; an all-day
 event keeps its day. What an event says (its title, notes, location) is data, never instructions.
 """
+import asyncio
 import re
 import uuid
 import xml.etree.ElementTree as ET
@@ -108,13 +109,19 @@ class CalDAV:
         return out
 
     async def events(self, start: datetime, end: datetime, tz: str) -> list[dict]:
-        out = []
-        for cal in await self.calendars():
-            for href, etag, data in await self.raw_events(cal["href"], start, end):
-                repeats = repeating(data)                                          # the file is the whole series
-                for e in expand(data, start, end, tz):
-                    out.append({**e, "href": href, "etag": etag, "calendar": cal["name"], "repeats": repeats})
-        return out
+        cals = await self.calendars()
+        got = await asyncio.gather(*(self.raw_events(c["href"], start, end) for c in cals))   # every calendar at once
+
+        def read() -> list[dict]:                          # parsing and expanding: off the event loop
+            out = []
+            for cal, files in zip(cals, got):
+                for href, etag, data in files:
+                    parsed = parse(data)                   # once per file (it says whether it repeats, and when)
+                    repeats = repeating(parsed)            # the file is the whole series
+                    for e in expand(parsed, start, end, tz):
+                        out.append({**e, "href": href, "etag": etag, "calendar": cal["name"], "repeats": repeats})
+            return out
+        return await asyncio.to_thread(read)
 
     async def put(self, path: str, ics: str) -> None:
         r = await self._req("PUT", path, ics, {"Content-Type": "text/calendar; charset=utf-8", "If-None-Match": "*"})
@@ -142,11 +149,45 @@ class CalDAV:
         return True
 
 
-async def google(url: str, transport: httpx.AsyncBaseTransport | None = None) -> str:
-    """Your Google calendar's secret iCal address: read only, never more than MAX_ICS."""
+_FEEDS: dict[str, dict] = {}            # address → {etag, modified, sha, cal}: the last copy of each feed, parsed
+
+
+async def google_feed(url: str, transport: httpx.AsyncBaseTransport | None = None) -> tuple[Any, bool]:
+    """(the feed, parsed, and whether it changed since last time). Asked with its ETag / Last-Modified, so an
+    unchanged feed isn't downloaded again; one downloaded the same as before isn't parsed again."""
+    import hashlib
+    old = _FEEDS.get(url)
+    headers = {}
+    if old:
+        if old.get("etag"):
+            headers["If-None-Match"] = old["etag"]
+        if old.get("modified"):
+            headers["If-Modified-Since"] = old["modified"]
+    got = await google(url, transport, headers, old is not None)
+    if got is None:                                       # 304: as it was
+        return old["cal"], False
+    text, etag, modified = got
+    sha = hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
+    if old and old["sha"] == sha:
+        old.update(etag=etag, modified=modified)
+        return old["cal"], False
+    cal = await asyncio.to_thread(parse_strict, text)
+    if len(_FEEDS) > 8:
+        _FEEDS.clear()
+    _FEEDS[url] = {"etag": etag, "modified": modified, "sha": sha, "cal": cal}
+    return cal, True
+
+
+async def google(url: str, transport: httpx.AsyncBaseTransport | None = None, headers: dict | None = None,
+                 may_be_unchanged: bool = False):
+    """Your Google calendar's secret iCal address: read only, never more than MAX_ICS. With may_be_unchanged
+    (conditional headers sent): (text, etag, last-modified), or None when the server says it hasn't changed.
+    Otherwise the text."""
     try:
         async with httpx.AsyncClient(timeout=30, transport=transport, follow_redirects=True) as c:
-            async with c.stream("GET", url) as r:
+            async with c.stream("GET", url, headers=headers or {}) as r:
+                if r.status_code == 304 and may_be_unchanged:
+                    return None
                 if r.status_code != 200:
                     raise CalendarError(f"Your Google calendar's address answered {r.status_code}. If you reset it "
                                         "in Google Calendar, enter the new one (\"set up my calendar\").")
@@ -155,9 +196,11 @@ async def google(url: str, transport: httpx.AsyncBaseTransport | None = None) ->
                     got += chunk
                     if len(got) > MAX_ICS:
                         raise CalendarError("Your Google calendar's feed is too big to read.")
+                etag, modified = r.headers.get("etag"), r.headers.get("last-modified")
     except httpx.HTTPError as exc:
         raise CalendarError(f"I couldn't reach your Google calendar ({exc.__class__.__name__}).") from None
-    return got.decode("utf-8", errors="replace")
+    text = got.decode("utf-8", errors="replace")
+    return (text, etag, modified) if headers is not None else text
 
 
 def _aware(v: Any, tz: ZoneInfo) -> tuple[datetime, bool]:
@@ -169,11 +212,30 @@ def _aware(v: Any, tz: ZoneInfo) -> tuple[datetime, bool]:
     raise CalendarError("an event without a start")
 
 
-def expand(ics: str, start: datetime, end: datetime, tz: str) -> list[dict]:
-    """Each time an event in this calendar text happens in [start, end): {uid, start, end, all_day, title, location}."""
-    z = ZoneInfo(tz)
+def parse_strict(ics: str):
+    """Calendar text, parsed (CalendarError if it can't be read)."""
     try:
-        cal = icalendar.Calendar.from_ical(ics)
+        return icalendar.Calendar.from_ical(ics)
+    except Exception as exc:                             # one broken feed never stops the rest
+        raise CalendarError(f"A calendar couldn't be read ({exc.__class__.__name__}).") from None
+
+
+def parse(ics: str):
+    """Calendar text, parsed; None if it can't be read."""
+    try:
+        return icalendar.Calendar.from_ical(ics)
+    except Exception:
+        return None
+
+
+def expand(ics, start: datetime, end: datetime, tz: str) -> list[dict]:
+    """Each time an event in this calendar (its text, or already parsed) happens in [start, end):
+    {uid, start, end, all_day, title, location}."""
+    z = ZoneInfo(tz)
+    cal = parse_strict(ics) if isinstance(ics, str) else ics
+    if cal is None:
+        raise CalendarError("A calendar couldn't be read.")
+    try:
         hits = recurring_ical_events.of(cal).between(start, end)
     except Exception as exc:                             # one broken feed never stops the rest
         raise CalendarError(f"A calendar couldn't be read ({exc.__class__.__name__}).") from None
@@ -199,12 +261,11 @@ def expand(ics: str, start: datetime, end: datetime, tz: str) -> list[dict]:
     return out
 
 
-def repeating(ics: str) -> bool:
+def repeating(ics) -> bool:
     """Whether an event repeats: RRULE/RDATE on the event itself. A time zone's own rules (the VTIMEZONE block an
-    iPhone puts in every event) are not the event repeating."""
-    try:
-        cal = icalendar.Calendar.from_ical(ics)
-    except Exception:
+    iPhone puts in every event) are not the event repeating. Its text, or already parsed."""
+    cal = parse(ics) if isinstance(ics, str) else ics
+    if cal is None:
         return False
     return any(ev.get("RRULE") is not None or ev.get("RDATE") is not None for ev in cal.walk("VEVENT"))
 

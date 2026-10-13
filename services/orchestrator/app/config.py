@@ -53,6 +53,9 @@ class RetentionConfig(BaseModel):
     hot_days: int = 7
     warm_days: int = 90
     critical_hot_days: int = 30              # tools you approved as critical keep full panels this long
+    history_days: int = 400                  # tasks, requests, model calls and automation runs older than this go
+                                             # (a pinned panel keeps its task); the daily rollups stay
+    system_runs_days: int = 7                # my own background jobs' run log (failures and notes) this long
 
 
 class EmbeddingConfig(BaseModel):

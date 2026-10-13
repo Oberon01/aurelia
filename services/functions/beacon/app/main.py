@@ -240,9 +240,9 @@ def _model_budget() -> bool:
     return True
 
 
-async def classify(m: dict) -> tuple[bool, str]:
+async def classify(m: dict, contact: bool | None = None) -> tuple[bool, str]:
     r = importance.rules(S["policy"])
-    got = importance.by_rules(m, r, await store().is_contact(m["from_addr"]))
+    got = importance.by_rules(m, r, await store().is_contact(m["from_addr"]) if contact is None else contact)
     if got is not None:
         return got
     if not _model_budget():
@@ -265,10 +265,11 @@ async def sync_mail() -> int:
         uv, last, msgs = await g.new(state.get("last_uid"), state.get("uidvalidity"), MAIL.since_days(2))
         known = await st.known_ids([x["gm_id"] for x in msgs])
         fresh = [m for m in msgs if m["gm_id"] not in known]
+        written = await st.contacts_among([m["from_addr"] for m in fresh]) if fresh else set()
         for m in fresh:
             if S.get("mail_stop"):                    # forgetting: stop now, keep nothing
                 return 0
-            important, why = await classify(m)
+            important, why = await classify(m, (m["from_addr"] or "").lower() in written)
             if S.get("mail_stop"):
                 return 0
             await st.add_mail({"msg_id": m["gm_id"], "uid": m["uid"], "uidvalidity": uv, "from_addr": m["from_addr"],
@@ -313,7 +314,8 @@ async def read_calendars(start: datetime, end: datetime) -> tuple[list[dict], li
     url = await st.secret("google_ics")
     if url:
         try:
-            for e in CAL.expand(await CAL.google(url, S.get("transport")), start, end, S["tz"]):
+            feed, _ = await CAL.google_feed(url, S.get("transport"))     # (asked only if it changed; parsed once)
+            for e in await asyncio.to_thread(CAL.expand, feed, start, end, S["tz"]):
                 events.append({**e, "source": GOOGLE, "calendar": "Google"})
         except CAL.CalendarError as exc:
             trouble.append(f"your Google calendar: {exc}")
@@ -343,8 +345,12 @@ async def _sync_calendars() -> None:
     url = await st.secret("google_ics")
     if url:
         try:
-            g = CAL.expand(await CAL.google(url, S.get("transport")), start, end, S["tz"])
-            await st.replace_events(GOOGLE, start, end, g)
+            feed, changed = await CAL.google_feed(url, S.get("transport"))
+            window = (start.date().isoformat(), url)
+            if changed or S["calendar"].get("google_window") != window:   # unchanged and the same days: nothing to do
+                g = await asyncio.to_thread(CAL.expand, feed, start, end, S["tz"])
+                await st.replace_events(GOOGLE, start, end, g)
+                S["calendar"]["google_window"] = window
             S["calendar"]["google_error"] = None
         except CAL.CalendarError as exc:
             S["calendar"]["google_error"] = str(exc)
@@ -487,7 +493,7 @@ async def t_inbox(ctx: TaskContext) -> None:
     since = datetime.now(timezone.utc) - timedelta(days=2)
     every = bool(ctx.args.get("all"))
     rows = await store().mail(since, important_only=not every, limit=40)
-    others = 0 if every else len(await store().mail(since, limit=500)) - len(rows)
+    others = 0 if every else await store().count_mail(since) - len(rows)
     head = (f"{len(rows)} email{'s' if len(rows) != 1 else ''} in the last two days" if every else
             f"{len(rows)} important email{'s' if len(rows) != 1 else ''}" if rows else "Nothing important in your email")
     await ctx.result({"headline": head, "email": {
@@ -912,6 +918,8 @@ async def setup(body: Setup, request: Request):
             async with _cal_lock():
                 await st.forget("google_ics")
                 await st.db.execute("DELETE FROM calendar_events WHERE source=$1", GOOGLE)
+                S["calendar"].pop("google_window", None)      # (added again later: synced from scratch)
+                CAL._FEEDS.clear()
             out["google"] = "Forgotten: I no longer read your Google calendar."
         elif part == "ntfy":
             await st.forget("ntfy")
@@ -961,7 +969,7 @@ async def setup(body: Setup, request: Request):
                              "calendar → Integrate calendar → Secret address in iCal format.")
         else:
             try:
-                n = len(CAL.expand(await CAL.google(url, S.get("transport")), datetime.now(timezone.utc),
+                n = len(await asyncio.to_thread(CAL.expand, await CAL.google(url, S.get("transport")), datetime.now(timezone.utc),
                                    datetime.now(timezone.utc) + timedelta(days=WINDOW_DAYS), S["tz"]))
                 await st.put_secret("google_ics", url)
                 out["google"] = f"Added: {n} event{'s' if n != 1 else ''} in the next two weeks. I read it, never write it."

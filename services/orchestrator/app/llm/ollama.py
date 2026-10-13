@@ -5,6 +5,7 @@ from typing import Any
 import httpx
 
 from .base import Completion, Message, ProviderError, ToolCall, ToolDef, Usage
+from .. import net
 
 
 def to_ollama(system: str, messages: list[Message]) -> list[dict[str, Any]]:
@@ -52,7 +53,7 @@ class OllamaProvider:
         if tools:
             body["tools"] = tools_to_ollama(tools)
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with net.session(self.timeout) as client:
                 r = await client.post(f"{self.base_url}/api/chat", json=body)
                 r.raise_for_status()
         except httpx.HTTPError as exc:

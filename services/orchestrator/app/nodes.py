@@ -331,27 +331,52 @@ class LiveFrame(BaseModel):
 
 
 @router.post("/nodes/live/frame")
-async def live_frame(body: LiveFrame, request: Request):
+async def live_frame(request: Request):
+    """A frame from a node: the JPEG itself as the body (with what's around it in X-Live-* headers), or, from
+    an older agent, JSON with the picture in base64. Each new picture gets the next number (the display asks for
+    a frame only when the number moved on)."""
+    from urllib.parse import unquote
     dev = await node_from(request)
     redis = request.app.state.redis
+    if request.headers.get("content-type", "").startswith("image/jpeg"):
+        h = request.headers
+        raw = await request.body()
+        body = LiveFrame(w=int(h.get("x-live-w") or 0), h=int(h.get("x-live-h") or 0),
+                         title=unquote(h.get("x-live-title") or ""), site=unquote(h.get("x-live-site") or ""),
+                         problem=unquote(h.get("x-live-problem") or ""))
+    else:
+        try:
+            body = LiveFrame.model_validate(await request.json())
+        except ValueError:
+            raise HTTPException(400, "not a frame")
+        raw = b""
+        if body.jpeg:
+            try:
+                raw = base64.b64decode(body.jpeg, validate=True)
+            except (binascii.Error, ValueError):
+                raise HTTPException(400, "not a picture")
     meta = {"at": time.time(), "w": body.w, "h": body.h, "title": " ".join(body.title.split())[:120],
             "site": body.site[:80], "problem": " ".join(body.problem.split())[:200]}
-    if body.jpeg:
-        try:
-            raw = base64.b64decode(body.jpeg, validate=True)
-        except (binascii.Error, ValueError):
-            raise HTTPException(400, "not a picture")
+    fk, mk = LIVE_FRAME.format(dev["id"]), LIVE_META.format(dev["id"])
+    old = await redis.get(mk)
+    prev = json.loads(old) if old else {}
+    if raw:
         if len(raw) > LIVE_MAX_BYTES or not raw.startswith(b"\xff\xd8"):
             raise HTTPException(400, "not a JPEG, or too big")
-        await redis.set(LIVE_FRAME.format(dev["id"]), raw, ex=LIVE_FRAME_SECONDS)
-    elif not body.problem:                                   # the page hasn't changed: the last frame stays
-        await redis.expire(LIVE_FRAME.format(dev["id"]), LIVE_FRAME_SECONDS)
-        old = await redis.get(LIVE_META.format(dev["id"]))
-        if old:
-            prev = json.loads(old)
+        meta["seq"] = int(prev.get("seq") or 0) + 1
+    else:                                                    # the page hasn't changed: the last frame stays
+        meta.update(seq=int(prev.get("seq") or 0))
+        if not body.problem:
             meta.update(w=prev.get("w", 0), h=prev.get("h", 0))
-    await redis.set(LIVE_META.format(dev["id"]), json.dumps(meta), ex=LIVE_FRAME_SECONDS)
-    return {"keep": bool(await redis.exists(LIVE_WANT.format(dev["id"])))}
+    async with redis.pipeline(transaction=False) as p:
+        if raw:
+            p.set(fk, raw, ex=LIVE_FRAME_SECONDS)
+        elif not body.problem:
+            p.expire(fk, LIVE_FRAME_SECONDS)
+        p.set(mk, json.dumps(meta), ex=LIVE_FRAME_SECONDS)
+        p.exists(LIVE_WANT.format(dev["id"]))
+        got = await p.execute()
+    return {"keep": bool(got[-1])}
 
 
 # ---- Aurelia's side ------------------------------------------------------------------------

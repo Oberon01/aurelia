@@ -15,6 +15,8 @@ from redis.asyncio import Redis
 
 PREFIX = "aurelia:function:"
 SEEN_KEY = "aurelia:functions:seen"   # every function that has ever registered → last heartbeat (never expires)
+NAMES = "aurelia:functions:names"     # the names registered (each registration still expires on its own key)
+_parsed: dict[str, tuple[bytes, "FunctionRegistration"]] = {}   # name → (its JSON, parsed once per change)
 
 
 class ToolSpec(BaseModel):
@@ -54,8 +56,21 @@ class ResolvedTool(BaseModel):
 
 async def register(redis: Redis, fn: FunctionRegistration, ttl: int) -> None:
     from datetime import datetime, timezone
-    await redis.set(PREFIX + fn.name, fn.model_dump_json(), ex=ttl)
-    await redis.hset(SEEN_KEY, fn.name, datetime.now(timezone.utc).isoformat())
+    async with redis.pipeline(transaction=False) as p:
+        p.set(PREFIX + fn.name, fn.model_dump_json(), ex=ttl)
+        p.sadd(NAMES, fn.name)
+        p.hset(SEEN_KEY, fn.name, datetime.now(timezone.utc).isoformat())
+        await p.execute()
+
+
+def _parse(name: str, raw) -> "FunctionRegistration":
+    raw = raw if isinstance(raw, bytes) else str(raw).encode()
+    got = _parsed.get(name)
+    if got is not None and got[0] == raw:
+        return got[1]
+    fn = FunctionRegistration.model_validate(json.loads(raw))
+    _parsed[name] = (raw, fn)
+    return fn
 
 
 async def seen(redis: Redis) -> dict[str, str]:
@@ -65,12 +80,13 @@ async def seen(redis: Redis) -> dict[str, str]:
 
 
 async def unregister(redis: Redis, name: str) -> bool:
+    await redis.srem(NAMES, name)
     return bool(await redis.delete(PREFIX + name))
 
 
 async def get_function(redis: Redis, name: str) -> FunctionRegistration | None:
     raw = await redis.get(PREFIX + name)
-    return FunctionRegistration.model_validate(json.loads(raw)) if raw else None
+    return _parse(name, raw) if raw else None
 
 
 async def resolve(redis: Redis, qualified: str) -> ResolvedTool | None:
@@ -86,12 +102,23 @@ async def resolve(redis: Redis, qualified: str) -> ResolvedTool | None:
 
 
 async def list_all(redis: Redis) -> list[FunctionRegistration]:
-    functions = []
-    async for key in redis.scan_iter(match=PREFIX + "*"):
-        raw = await redis.get(key)
-        if raw:
-            functions.append(FunctionRegistration.model_validate(json.loads(raw)))
-    return sorted(functions, key=lambda f: f.name)
+    """Every function registered right now: its names in one set, their registrations in one MGET (never a scan
+    of the whole keyspace). One whose registration expired is dropped from the set."""
+    names = sorted((n.decode() if isinstance(n, bytes) else n) for n in await redis.smembers(NAMES))
+    if not names and not await redis.exists(NAMES):          # (first start after an upgrade: find them once)
+        async for key in redis.scan_iter(match=PREFIX + "*", count=500):
+            k = key.decode() if isinstance(key, bytes) else key
+            names.append(k[len(PREFIX):])
+        if names:
+            await redis.sadd(NAMES, *names)
+        names.sort()
+    if not names:
+        return []
+    raws = await redis.mget([PREFIX + n for n in names])
+    gone = [n for n, raw in zip(names, raws) if not raw]
+    if gone:
+        await redis.srem(NAMES, *gone)
+    return [_parse(n, raw) for n, raw in zip(names, raws) if raw]
 
 
 async def connections(redis: Redis) -> set[str]:

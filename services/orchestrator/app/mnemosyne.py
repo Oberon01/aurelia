@@ -461,9 +461,9 @@ async def summarize(app, seg: list[dict], text: str, fail_key: str,
     try:
         c = await app.state.llm.complete("summarize", system, [Message("user", f"<transcript>\n{text}\n</transcript>")], [])
         await db.pool().execute(
-            "INSERT INTO llm_calls (request_id, provider, model, input_tokens, output_tokens, cache_read_tokens, latency_ms) "
-            "VALUES (NULL, $1, $2, $3, $4, $5, $6)", c.provider, c.model, c.usage.input_tokens, c.usage.output_tokens,
-            c.usage.cache_read_tokens, int((time.monotonic() - started) * 1000))
+            "INSERT INTO llm_calls (request_id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms) "
+            "VALUES (NULL, $1, $2, $3, $4, $5, $6, $7)", c.provider, c.model, c.usage.input_tokens, c.usage.output_tokens,
+            c.usage.cache_read_tokens, c.usage.cache_write_tokens, int((time.monotonic() - started) * 1000))
         parsed = parse_summary(c.text)
         if parsed:
             await app.state.redis.delete(fail_key)
@@ -493,8 +493,10 @@ async def record_quiet_conversations(app, quiet_minutes: float | None = None) ->
         "LEFT JOIN LATERAL (SELECT max(ended_at) AS done FROM conversation_records c "
         "                   WHERE c.session_id=r.session_id AND c.user_id=r.user_id) c ON true "
         "WHERE r.created_at > COALESCE(c.done, '-infinity') AND r.user_id <> ALL($1::text[]) "
+        # Only what's still kept: a session whose record already expired isn't new again (and the scan stays small).
+        "AND r.created_at > now() - make_interval(days => $3) "
         "GROUP BY r.session_id, r.user_id HAVING min(r.created_at) < now() - $2::interval "
-        "ORDER BY min(r.created_at) LIMIT 50", system_users(app), quiet)
+        "ORDER BY min(r.created_at) LIMIT 50", system_users(app), quiet, int(r_["keep_days"]))
     now = datetime.now(timezone.utc)
     for s in sessions:
         rows = [dict(x) for x in await pool.fetch(

@@ -56,7 +56,10 @@ class Spotify:
         self.redis, self.client_id, self.redirect = redis, client_id, redirect_uri
         self._transport = transport
 
-    def _client(self) -> httpx.AsyncClient:
+    def _client(self):
+        if self._transport is None:                      # the shared client (kept open)
+            from . import net
+            return net.session(15)
         return httpx.AsyncClient(timeout=15, transport=self._transport)
 
     # ---- signing in ---------------------------------------------------------------------------------

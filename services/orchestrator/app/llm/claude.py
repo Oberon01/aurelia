@@ -36,6 +36,24 @@ def to_anthropic(messages: list[Message]) -> list[dict[str, Any]]:
     return out
 
 
+def _cache_tail(msgs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The conversation so far is cached too (its last block marks the end): the next step of the same request,
+    and the next turn of the conversation, read it from the cache instead of paying for it again."""
+    if not msgs:
+        return msgs
+    last = msgs[-1]
+    content = last["content"]
+    if isinstance(content, str):
+        if not content:
+            return msgs
+        content = [{"type": "text", "text": content}]
+    else:
+        content = [dict(b) for b in content]
+    if content:
+        content[-1]["cache_control"] = {"type": "ephemeral"}
+    return [*msgs[:-1], {**last, "content": content}]
+
+
 def tools_to_anthropic(tools: list[ToolDef]) -> list[dict[str, Any]]:
     defs = [{"name": t.name, "description": t.description, "input_schema": t.input_schema} for t in tools]
     if defs:
@@ -52,7 +70,8 @@ def from_anthropic(resp: Any, provider: str = "claude") -> Completion:
             calls.append(ToolCall(id=block.id, name=block.name, args=dict(block.input or {})))
     u = resp.usage
     usage = Usage(input_tokens=u.input_tokens, output_tokens=u.output_tokens,
-                  cache_read_tokens=getattr(u, "cache_read_input_tokens", 0) or 0)
+                  cache_read_tokens=getattr(u, "cache_read_input_tokens", 0) or 0,
+                  cache_write_tokens=getattr(u, "cache_creation_input_tokens", 0) or 0)
     return Completion(text="".join(text_parts).strip(), tool_calls=calls, usage=usage,
                       model=resp.model, provider=provider)
 
@@ -72,7 +91,7 @@ class ClaudeProvider:
             "model": self.model,
             "max_tokens": self.max_tokens,
             "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-            "messages": to_anthropic(messages),
+            "messages": _cache_tail(to_anthropic(messages)),
         }
         if tools:
             kwargs["tools"] = tools_to_anthropic(tools)

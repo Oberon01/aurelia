@@ -171,7 +171,9 @@ async def read(ctx: TaskContext) -> dict:
 
     async with client(float(r.get("timeout_seconds", 15))) as c:
         page = await fetch(c, guard(), url, max_bytes, progress, lambda: ctx.cancelled)
-    return readable(page, int(r.get("max_chars", 12000)))
+    # Extracting the text (HTML or PDF) is heavy, plain-CPU work: off the event loop, so several reads at once
+    # (Kepler's research) really run side by side, and progress keeps flowing.
+    return await asyncio.to_thread(readable, page, int(r.get("max_chars", 12000)))
 
 
 async def download(ctx: TaskContext) -> dict:

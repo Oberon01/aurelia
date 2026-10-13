@@ -50,9 +50,9 @@ async def complete(body: CompleteBody, request: Request):
     except ProviderError as exc:
         raise HTTPException(503, f"No model available right now ({exc}).")
     await db.pool().execute(
-        "INSERT INTO llm_calls (request_id, provider, model, input_tokens, output_tokens, cache_read_tokens, latency_ms) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7)", None, c.provider, c.model, c.usage.input_tokens, c.usage.output_tokens,
-        c.usage.cache_read_tokens, int((time.monotonic() - started) * 1000))
+        "INSERT INTO llm_calls (request_id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, latency_ms) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8)", None, c.provider, c.model, c.usage.input_tokens, c.usage.output_tokens,
+        c.usage.cache_read_tokens, c.usage.cache_write_tokens, int((time.monotonic() - started) * 1000))
     return {"text": c.text, "model": c.model, "provider": c.provider,
             "usage": {"input": c.usage.input_tokens, "output": c.usage.output_tokens}}
 

@@ -159,7 +159,9 @@ async def _gather(client: httpx.AsyncClient) -> tuple[list, list, list, list, di
     reg, pol, week, year, seen = await asyncio.gather(
         client.get(f"{base}/registry/functions"), client.get(f"{base}/governance/functions"),
         client.get(f"{base}/tasks/summary", params={"days": 7}),
-        client.get(f"{base}/tasks/summary", params={"days": 365}), client.get(f"{base}/registry/seen"))
+        client.get(f"{base}/tasks/last"), client.get(f"{base}/registry/seen"))
+    if year.status_code == 404:          # an orchestrator from before /tasks/last
+        year = await client.get(f"{base}/tasks/summary", params={"days": 365})
     for r in (reg, pol, week, year, seen):
         r.raise_for_status()
     return reg.json(), pol.json(), week.json()["tools"], year.json()["tools"], seen.json()
@@ -176,10 +178,17 @@ async def _health(client: httpx.AsyncClient, url: str) -> dict | None:
 async def functions(ctx: TaskContext) -> None:
     async with httpx.AsyncClient(timeout=5) as client:
         registered, policies, week, year, seen = await _gather(client)
-        health = {}
-        for i, fn in enumerate(registered, 1):
-            health[fn["name"]] = await _health(client, fn["url"])
-            await ctx.progress(i, len(registered), "functions", f"Checking {fn['name'].capitalize()}")
+        done = 0
+
+        async def check(fn: dict) -> dict | None:          # every function at once; progress as each answers
+            nonlocal done
+            got = await _health(client, fn["url"])
+            done += 1
+            await ctx.progress(done, len(registered), "functions", f"Checked {fn['name'].capitalize()}")
+            return got
+
+        answers = await asyncio.gather(*(check(fn) for fn in registered))
+        health = {fn["name"]: a for fn, a in zip(registered, answers)}
     rows = inspect.overview(registered, policies, week, year, health, seen)
     await ctx.result({"functions": rows})
 

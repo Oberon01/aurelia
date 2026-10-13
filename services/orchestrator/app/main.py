@@ -33,6 +33,7 @@ async def lifespan(app: FastAPI):
     app.state.embedder = memory.Embedder(app.state.config)
     # redis-py 8 reads with a 5 s timeout by default; node long-polls wait up to 30 s.
     app.state.redis = Redis.from_url(settings.redis_url, socket_timeout=60)
+    tasks.SIGNAL["redis"] = app.state.redis                    # a task's waiters hear the moment it finishes
     await db.connect(settings.database_url)
     app.state.draining = False
     timers = asyncio.create_task(engine.loop(app))          # Admiral's engine: her own jobs and his scheduled ones
@@ -65,6 +66,8 @@ async def lifespan(app: FastAPI):
         checker.cancel()
         linked.cancel()
         await db.close()
+        from . import net
+        await net.close()
         await app.state.redis.aclose()
         log.info("orchestrator stopped")
 

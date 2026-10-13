@@ -47,6 +47,7 @@ from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 from . import db, nodes, registry
+from . import net
 
 log = logging.getLogger("aurelia.quasar")
 router = APIRouter(prefix="/quasar", tags=["quasar"])
@@ -156,6 +157,9 @@ class NotSetUp(ValueError):
     pass
 
 
+_SIGNED_IN: dict[tuple[str, str], dict] = {}            # Jellyfin's token, by address and user (also in Redis)
+
+
 class Jellyfin:
     """His Jellyfin, signed in as him (so resume points and watched marks are his)."""
 
@@ -194,7 +198,7 @@ class Jellyfin:
 
     async def ping(self) -> dict:
         """Jellyfin's public server info (no sign-in needed): proves the address works."""
-        async with httpx.AsyncClient(timeout=15) as c:
+        async with net.session(15) as c:
             r = await self.call(c, "GET", f"{self.url}/System/Info/Public")
         r.raise_for_status()
         d = r.json()
@@ -206,11 +210,17 @@ class Jellyfin:
         return {"Authorization": h + (f', Token="{token}"' if token else "")}
 
     async def auth(self, fresh: bool = False) -> dict:
+        key = (self.url, self.user)
         if not fresh:
+            got = _SIGNED_IN.get(key)                         # (kept in memory too: no Redis read per call)
+            if got is not None:
+                return got
             raw = await self.redis.get(AUTH)
             if raw:
-                return json.loads(raw)
-        async with httpx.AsyncClient(timeout=15) as c:
+                got = json.loads(raw)
+                _SIGNED_IN[key] = got
+                return got
+        async with net.session(15) as c:
             try:
                 r = await self.call(c, "POST", f"{self.url}/Users/AuthenticateByName", headers=self.header(),
                                     json={"Username": self.user, "Pw": self.password})
@@ -222,6 +232,7 @@ class Jellyfin:
         d = r.json()
         got = {"token": d["AccessToken"], "user_id": d["User"]["Id"]}
         await self.redis.set(AUTH, json.dumps(got))          # never sent anywhere; Jellyfin can revoke it
+        _SIGNED_IN[(self.url, self.user)] = got
         return got
 
     async def request(self, method: str, path: str, params: dict | None = None, body: Any = None) -> Any:
@@ -229,7 +240,7 @@ class Jellyfin:
             a = await self.auth(fresh=attempt == 1)
             q = {k: v for k, v in (params or {}).items() if v is not None}
             q = {k: (a["user_id"] if v == "{user}" else v) for k, v in q.items()}
-            async with httpx.AsyncClient(timeout=20) as c:
+            async with net.session(20) as c:
                 try:
                     r = await self.call(c, method, f"{self.url}{path.replace('{user}', a['user_id'])}", params=q,
                                         json=body, headers=self.header(a["token"]))
@@ -817,7 +828,7 @@ async def ytart(vid: str):
     """A video's thumbnail, from YouTube's image server (only an id goes out; nothing of his)."""
     if not YT_ID.match(vid):
         raise HTTPException(404)
-    async with httpx.AsyncClient(timeout=10, follow_redirects=True) as c:
+    async with net.session(10, follow_redirects=True) as c:
         try:
             r = await c.get(f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg")
         except httpx.HTTPError:
@@ -1166,26 +1177,66 @@ NOW_SECONDS = 75                                        # not heard from in this
 SPOTIFY_PAUSED_SECONDS = 600                            # paused this long on Spotify: the panel goes
 
 
+NOW_INDEX = "aurelia:now"                              # which players have a "now playing" (no keyspace scans)
+NOW_REPEAT = 30.0                                       # the same thing playing: told again at most this often
+
+
+def _moved(prev: dict, now: dict) -> bool:
+    """Whether the displays need telling: something other than the clock changed, or the clock jumped (a seek)
+    from where it would have run by itself."""
+    keys = ("title", "item", "paused", "index", "count", "volume", "muted", "subtitles", "next", "active", "node")
+    if any(prev.get(k) != now.get(k) for k in keys):
+        return True
+    if now.get("position") is None or prev.get("position") is None:
+        return False
+    ran = 0.0 if now.get("paused") else time.time() - float(prev.get("_at") or time.time())
+    return abs(float(now["position"]) - (float(prev["position"]) + ran)) > 3.0
+
+
 async def publish_now(redis, key: str, now: dict) -> None:
+    """What a player is doing, for the displays: kept (NOW_SECONDS) for any that opens later, and sent when it
+    changes (the panel's clock runs by itself in between), or every NOW_REPEAT seconds."""
     from .events import PanelEvent, publish
+    k = NOW_KEY.format(key)
     if now.get("active"):
-        await redis.set(NOW_KEY.format(key), json.dumps(now), ex=NOW_SECONDS)
-    elif not await redis.delete(NOW_KEY.format(key)):
-        return                                          # it wasn't playing: nothing to take down
+        raw = await redis.get(k)
+        prev = json.loads(raw) if raw else None
+        sent_at = float((prev or {}).get("_sent") or 0)
+        if prev is not None and not _moved(prev, now) and time.time() - sent_at < NOW_REPEAT:
+            await redis.set(k, json.dumps({**now, "_at": time.time(), "_sent": sent_at}), ex=NOW_SECONDS)
+            return
+        async with redis.pipeline(transaction=False) as p:
+            p.set(k, json.dumps({**now, "_at": time.time(), "_sent": time.time()}), ex=NOW_SECONDS)
+            p.sadd(NOW_INDEX, key)
+            await p.execute()
+    else:
+        gone = await redis.delete(k)
+        await redis.srem(NOW_INDEX, key)
+        if not gone:
+            return                                      # it wasn't playing: nothing to take down
     await publish(redis, PanelEvent(type="now.playing", task_id=f"now-{key}", tool=f"{NAME}.now",
                                     data={"key": key, "now": now}))
 
 
+async def playing_keys(redis) -> list[tuple[str, dict]]:
+    """(key, what it's doing) for each player playing now; ones that went quiet are dropped from the index."""
+    keys = sorted((x.decode() if isinstance(x, bytes) else x) for x in await redis.smembers(NOW_INDEX))
+    if not keys:
+        return []
+    raws = await redis.mget([NOW_KEY.format(x) for x in keys])
+    gone = [x for x, raw in zip(keys, raws) if not raw]
+    if gone:
+        await redis.srem(NOW_INDEX, *gone)
+    out = []
+    for x, raw in zip(keys, raws):
+        if raw:
+            out.append((x, {k: v for k, v in json.loads(raw).items() if not k.startswith("_")}))
+    return out
+
+
 @router.get("/now", include_in_schema=False)
 async def now_playing(request: Request):
-    redis = request.app.state.redis
-    out = []
-    async for k in redis.scan_iter(match=NOW_KEY.format("*")):
-        raw = await redis.get(k)
-        if raw:
-            key = (k.decode() if isinstance(k, bytes) else k).rsplit(":", 1)[-1]
-            out.append({"key": key, "now": json.loads(raw)})
-    return {"playing": out}
+    return {"playing": [{"key": k, "now": n} for k, n in await playing_keys(request.app.state.redis)]}
 
 
 async def spotify_watch(app) -> None:
@@ -1255,7 +1306,7 @@ async def art(item_id: str, request: Request):
         raise HTTPException(404)
     jf = Jellyfin(request.app.state.redis)
     a = await jf.auth()
-    async with httpx.AsyncClient(timeout=15) as c:
+    async with net.session(15) as c:
         try:
             r = await jf.call(c, "GET", f"{jf.url}/Items/{item_id}/Images/Primary", params={"maxWidth": 400, "quality": 80},
                               headers=jf.header(a["token"]))
